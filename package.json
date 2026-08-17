@@ -1,0 +1,20 @@
+{
+  "name": "listup",
+  "version": "0.1.0",
+  "private": true,
+  "description": "초대코드로 참여하는 파일 공유 협업 플랫폼 (모바일/PC 크로스플랫폼)",
+  "workspaces": [
+    "shared",
+    "server",
+    "app"
+  ],
+  "scripts": {
+    "server": "npm run dev --workspace @listup/server",
+    "app": "npm run start --workspace @listup/app",
+    "test": "npm run test --workspace @listup/server",
+    "typecheck": "npm run typecheck --workspace @listup/server && npm run typecheck --workspace @listup/app"
+  },
+  "engines": {
+    "node": ">=20.11"
+  }
+}
