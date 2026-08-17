@@ -1,0 +1,38 @@
+{
+  "name": "@listup/app",
+  "version": "0.1.0",
+  "private": true,
+  "main": "expo-router/entry",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "web": "expo start --web",
+    "build:web": "expo export --platform web",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@expo/vector-icons": "^15.1.1",
+    "@listup/shared": "*",
+    "@react-native-async-storage/async-storage": "^2.2.0",
+    "expo": "^57.0.14",
+    "expo-clipboard": "~57.0.1",
+    "expo-constants": "~57.0.12",
+    "expo-document-picker": "~57.0.1",
+    "expo-file-system": "~57.0.4",
+    "expo-linking": "~57.0.6",
+    "expo-router": "~57.0.14",
+    "expo-sharing": "~57.0.13",
+    "expo-status-bar": "~57.0.1",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "react-native": "^0.86.2",
+    "react-native-safe-area-context": "~5.7.0",
+    "react-native-screens": "~4.26.0",
+    "react-native-web": "^0.21.2"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.18",
+    "typescript": "^5.9.3"
+  }
+}

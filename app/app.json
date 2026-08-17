@@ -1,0 +1,30 @@
+{
+  "expo": {
+    "name": "ListUp",
+    "slug": "listup",
+    "version": "0.1.0",
+    "orientation": "default",
+    "scheme": "listup",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.listup.app"
+    },
+    "android": {
+      "package": "com.listup.app",
+      "edgeToEdgeEnabled": true
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "single"
+    },
+    "plugins": ["expo-router"],
+    "experiments": {
+      "typedRoutes": false
+    },
+    "extra": {
+      "listupApiUrl": "http://localhost:4000"
+    }
+  }
+}
