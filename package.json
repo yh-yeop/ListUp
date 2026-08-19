@@ -16,5 +16,9 @@
   },
   "engines": {
     "node": ">=20.11"
+  },
+  "allowScripts": {
+    "better-sqlite3@12.11.1": true,
+    "esbuild@0.28.2": true
   }
 }
