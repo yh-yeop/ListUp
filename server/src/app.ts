@@ -1,5 +1,8 @@
+import { existsSync } from 'node:fs';
+import path from 'node:path';
 import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
+import fastifyStatic from '@fastify/static';
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { ApiErrorBody } from '@listup/shared';
 import type { AppContext } from './context.ts';
@@ -35,6 +38,17 @@ export async function buildApp(ctx: AppContext, options: BuildOptions = {}): Pro
       fields: 10,
     },
   });
+
+  // ---------------------------------------------------------------------
+  // 웹 정적 빌드 서빙: 빌드 결과물이 있으면 API 와 같은 오리진에서 함께 서빙한다.
+  // EXPO_PUBLIC_LISTUP_API_URL=/ 로 빌드한 웹 번들은 상대 경로로 API 를 부르므로
+  // 도메인이 무엇이든 재빌드 없이 동작한다.
+  // ---------------------------------------------------------------------
+  const webRoot = ctx.config.webDir;
+  const serveWeb = webRoot !== null && existsSync(path.join(webRoot, 'index.html'));
+  if (serveWeb) {
+    await app.register(fastifyStatic, { root: webRoot });
+  }
 
   // ---------------------------------------------------------------------
   // 인증: 토큰이 있으면 사용자로 해석하고, 없으면 그냥 통과시킨다.
@@ -90,11 +104,15 @@ export async function buildApp(ctx: AppContext, options: BuildOptions = {}): Pro
     } satisfies ApiErrorBody);
   });
 
-  app.setNotFoundHandler((_req, reply) =>
-    reply.code(404).send({
+  app.setNotFoundHandler((req, reply) => {
+    // SPA 라우팅: /api 밖의 GET 은 웹 앱(index.html)이 처리하게 넘긴다.
+    if (serveWeb && (req.method === 'GET' || req.method === 'HEAD') && !req.url.startsWith('/api/')) {
+      return reply.sendFile('index.html');
+    }
+    return reply.code(404).send({
       error: { code: 'not_found', message: '요청한 경로가 없습니다.' },
-    } satisfies ApiErrorBody),
-  );
+    } satisfies ApiErrorBody);
+  });
 
   app.get('/api/health', async () => ({ ok: true, time: Date.now() }));
 

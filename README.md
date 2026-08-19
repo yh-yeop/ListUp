@@ -101,6 +101,27 @@ EXPO_PUBLIC_LISTUP_API_URL=https://listup.example.com npm run app
 npm run build:web --workspace @listup/app    # app/dist/ 에 생성
 ```
 
+서버는 `app/dist/index.html` 이 있으면 웹 빌드를 **API 와 같은 오리진으로 함께 서빙**합니다
+(`LISTUP_WEB_DIR` 로 위치 변경, 비우려면 빌드 결과를 지우면 됩니다).
+`EXPO_PUBLIC_LISTUP_API_URL=/` 로 빌드하면 웹 번들이 상대 경로로 API 를 부르므로,
+도메인이 무엇이든 재빌드 없이 동작합니다.
+
+### 5. 임시 공개 — Cloudflare 빠른 터널
+
+서버 하나만 공개하면 웹까지 같이 나갑니다. cloudflared 설치
+(`winget install Cloudflare.cloudflared`) 후:
+
+```bash
+powershell -ExecutionPolicy Bypass -File deploy-tunnel.ps1
+```
+
+출력에 나오는 `https://….trycloudflare.com` 이 공개 주소입니다. 주의:
+
+- URL 은 실행할 때마다 바뀌고, 프로세스가 꺼지면 사라집니다.
+- **Windows PowerShell 에서 빌드하세요.** Git Bash 는 `EXPO_PUBLIC_LISTUP_API_URL=/` 의
+  `/` 를 Windows 경로로 바꿔 버려(MSYS path 변환) 번들이 깨집니다.
+- 로그인 요청 제한이 아직 없으므로(TODO `P0`) URL 은 아는 사람에게만 공유하세요.
+
 ---
 
 ## 검증

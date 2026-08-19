@@ -134,9 +134,17 @@ Node 20~26 프리빌드 바이너리를 제공하므로 보통은 그냥 설치�
 - [x] 문서 (README, `docs/ARCHITECTURE.md`, `docs/API.md`) — `78645f4`
 - [x] better-sqlite3 `^11.5.0` → `^12.2.0` — Node 24 용 프리빌드가 없어 `npm install` 이
   깨지던 문제. 서버 테스트 66개 통과로 호환 확인. — 2026-08-19
+- [x] 웹 정적 빌드를 서버가 같은 오리진으로 서빙 — `@fastify/static` + SPA fallback,
+  `LISTUP_WEB_DIR` 로 조정. `EXPO_PUBLIC_LISTUP_API_URL=/` 빌드와 조합하면 프로세스 하나로
+  웹+API 가 나가서 배포가 단순해진다. — 2026-08-19
+- [x] 첫 공개 배포 (Cloudflare 빠른 터널) — 공개 URL 에서 가입·로그인·저장소 생성·업로드·
+  되읽기·초대 발급 왕복과 웹 로그인 흐름까지 확인. `deploy-tunnel.ps1` 추가. — 2026-08-19
 
 ### 고친 버그 (기록)
 
 - 초대 코드가 소진된 뒤 **이미 참여한 사람이 다시 열면 거부**되던 문제.
   사용 가능 여부를 멤버 확인보다 먼저 보고 있었다. 순서를 뒤집어 해결. — `2a5d386`
 - 가로 스크롤 탭(`RepoNav`)이 세로로 늘어나 **아래 버튼 클릭을 가로막던** 레이아웃 문제. — `78645f4`
+- Git Bash 에서 `EXPO_PUBLIC_LISTUP_API_URL=/` 로 웹을 빌드하면 MSYS 경로 변환이 `/` 를
+  `C:/Program Files/Git` 로 바꿔 번들에 박히던 문제. PowerShell 에서 빌드하도록 README 에
+  명시해 회피. Metro 캐시는 환경변수 변경을 못 알아채므로 `--clear` 가 필요했다. — 2026-08-19

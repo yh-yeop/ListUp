@@ -15,6 +15,8 @@ export interface Config {
   /** CORS 허용 오리진. `*` 이면 전부 허용(개발용). */
   corsOrigin: string;
   maxUploadBytes: number;
+  /** 웹 정적 빌드 디렉터리. index.html 이 있으면 API 와 같은 오리진으로 서빙한다. null 이면 끔. */
+  webDir: string | null;
 }
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -44,6 +46,7 @@ export function loadConfig(overrides: Partial<Config> = {}): Config {
     tokenTtlMs: envInt('LISTUP_TOKEN_TTL_DAYS', 30) * DAY,
     corsOrigin: process.env.LISTUP_CORS_ORIGIN ?? '*',
     maxUploadBytes: envInt('LISTUP_MAX_UPLOAD_MB', 100) * 1024 * 1024,
+    webDir: process.env.LISTUP_WEB_DIR ?? path.resolve(process.cwd(), '../app/dist'),
     ...overrides,
   };
 }

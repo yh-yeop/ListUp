@@ -21,6 +21,7 @@ export async function createHarness(): Promise<Harness> {
     authSecret: 'test-secret-do-not-use-in-production',
     corsOrigin: '*',
     maxUploadBytes: 5 * 1024 * 1024,
+    webDir: null,
   });
   const ctx = createContext(config);
   const app = await buildApp(ctx, { logger: false });
