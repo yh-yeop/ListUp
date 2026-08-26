@@ -90,7 +90,9 @@ export function RepoNav({ repoId, openProposals }: { repoId: string; openProposa
                   alignItems: 'center',
                 }}
               >
-                <Text style={{ color: '#fff', fontSize: 11, fontWeight: '700' }}>{tab.badge}</Text>
+                <Text style={{ color: colors.warningText, fontSize: 11, fontWeight: '700' }}>
+                  {tab.badge}
+                </Text>
               </View>
             ) : null}
             </Pressable>
@@ -116,7 +118,12 @@ export function Breadcrumb({
     <View style={{ alignSelf: 'stretch' }}>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0 }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>
-          <Pressable onPress={() => onNavigate('')} hitSlop={6}>
+          <Pressable
+            onPress={() => onNavigate('')}
+            hitSlop={6}
+            accessibilityRole="button"
+            accessibilityLabel="최상위 폴더"
+          >
             <Ionicons
               name="home"
               size={15}
@@ -129,7 +136,12 @@ export function Breadcrumb({
             return (
               <View key={target} style={{ flexDirection: 'row', alignItems: 'center' }}>
                 <Ionicons name="chevron-forward" size={13} color={colors.textFaint} />
-                <Pressable onPress={() => onNavigate(target)} hitSlop={6}>
+                <Pressable
+                  onPress={() => onNavigate(target)}
+                  hitSlop={6}
+                  accessibilityRole="button"
+                  accessibilityLabel={`${segment} 폴더`}
+                >
                   <Text
                     style={{
                       color: last ? colors.text : colors.textMuted,

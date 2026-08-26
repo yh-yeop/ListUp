@@ -17,7 +17,13 @@
     },
     "web": {
       "bundler": "metro",
-      "output": "single"
+      "output": "single",
+      "name": "ListUp",
+      "shortName": "ListUp",
+      "lang": "ko",
+      "description": "팀과 함께 파일을 모으고 변경 제안으로 검토하는 저장소",
+      "themeColor": "#f6f7f9",
+      "backgroundColor": "#f6f7f9"
     },
     "plugins": ["expo-router"],
     "experiments": {

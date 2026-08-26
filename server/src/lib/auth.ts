@@ -1,17 +1,32 @@
-import { createHmac, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
+import { createHmac, randomBytes, scrypt, timingSafeEqual, type ScryptOptions } from 'node:crypto';
 
 const SCRYPT_KEYLEN = 64;
 const SCRYPT_PARAMS = { N: 16384, r: 8, p: 1 } as const;
 
+/** scryptSync 는 수십 ms 동안 이벤트 루프를 막으므로 스레드풀에서 도는 비동기 버전을 쓴다. */
+function scryptAsync(
+  password: string,
+  salt: Buffer,
+  keylen: number,
+  params: ScryptOptions,
+): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    scrypt(password, salt, keylen, params, (err, derived) => {
+      if (err) reject(err);
+      else resolve(derived);
+    });
+  });
+}
+
 /** `scrypt$N$r$p$salt$hash` 형태로 파라미터를 함께 저장한다. */
-export function hashPassword(password: string): string {
+export async function hashPassword(password: string): Promise<string> {
   const salt = randomBytes(16);
-  const derived = scryptSync(password, salt, SCRYPT_KEYLEN, SCRYPT_PARAMS);
+  const derived = await scryptAsync(password, salt, SCRYPT_KEYLEN, SCRYPT_PARAMS);
   const { N, r, p } = SCRYPT_PARAMS;
   return ['scrypt', N, r, p, salt.toString('base64'), derived.toString('base64')].join('$');
 }
 
-export function verifyPassword(password: string, stored: string): boolean {
+export async function verifyPassword(password: string, stored: string): Promise<boolean> {
   const parts = stored.split('$');
   if (parts.length !== 6 || parts[0] !== 'scrypt') return false;
   const N = Number.parseInt(parts[1], 10);
@@ -23,7 +38,7 @@ export function verifyPassword(password: string, stored: string): boolean {
   const expected = Buffer.from(parts[5], 'base64');
   let derived: Buffer;
   try {
-    derived = scryptSync(password, salt, expected.length, { N, r, p });
+    derived = await scryptAsync(password, salt, expected.length, { N, r, p });
   } catch {
     return false;
   }

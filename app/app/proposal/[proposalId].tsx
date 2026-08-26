@@ -11,6 +11,7 @@ import {
   hasRole,
   type ProposalChange,
   type ProposalDetail,
+  type ProposalStatus,
   type RepoSummary,
 } from '@listup/shared';
 import {
@@ -32,6 +33,7 @@ import { ApiError, api } from '../../src/api/client';
 import { confirmAction, notify } from '../../src/lib/dialogs';
 import { downloadFile } from '../../src/lib/files';
 import { useAsync } from '../../src/lib/useAsync';
+import { useAuth } from '../../src/state/auth';
 import { fontSize, monoFont, radius, spacing, useTheme } from '../../src/theme';
 
 interface ProposalView {
@@ -42,6 +44,7 @@ interface ProposalView {
 export default function ProposalDetailScreen() {
   const { proposalId } = useLocalSearchParams<{ proposalId: string }>();
   const { colors } = useTheme();
+  const { user } = useAuth();
   const [comment, setComment] = useState('');
   const [action, setAction] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -55,6 +58,8 @@ export default function ProposalDetailScreen() {
   const proposal = state.data?.proposal;
   const repo = state.data?.repo;
   const canMerge = hasRole(repo?.role, 'editor');
+  // 닫기·다시 열기는 서버 규칙대로 작성자 본인 또는 editor 이상만.
+  const canManage = canMerge || (!!proposal && !!user && user.id === proposal.author.id);
 
   async function run(name: string, fn: () => Promise<unknown>) {
     setAction(name);
@@ -162,8 +167,8 @@ export default function ProposalDetailScreen() {
                 </Body>
               </Row>
               <Caption style={{ color: colors.warning }}>
-                이 제안을 만든 뒤 아래 파일이 저장소에서 이미 바뀌었습니다. 최신 파일을 받아 다시
-                제안해 주세요.
+                이 제안을 만든 뒤 아래 파일이 저장소에서 바뀌었거나, 이름이 겹치는 파일·폴더가
+                생겼습니다. 저장소의 최신 상태를 확인한 뒤 다시 제안해 주세요.
               </Caption>
               {proposal.conflicts.map((path) => (
                 <Body key={path} style={{ fontFamily: monoFont, fontSize: fontSize.sm }}>
@@ -182,36 +187,50 @@ export default function ProposalDetailScreen() {
             {proposal.changes.map((change, index) => (
               <View key={change.path}>
                 {index > 0 ? <Divider /> : null}
-                <ChangeRow change={change} proposalId={proposal.id} repoId={proposal.repoId} />
+                <ChangeRow
+                  change={change}
+                  proposalId={proposal.id}
+                  repoId={proposal.repoId}
+                  status={proposal.status}
+                  baseSnapshotId={proposal.baseSnapshotId}
+                />
               </View>
             ))}
           </Card>
 
           {proposal.status === 'open' ? (
-            <Row gap={spacing.sm} wrap>
-              {canMerge ? (
+            canManage ? (
+              <Row gap={spacing.sm} wrap>
+                {canMerge ? (
+                  <Button
+                    label="저장소에 반영"
+                    icon="git-merge-outline"
+                    onPress={merge}
+                    loading={action === 'merge'}
+                    disabled={!proposal.mergeable}
+                  />
+                ) : null}
                 <Button
-                  label="저장소에 반영"
-                  icon="git-merge-outline"
-                  onPress={merge}
-                  loading={action === 'merge'}
-                  disabled={!proposal.mergeable}
+                  label="제안 닫기"
+                  variant="secondary"
+                  onPress={close}
+                  loading={action === 'close'}
                 />
-              ) : null}
-              <Button
-                label="제안 닫기"
-                variant="secondary"
-                onPress={close}
-                loading={action === 'close'}
-              />
-            </Row>
+              </Row>
+            ) : null
           ) : proposal.status === 'closed' ? (
-            <Button
-              label="다시 열기"
-              variant="secondary"
-              onPress={() => void run('reopen', () => api.reopenProposal(proposal.id))}
-              loading={action === 'reopen'}
-            />
+            canManage ? (
+              <Button
+                label="다시 열기"
+                variant="secondary"
+                onPress={() => void run('reopen', () => api.reopenProposal(proposal.id))}
+                loading={action === 'reopen'}
+              />
+            ) : (
+              <Caption>
+                닫힌 제안입니다. 다시 열기는 작성자 본인이나 편집 권한이 있는 멤버만 할 수 있습니다.
+              </Caption>
+            )
           ) : (
             <Row gap={spacing.sm}>
               <Ionicons name="checkmark-circle" size={18} color={colors.success} />
@@ -222,7 +241,11 @@ export default function ProposalDetailScreen() {
           )}
 
           {!canMerge && proposal.status === 'open' ? (
-            <Caption>반영은 편집 권한이 있는 멤버가 할 수 있습니다.</Caption>
+            <Caption>
+              {canManage
+                ? '반영은 편집 권한이 있는 멤버가 할 수 있습니다.'
+                : '반영은 편집 권한이 있는 멤버가, 닫기는 작성자 본인이나 편집 권한이 있는 멤버만 할 수 있습니다.'}
+            </Caption>
           ) : null}
 
           <Card style={{ gap: spacing.md }}>
@@ -286,16 +309,22 @@ function ChangeRow({
   change,
   proposalId,
   repoId,
+  status,
+  baseSnapshotId,
 }: {
   change: ProposalChange;
   proposalId: string;
   repoId: string;
+  status: ProposalStatus;
+  baseSnapshotId: string | null;
 }) {
   const { colors } = useTheme();
   const [busy, setBusy] = useState<'proposed' | 'base' | null>(null);
 
   const tone = change.op === 'add' ? 'success' : change.op === 'delete' ? 'danger' : 'accent';
   const name = baseName(change.path);
+  // 병합·닫힘 뒤에는 현재본이 이미 바뀌었을 수 있으므로 제안 당시 스냅샷의 원본을 내려준다.
+  const baseIsCurrent = status === 'open';
 
   async function grab(kind: 'proposed' | 'base') {
     setBusy(kind);
@@ -303,8 +332,11 @@ function ChangeRow({
       const url =
         kind === 'proposed'
           ? api.proposalFileUrl(proposalId, change.path)
-          : api.fileUrl(repoId, change.path);
-      const result = await downloadFile(url, kind === 'base' ? `현재-${name}` : `제안-${name}`);
+          : api.fileUrl(repoId, change.path, {
+              snapshotId: baseIsCurrent ? undefined : (baseSnapshotId ?? undefined),
+            });
+      const baseFileName = baseIsCurrent ? `현재-${name}` : `원본-${name}`;
+      const result = await downloadFile(url, kind === 'base' ? baseFileName : `제안-${name}`);
       if (result.message) notify(result.message);
     } catch {
       notify('내려받지 못했습니다.');
@@ -347,7 +379,7 @@ function ChangeRow({
         ) : null}
         {change.baseBlobHash ? (
           <Button
-            label="현재본 받기"
+            label={baseIsCurrent ? '현재본 받기' : '제안 당시 원본 받기'}
             icon="download-outline"
             variant="ghost"
             compact

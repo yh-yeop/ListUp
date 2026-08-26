@@ -23,6 +23,10 @@ export class BlobStore {
     return path.join(this.root, hash.slice(0, 2), hash.slice(2, 4), hash);
   }
 
+  private get tmpDir(): string {
+    return path.join(this.root, 'tmp');
+  }
+
   async has(hash: string): Promise<boolean> {
     try {
       await fsp.access(this.pathFor(hash));
@@ -37,23 +41,24 @@ export class BlobStore {
    * 이미 같은 해시가 있으면 임시 파일을 버린다.
    */
   async writeStream(stream: Readable, maxBytes: number): Promise<StoredBlob> {
-    await fsp.mkdir(path.join(this.root, 'tmp'), { recursive: true });
+    await fsp.mkdir(this.tmpDir, { recursive: true });
     const tmpPath = path.join(
-      this.root,
-      'tmp',
+      this.tmpDir,
       `up_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`,
     );
 
     const hasher = createHash('sha256');
     let size = 0;
     let overflow = false;
+    const limitError = () =>
+      tooLarge(`파일이 너무 큽니다. 최대 ${Math.floor(maxBytes / 1024 / 1024)}MB.`);
 
     const counter = async function* (source: AsyncIterable<Buffer>) {
       for await (const chunk of source) {
         size += chunk.length;
         if (size > maxBytes) {
           overflow = true;
-          throw tooLarge(`파일이 너무 큽니다. 최대 ${Math.floor(maxBytes / 1024 / 1024)}MB.`);
+          throw limitError();
         }
         hasher.update(chunk);
         yield chunk;
@@ -61,10 +66,17 @@ export class BlobStore {
     };
 
     try {
-      await pipeline(stream, counter, fs.createWriteStream(tmpPath));
+      // flush: 닫기 전에 fsync 해서 크래시·정전 뒤에 rename 된 파일이 비어 있지 않게 한다.
+      await pipeline(stream, counter, fs.createWriteStream(tmpPath, { flush: true }));
+      // @fastify/multipart 는 한도에 닿으면 에러 없이 스트림을 자르고 truncated 만 세운다
+      // (throwFileSizeLimit 은 toBuffer() 경로에서만 동작). 잘린 파일을 커밋하면 안 된다.
+      if ((stream as { truncated?: boolean }).truncated === true) {
+        overflow = true;
+        throw limitError();
+      }
     } catch (err) {
       await fsp.rm(tmpPath, { force: true });
-      if (overflow) throw tooLarge(`파일이 너무 큽니다. 최대 ${Math.floor(maxBytes / 1024 / 1024)}MB.`);
+      if (overflow) throw limitError();
       throw err;
     }
 
@@ -74,7 +86,9 @@ export class BlobStore {
     try {
       await fsp.mkdir(path.dirname(finalPath), { recursive: true });
       // 이미 존재하면 내용이 같으므로 굳이 덮어쓰지 않는다.
-      if (await this.has(hash)) {
+      // 단, 크기가 다르면(이전 쓰기가 중간에 끊긴 손상본) 방금 받은 것으로 교체한다.
+      const existing = await fsp.stat(finalPath).catch(() => null);
+      if (existing && existing.size === size) {
         await fsp.rm(tmpPath, { force: true });
       } else {
         await fsp.rename(tmpPath, finalPath);
@@ -108,5 +122,33 @@ export class BlobStore {
   /** 어떤 스냅샷/제안에서도 참조하지 않는 blob 파일 제거. */
   async remove(hash: string): Promise<void> {
     await fsp.rm(this.pathFor(hash), { force: true });
+  }
+
+  /**
+   * 업로드가 끊겨 남은 임시 파일(`tmp/up_*`) 중 maxAgeMs 보다 오래된 것을 지우고 개수를 돌려준다.
+   * 기동 시 한 번 부르는 용도라 동기다. 임시 디렉터리가 아직 없으면 0.
+   */
+  cleanupTemp(maxAgeMs: number): number {
+    let names: string[];
+    try {
+      names = fs.readdirSync(this.tmpDir);
+    } catch {
+      return 0;
+    }
+    const cutoff = Date.now() - maxAgeMs;
+    let removed = 0;
+    for (const name of names) {
+      if (!name.startsWith('up_')) continue;
+      const filePath = path.join(this.tmpDir, name);
+      try {
+        if (fs.statSync(filePath).mtimeMs < cutoff) {
+          fs.rmSync(filePath, { force: true });
+          removed += 1;
+        }
+      } catch {
+        // 진행 중인 업로드가 방금 옮겨 갔을 수 있다 — 건너뛴다.
+      }
+    }
+    return removed;
   }
 }

@@ -25,6 +25,25 @@ export function readManifest(db: Db, snapshotId: string | null): Map<string, Ent
   return manifest;
 }
 
+/**
+ * 새 파일 경로가 기존 항목의 이름 공간과 겹치는지 찾는다 — 파일과 폴더는 같은 이름을 가질 수 없다.
+ * - `path/` 아래에 항목이 있으면(= path 는 이미 폴더) 그 항목의 경로를,
+ * - path 의 조상 경로가 파일로 존재하면 그 조상 경로를 돌려준다.
+ * 겹치지 않으면 null. path 자신이 파일로 있는 경우는 덮어쓰기이므로 여기서 보지 않는다.
+ * 돌려준 값이 `${path}/` 로 시작하면 앞의 경우, 아니면 뒤의 경우다.
+ */
+export function findPathConflict(manifest: Map<string, EntryRow>, path: string): string | null {
+  const prefix = `${path}/`;
+  for (const key of manifest.keys()) {
+    if (key.startsWith(prefix)) return key;
+  }
+  for (let idx = path.indexOf('/'); idx !== -1; idx = path.indexOf('/', idx + 1)) {
+    const ancestor = path.slice(0, idx);
+    if (manifest.has(ancestor)) return ancestor;
+  }
+  return null;
+}
+
 export interface CreateSnapshotInput {
   repoId: string;
   parentId: string | null;
@@ -138,19 +157,33 @@ interface SnapshotRow {
   total_size: number | null;
 }
 
-export function listSnapshots(db: Db, repoId: string, limit: number, before?: number): Snapshot[] {
+/** 변경 이력 페이지 커서. 같은 밀리초에 만들어진 스냅샷을 건너뛰지 않도록 id 까지 본다. */
+export interface SnapshotCursor {
+  before: number;
+  beforeId: string;
+}
+
+export function listSnapshots(
+  db: Db,
+  repoId: string,
+  limit: number,
+  cursor?: SnapshotCursor,
+): Snapshot[] {
+  const before = cursor?.before ?? Number.MAX_SAFE_INTEGER;
+  const beforeId = cursor?.beforeId ?? '';
   const rows = db
-    .prepare<[string, number, number], SnapshotRow>(
+    .prepare<[string, number, number, string, number], SnapshotRow>(
       `SELECT s.*, u.display_name,
               (SELECT COUNT(*) FROM snapshot_entries e WHERE e.snapshot_id = s.id) AS file_count,
               (SELECT SUM(size) FROM snapshot_entries e WHERE e.snapshot_id = s.id) AS total_size
          FROM snapshots s
          JOIN users u ON u.id = s.author_id
-        WHERE s.repo_id = ? AND s.created_at < ?
+        WHERE s.repo_id = ?
+          AND (s.created_at < ? OR (s.created_at = ? AND s.id < ?))
         ORDER BY s.created_at DESC, s.id DESC
         LIMIT ?`,
     )
-    .all(repoId, before ?? Number.MAX_SAFE_INTEGER, limit);
+    .all(repoId, before, before, beforeId, limit);
 
   return rows.map((row) => ({
     id: row.id,

@@ -72,6 +72,8 @@ export default function ProposalsScreen() {
               <Pressable
                 key={value}
                 onPress={() => setFilter(value)}
+                accessibilityRole="radio"
+                accessibilityState={{ selected: active }}
                 style={{
                   paddingHorizontal: spacing.md,
                   paddingVertical: spacing.sm - 2,

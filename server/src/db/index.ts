@@ -23,7 +23,8 @@ function migrate(db: Db): void {
     if (migration.version <= current) continue;
     db.exec('BEGIN');
     try {
-      db.exec(migration.up);
+      if (migration.up) db.exec(migration.up);
+      migration.run?.(db);
       // user_version 은 바인딩 파라미터를 받지 않는다. 값은 코드 상수라 안전.
       db.exec(`PRAGMA user_version = ${migration.version}`);
       db.exec('COMMIT');

@@ -9,7 +9,6 @@ export interface AsyncState<T> {
   refreshing: boolean;
   reload(): void;
   refresh(): void;
-  setData(next: T): void;
 }
 
 /**
@@ -59,6 +58,5 @@ export function useAsync<T>(loader: () => Promise<T>, deps: unknown[]): AsyncSta
     refreshing,
     reload: () => void run('initial'),
     refresh: () => void run('refresh'),
-    setData,
   };
 }

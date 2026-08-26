@@ -74,10 +74,25 @@ npm run server        # http://localhost:4000
 | `LISTUP_AUTH_SECRET` | (개발 시 자동 생성) | 토큰 서명 키. **운영에서는 반드시 지정** |
 | `LISTUP_TOKEN_TTL_DAYS` | `30` | 로그인 유지 기간 |
 | `LISTUP_MAX_UPLOAD_MB` | `100` | 파일 하나의 최대 크기 |
+| `LISTUP_MAX_REPO_MB` | `2048` | 저장소 하나의 총량 |
+| `LISTUP_MAX_STAGING_MB_PER_DAY` | `1024` | 사용자별 하루 제안용 업로드 총량 |
 | `LISTUP_CORS_ORIGIN` | `*` | 허용 오리진 (쉼표로 여러 개) |
+| `LISTUP_WEB_DIR` | `app/dist` | 함께 서빙할 웹 빌드 위치 |
+| `LISTUP_TRUST_PROXY` | (없음) | `1` 이면 프록시(터널·리버스 프록시)가 준 클라이언트 IP 를 신뢰 |
+| `LISTUP_LOG_LEVEL` | `info` | 로그 레벨 (`debug`, `warn`, `error` …) |
+
+값이 잘못되면(정수가 아니거나 범위를 벗어나면) 기본값으로 넘어가지 않고 서버가 뜨지 않습니다.
+이름을 잘못 쓴 `LISTUP_*` 변수는 경고로 알려줍니다.
 
 키를 지정하지 않으면 서버를 다시 켤 때마다 새 키가 만들어져 모두 로그아웃됩니다.
 운영에서는 `NODE_ENV=production` 일 때 키가 없으면 아예 뜨지 않습니다.
+
+백업은 파일 복사가 아니라 아래 명령으로 합니다 (WAL 모드라 실행 중인 DB 파일을 그냥 복사하면
+최근 변경이 빠집니다). `blobs/` 디렉터리는 별도로 복사하세요.
+
+```bash
+npm run backup -- ./backups     # ./backups/listup-<날짜시각>.db 생성
+```
 
 ### 3. 앱 켜기
 
@@ -89,7 +104,9 @@ npm run app           # Expo 개발 서버
 - **모바일**: Expo Go 앱으로 QR 코드를 찍습니다. 서버 주소는 개발 PC 의 LAN IP 로 자동
   설정됩니다(기기에서 `localhost` 는 기기 자신을 가리키므로).
 
-서버 주소를 직접 지정하려면:
+서버 주소는 앱 안에서도 바꿀 수 있습니다 — 로그인 화면 아래 "서버 주소" 또는 설정 화면에서
+입력하면 연결을 확인한 뒤 기기에 저장됩니다 (릴리스 빌드에서 다른 서버를 쓸 때).
+빌드 시점에 지정하려면:
 
 ```bash
 EXPO_PUBLIC_LISTUP_API_URL=https://listup.example.com npm run app
@@ -127,7 +144,7 @@ powershell -ExecutionPolicy Bypass -File deploy-tunnel.ps1
 ## 검증
 
 ```bash
-npm test          # 서버 테스트 66개
+npm test          # 서버 테스트 (HTTP 수준)
 npm run typecheck # 서버 + 앱 타입 검사
 ```
 

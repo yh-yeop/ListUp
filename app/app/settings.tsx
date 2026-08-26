@@ -1,6 +1,7 @@
-import { router } from 'expo-router';
-import { useState } from 'react';
-import { View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { router, useFocusEffect } from 'expo-router';
+import { useCallback, useState } from 'react';
+import { Pressable, View } from 'react-native';
 import {
   Body,
   Button,
@@ -14,19 +15,28 @@ import {
   Subtitle,
   Title,
 } from '../src/components/ui';
-import { API_BASE_URL, ApiError, api } from '../src/api/client';
+import { ApiError, api, getApiBaseUrl } from '../src/api/client';
 import { confirmAction, notify } from '../src/lib/dialogs';
 import { useAuth } from '../src/state/auth';
-import { spacing } from '../src/theme';
+import { spacing, useTheme } from '../src/theme';
 
 export default function SettingsScreen() {
   const { user, updateProfile, logout } = useAuth();
+  const { colors } = useTheme();
   const [displayName, setDisplayName] = useState(user?.displayName ?? '');
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [savingName, setSavingName] = useState(false);
   const [savingPassword, setSavingPassword] = useState(false);
+  const [serverUrl, setServerUrl] = useState(getApiBaseUrl);
+
+  // 서버 주소 화면에서 돌아오면 바뀐 주소를 다시 읽는다.
+  useFocusEffect(
+    useCallback(() => {
+      setServerUrl(getApiBaseUrl());
+    }, []),
+  );
 
   const saveName = async () => {
     setError(null);
@@ -67,8 +77,8 @@ export default function SettingsScreen() {
       confirmLabel: '로그아웃',
     });
     if (!ok) return;
+    // 로그인 화면으로 가는 것은 _layout 의 보호 라우트가 처리한다.
     await logout();
-    router.replace('/login');
   };
 
   return (
@@ -95,24 +105,49 @@ export default function SettingsScreen() {
       <Card style={{ gap: spacing.lg }}>
         <Body style={{ fontWeight: '600' }}>비밀번호 변경</Body>
         <Field label="현재 비밀번호">
-          <Input value={currentPassword} onChangeText={setCurrentPassword} secureTextEntry />
+          <Input
+            value={currentPassword}
+            onChangeText={setCurrentPassword}
+            secureTextEntry
+            autoComplete="current-password"
+            textContentType="password"
+          />
         </Field>
         <Field label="새 비밀번호" hint="8자 이상">
-          <Input value={newPassword} onChangeText={setNewPassword} secureTextEntry />
+          <Input
+            value={newPassword}
+            onChangeText={setNewPassword}
+            secureTextEntry
+            autoComplete="new-password"
+            textContentType="newPassword"
+            onSubmitEditing={savePassword}
+          />
         </Field>
         <Button
           label="비밀번호 변경"
           onPress={savePassword}
           loading={savingPassword}
-          disabled={!currentPassword || !newPassword}
+          disabled={!currentPassword || newPassword.length < 8}
         />
       </Card>
 
       <Card style={{ gap: spacing.md }}>
-        <Row style={{ justifyContent: 'space-between' }}>
-          <Caption>서버</Caption>
-          <Caption>{API_BASE_URL}</Caption>
-        </Row>
+        <Pressable
+          onPress={() => router.push('/server')}
+          accessibilityRole="button"
+          accessibilityLabel="서버 주소 바꾸기"
+          style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
+        >
+          <Row style={{ justifyContent: 'space-between' }}>
+            <Caption>서버</Caption>
+            <Row gap={spacing.xs} style={{ flexShrink: 1 }}>
+              <Caption numberOfLines={1} style={{ flexShrink: 1 }}>
+                {serverUrl}
+              </Caption>
+              <Ionicons name="chevron-forward" size={14} color={colors.textFaint} />
+            </Row>
+          </Row>
+        </Pressable>
         <Button label="로그아웃" variant="danger" icon="log-out-outline" onPress={signOut} full />
       </Card>
     </Screen>

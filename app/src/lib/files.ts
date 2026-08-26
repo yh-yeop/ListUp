@@ -82,18 +82,3 @@ export async function downloadFile(url: string, fileName: string): Promise<Downl
   }
   return { ok: true, message: `${saved.uri} 에 저장했습니다.` };
 }
-
-/** 여러 파일을 한 번에 내려받는다 (웹에서 폴더 통째로 받기 등). */
-export async function downloadMany(
-  items: { url: string; fileName: string }[],
-): Promise<DownloadResult> {
-  let done = 0;
-  for (const item of items) {
-    const result = await downloadFile(item.url, item.fileName);
-    if (result.ok) done += 1;
-  }
-  return {
-    ok: done > 0,
-    message: done === items.length ? `${done}개 파일을 받았습니다.` : `${done}/${items.length}개만 받았습니다.`,
-  };
-}

@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
+    "backup": "tsx src/backup.ts",
     "test": "tsx --test test/*.test.ts",
     "typecheck": "tsc --noEmit"
   },
@@ -16,12 +17,12 @@
     "@fastify/static": "^8.0.4",
     "@listup/shared": "*",
     "better-sqlite3": "^12.2.0",
-    "fastify": "^5.1.0"
+    "fastify": "^5.1.0",
+    "tsx": "^4.19.2"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.11",
     "@types/node": "^22.9.0",
-    "tsx": "^4.19.2",
     "typescript": "^5.6.3"
   }
 }

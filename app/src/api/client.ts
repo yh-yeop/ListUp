@@ -1,5 +1,6 @@
 import Constants from 'expo-constants';
 import { Platform } from 'react-native';
+import { MAX_FILE_SIZE } from '@listup/shared';
 import type {
   ApiErrorBody,
   ApiErrorCode,
@@ -16,11 +17,14 @@ import type {
 } from '@listup/shared';
 
 /**
- * 서버 주소 결정 순서:
+ * 기본 서버 주소 결정 순서:
  *   1) EXPO_PUBLIC_LISTUP_API_URL 환경변수
  *   2) app.json 의 extra.listupApiUrl
  *   3) Expo 개발 서버의 호스트 (실기기에서 localhost 는 기기 자신을 가리키므로,
  *      개발 중에는 PC 의 LAN IP 를 자동으로 알아낸다)
+ *
+ * 사용자가 서버 주소 화면에서 바꾼 주소는 AsyncStorage(API_URL_STORAGE_KEY)에 저장되고,
+ * 앱 시작 시 auth 가 토큰 복원 전에 setApiBaseUrl 로 적용한다.
  */
 function resolveBaseUrl(): string {
   const fromEnv = process.env.EXPO_PUBLIC_LISTUP_API_URL;
@@ -37,7 +41,44 @@ function resolveBaseUrl(): string {
   return (fromConfig ?? 'http://localhost:4000').replace(/\/$/, '');
 }
 
-export const API_BASE_URL = resolveBaseUrl();
+export const DEFAULT_API_BASE_URL = resolveBaseUrl();
+/** 사용자가 바꾼 서버 주소를 저장하는 AsyncStorage 키. */
+export const API_URL_STORAGE_KEY = 'listup.apiUrl';
+
+let apiBaseUrl = DEFAULT_API_BASE_URL;
+
+export function getApiBaseUrl(): string {
+  return apiBaseUrl;
+}
+
+/** 서버 주소를 바꾼다. null 이면 기본값으로 되돌린다. 끝 슬래시는 떼어 낸다. */
+export function setApiBaseUrl(url: string | null): void {
+  apiBaseUrl = url ? url.replace(/\/+$/, '') : DEFAULT_API_BASE_URL;
+  // 업로드 한도는 서버마다 다르므로 주소가 바뀌면 다시 받아온다.
+  maxUploadBytesCache = null;
+}
+
+/** 서버가 알려준 파일 하나의 업로드 한도(바이트). */
+let maxUploadBytesCache: number | null = null;
+
+/**
+ * 파일 하나의 업로드 한도(바이트). 실제 한도는 서버 설정(LISTUP_MAX_UPLOAD_MB)이므로
+ * 서버(/api/health)에 물어보고, 응답에 값이 없거나 서버에 닿지 못하면 공용 기본값으로 거른다.
+ * 최종 판정은 어차피 서버(413)가 한다.
+ */
+export async function getMaxUploadBytes(): Promise<number> {
+  if (maxUploadBytesCache !== null) return maxUploadBytesCache;
+  try {
+    const health = await request<{ maxUploadBytes?: unknown }>('/api/health');
+    if (typeof health.maxUploadBytes === 'number' && health.maxUploadBytes > 0) {
+      maxUploadBytesCache = health.maxUploadBytes;
+      return health.maxUploadBytes;
+    }
+  } catch {
+    // 일시적 연결 실패 — 기본값으로 진행하고 다음 기회에 다시 물어본다.
+  }
+  return MAX_FILE_SIZE;
+}
 
 export class ApiError extends Error {
   readonly code: ApiErrorCode;
@@ -83,6 +124,9 @@ interface RequestOptions {
   signal?: AbortSignal;
 }
 
+/** 서버 응답을 기다리는 최대 시간. 파일 업로드(FormData)에는 적용하지 않는다. */
+const REQUEST_TIMEOUT_MS = 30_000;
+
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const headers: Record<string, string> = { ...authHeaders() };
   let body: BodyInit | undefined;
@@ -94,45 +138,76 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     body = JSON.stringify(options.body);
   }
 
-  let response: Response;
+  // 401 판정은 "이 요청에 쓴 토큰" 기준으로 한다. 토큰 복원 전에 나간 요청이
+  // 401 로 돌아오는 사이 새 토큰이 들어왔다면 그 토큰을 지우면 안 된다.
+  const usedToken = authToken;
+
+  // 호출자가 signal 을 주지 않은 일반 요청에는 타임아웃을 건다.
+  // (Hermes 에는 AbortSignal.timeout 이 없어 setTimeout + abort 로 만든다.)
+  let signal = options.signal;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
+  if (!signal && !options.formData) {
+    const controller = new AbortController();
+    signal = controller.signal;
+    timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, REQUEST_TIMEOUT_MS);
+  }
+  const timeoutError = () =>
+    new ApiError(0, 'internal', '서버 응답이 없습니다. 잠시 후 다시 시도해 주세요.');
+
   try {
-    response = await fetch(`${API_BASE_URL}${path}`, {
-      method: options.method ?? 'GET',
-      headers,
-      body,
-      signal: options.signal,
-    });
-  } catch (err) {
-    throw new ApiError(
-      0,
-      'internal',
-      `서버에 연결할 수 없습니다. (${API_BASE_URL})\n서버가 켜져 있는지 확인해 주세요.`,
-      err,
-    );
-  }
-
-  if (response.status === 401 && authToken) {
-    authToken = null;
-    onUnauthorized?.();
-  }
-
-  if (!response.ok) {
-    let parsed: ApiErrorBody | null = null;
+    let response: Response;
     try {
-      parsed = (await response.json()) as ApiErrorBody;
-    } catch {
-      // 본문이 JSON 이 아닌 경우 (프록시 오류 등)
+      response = await fetch(`${apiBaseUrl}${path}`, {
+        method: options.method ?? 'GET',
+        headers,
+        body,
+        signal,
+      });
+    } catch (err) {
+      if (timedOut) throw timeoutError();
+      throw new ApiError(
+        0,
+        'internal',
+        `서버에 연결할 수 없습니다. (${apiBaseUrl})\n서버가 켜져 있는지 확인해 주세요.`,
+        err,
+      );
     }
-    throw new ApiError(
-      response.status,
-      parsed?.error?.code ?? 'internal',
-      parsed?.error?.message ?? `요청이 실패했습니다. (HTTP ${response.status})`,
-      parsed?.error?.details,
-    );
-  }
 
-  if (response.status === 204) return undefined as T;
-  return (await response.json()) as T;
+    if (response.status === 401 && usedToken && authToken === usedToken) {
+      authToken = null;
+      onUnauthorized?.();
+    }
+
+    if (!response.ok) {
+      let parsed: ApiErrorBody | null = null;
+      try {
+        parsed = (await response.json()) as ApiErrorBody;
+      } catch {
+        // 본문이 JSON 이 아닌 경우 (프록시 오류 등)
+      }
+      throw new ApiError(
+        response.status,
+        parsed?.error?.code ?? 'internal',
+        parsed?.error?.message ?? `요청이 실패했습니다. (HTTP ${response.status})`,
+        parsed?.error?.details,
+      );
+    }
+
+    if (response.status === 204) return undefined as T;
+    try {
+      return (await response.json()) as T;
+    } catch (err) {
+      // 본문을 받는 도중 타임아웃이 걸린 경우
+      if (timedOut) throw timeoutError();
+      throw err;
+    }
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
 }
 
 /** 업로드용 파일 소스 — 웹에서는 File, 네이티브에서는 uri 기반. */
@@ -202,8 +277,20 @@ export const api = {
       body: { userId },
     }),
 
-  history: (repoId: string) =>
-    request<{ snapshots: Snapshot[]; nextBefore: number | null }>(`/api/repos/${repoId}/history`),
+  /** 변경 이력. `cursor` 는 이전 응답의 `next` 를 그대로 넘긴다 (더 보기). */
+  history: (repoId: string, cursor?: { before: number; beforeId: string } | null) => {
+    const params = new URLSearchParams();
+    if (cursor) {
+      params.set('before', String(cursor.before));
+      params.set('beforeId', cursor.beforeId);
+    }
+    const qs = params.toString();
+    return request<{
+      snapshots: Snapshot[];
+      /** 더 볼 게 있으면 다음 요청에 넘길 커서, 없으면 null. */
+      next: { before: number; beforeId: string } | null;
+    }>(`/api/repos/${repoId}/history${qs ? `?${qs}` : ''}`);
+  },
 
   // 파일 ------------------------------------------------------------------
   listFiles: (repoId: string, path = '', snapshotId?: string) => {
@@ -243,13 +330,13 @@ export const api = {
     const params = new URLSearchParams({ path });
     if (options.snapshotId) params.set('snapshot', options.snapshotId);
     if (options.inline) params.set('inline', '1');
-    return `${API_BASE_URL}/api/repos/${repoId}/raw?${params.toString()}`;
+    return `${apiBaseUrl}/api/repos/${repoId}/raw?${params.toString()}`;
   },
 
   proposalFileUrl: (proposalId: string, path: string, inline = false) => {
     const params = new URLSearchParams({ path });
     if (inline) params.set('inline', '1');
-    return `${API_BASE_URL}/api/proposals/${proposalId}/raw?${params.toString()}`;
+    return `${apiBaseUrl}/api/proposals/${proposalId}/raw?${params.toString()}`;
   },
 
   // 초대 ------------------------------------------------------------------

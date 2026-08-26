@@ -26,7 +26,8 @@ export default function SignupScreen() {
     setBusy(true);
     try {
       await signup(email.trim(), password, displayName.trim());
-      router.replace('/repos');
+      // index 가 저장소 목록으로 보낸다. 로그인·가입 화면은 스택에 남지 않는다.
+      router.replace('/');
     } catch (err) {
       setError(err instanceof ApiError ? err.message : '회원가입에 실패했습니다.');
     } finally {

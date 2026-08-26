@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Stack, router, useFocusEffect } from 'expo-router';
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { Pressable, RefreshControl, View } from 'react-native';
 import { ROLE_LABEL, formatBytes, formatRelativeTime, type RepoSummary } from '@listup/shared';
 import {
@@ -34,8 +34,14 @@ export default function ReposScreen() {
   const state = useAsync(async () => (await api.listRepos()).repos, []);
 
   // 다른 화면에서 저장소를 만들거나 나간 뒤 돌아오면 목록을 갱신한다.
+  // 처음 포커스는 useAsync 의 첫 요청과 겹치므로 건너뛴다.
+  const firstFocus = useRef(true);
   useFocusEffect(
     useCallback(() => {
+      if (firstFocus.current) {
+        firstFocus.current = false;
+        return;
+      }
       state.refresh();
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []),

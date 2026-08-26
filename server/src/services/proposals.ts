@@ -6,7 +6,7 @@ import type {
   ProposalStatus,
 } from '@listup/shared';
 import type { Db } from '../db/index.ts';
-import { readManifest, type EntryRow } from './snapshots.ts';
+import { findPathConflict, readManifest, type EntryRow } from './snapshots.ts';
 
 export interface ProposalRow {
   id: string;
@@ -104,6 +104,53 @@ export function readComments(db: Db, proposalId: string): Comment[] {
     body: row.body,
     createdAt: row.created_at,
   }));
+}
+
+/**
+ * 이 저장소에서 제안에 쓸 수 있는 blob 인지 — 이 저장소로 올렸거나(repo_blobs), 이 저장소의
+ * 어떤 스냅샷에라도 들어 있던 것이어야 한다. blob 은 전역 콘텐츠 주소라 이 검사가 없으면
+ * 해시만 알아내서 남의 저장소 파일을 제안 경유로 내려받을 수 있다.
+ * (스냅샷 참조는 repo_blobs 가 생기기 전 데이터와, 지운 파일을 되살리는 제안을 위한 것)
+ */
+export function blobBelongsToRepo(db: Db, repoId: string, hash: string): boolean {
+  const uploaded = db
+    .prepare<[string, string], { ok: number }>(
+      `SELECT 1 AS ok FROM repo_blobs WHERE repo_id = ? AND hash = ?`,
+    )
+    .get(repoId, hash);
+  if (uploaded) return true;
+  const referenced = db
+    .prepare<[string, string], { ok: number }>(
+      `SELECT 1 AS ok
+         FROM snapshot_entries e JOIN snapshots s ON s.id = e.snapshot_id
+        WHERE s.repo_id = ? AND e.blob_hash = ?
+        LIMIT 1`,
+    )
+    .get(repoId, hash);
+  return referenced !== undefined;
+}
+
+/** manifest 의 파일 크기 합. */
+export function manifestBytes(manifest: Map<string, EntryRow>): number {
+  let total = 0;
+  for (const entry of manifest.values()) total += entry.size;
+  return total;
+}
+
+/**
+ * 추가(add) 항목이 manifest 의 기존 파일/폴더와 이름 공간이 겹치는지 — 겹치는 제안 경로들.
+ * 수정·삭제는 이미 파일인 경로를 다루므로 볼 필요가 없다.
+ */
+export function findPathConflicts(
+  manifest: Map<string, EntryRow>,
+  changes: Pick<ChangeRow, 'path' | 'op'>[],
+): string[] {
+  const conflicts: string[] = [];
+  for (const change of changes) {
+    if (change.op !== 'add') continue;
+    if (findPathConflict(manifest, change.path) !== null) conflicts.push(change.path);
+  }
+  return conflicts;
 }
 
 /**

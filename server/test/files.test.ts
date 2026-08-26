@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import type { TreeListing } from '@listup/shared';
 import {
@@ -175,6 +177,211 @@ describe('저장소와 파일', () => {
     assert.equal(read.body, 'c');
   });
 
+  it('한도를 넘는 파일은 413 이고 아무것도 커밋되지 않는다', async () => {
+    const before = await h.app.inject({ method: 'GET', url: `/api/repos/${repoId}`, headers: auth(owner) });
+    const headBefore = before.json().repo.headSnapshotId;
+
+    // 하네스 한도는 5MB. multipart 는 한도에서 스트림을 조용히 자르므로 잘린 채 커밋되면 안 된다.
+    const res = await uploadFile(h.app, owner, repoId, '큰파일.bin', Buffer.alloc(6 * 1024 * 1024, 1));
+    assert.equal(res.statusCode, 413);
+    assert.equal(res.json().error.code, 'payload_too_large');
+
+    const tree = await h.app.inject({
+      method: 'GET',
+      url: `/api/repos/${repoId}/files`,
+      headers: auth(owner),
+    });
+    assert.equal(
+      (tree.json().tree as TreeListing).files.some((f) => f.name === '큰파일.bin'),
+      false,
+    );
+    const after = await h.app.inject({ method: 'GET', url: `/api/repos/${repoId}`, headers: auth(owner) });
+    assert.equal(after.json().repo.headSnapshotId, headBefore);
+
+    // 임시 파일도 남지 않는다.
+    const tmpDir = path.join(h.dir, 'blobs', 'tmp');
+    const leftovers = fs.existsSync(tmpDir) ? fs.readdirSync(tmpDir).filter((n) => n.startsWith('up_')) : [];
+    assert.deepEqual(leftovers, []);
+  });
+
+  it('업로드 중 다른 커밋이 끼어들어도 그 파일이 사라지지 않는다', async () => {
+    const original = h.ctx.blobs.writeStream.bind(h.ctx.blobs);
+    let interleaved = false;
+    h.ctx.blobs.writeStream = async (stream, maxBytes) => {
+      if (!interleaved) {
+        interleaved = true;
+        // 첫 업로드가 스트림을 받는 동안 다른 업로드가 먼저 커밋되는 상황.
+        const other = await uploadFile(h.app, owner, repoId, '동시/둘째.txt', '둘째');
+        assert.equal(other.statusCode, 201);
+      }
+      return original(stream, maxBytes);
+    };
+    try {
+      const res = await uploadFile(h.app, owner, repoId, '동시/첫째.txt', '첫째');
+      assert.equal(res.statusCode, 201);
+    } finally {
+      h.ctx.blobs.writeStream = original;
+    }
+    assert.equal(interleaved, true);
+
+    const tree = await h.app.inject({
+      method: 'GET',
+      url: `/api/repos/${repoId}/files?path=${encodeURIComponent('동시')}`,
+      headers: auth(owner),
+    });
+    const names = (tree.json().tree as TreeListing).files.map((f) => f.name).sort();
+    assert.deepEqual(names, ['둘째.txt', '첫째.txt'].sort());
+  });
+
+  it('다운로드에 ETag 가 붙고 If-None-Match 가 맞으면 304 다', async () => {
+    const up = await uploadFile(h.app, owner, repoId, '캐시/노트.txt', '버전 1');
+    assert.equal(up.statusCode, 201);
+    const hash = up.json().file.blobHash as string;
+    const url = `/api/repos/${repoId}/raw?path=${encodeURIComponent('캐시/노트.txt')}`;
+
+    const res = await h.app.inject({ method: 'GET', url, headers: auth(owner) });
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.headers.etag, `"${hash}"`);
+    // head 기준 URL 은 같은 경로에 새 내용이 올라올 수 있으니 매번 재검증한다.
+    assert.equal(res.headers['cache-control'], 'private, no-cache');
+
+    const cached = await h.app.inject({
+      method: 'GET',
+      url,
+      headers: { ...auth(owner), 'if-none-match': `"${hash}"` },
+    });
+    assert.equal(cached.statusCode, 304);
+    assert.equal(cached.body, '');
+
+    const weak = await h.app.inject({
+      method: 'GET',
+      url,
+      headers: { ...auth(owner), 'if-none-match': `W/"${hash}"` },
+    });
+    assert.equal(weak.statusCode, 304);
+
+    // 같은 경로에 다른 내용을 올리면 ETag 가 바뀌고, 옛 태그로는 새 내용을 받는다.
+    const up2 = await uploadFile(h.app, owner, repoId, '캐시/노트.txt', '버전 2');
+    const hash2 = up2.json().file.blobHash as string;
+    assert.notEqual(hash2, hash);
+    const fresh = await h.app.inject({
+      method: 'GET',
+      url,
+      headers: { ...auth(owner), 'if-none-match': `"${hash}"` },
+    });
+    assert.equal(fresh.statusCode, 200);
+    assert.equal(fresh.headers.etag, `"${hash2}"`);
+    assert.equal(fresh.body, '버전 2');
+
+    // 스냅샷을 지정한 URL 은 내용이 고정이라 오래 캐시해도 된다.
+    const pinned = await h.app.inject({
+      method: 'GET',
+      url: `${url}&snapshot=${up2.json().snapshotId}`,
+      headers: auth(owner),
+    });
+    assert.equal(pinned.statusCode, 200);
+    assert.equal(pinned.headers['cache-control'], 'private, max-age=31536000, immutable');
+  });
+
+  it('HEAD 요청은 본문 없이 헤더만 준다', async () => {
+    const res = await h.app.inject({
+      method: 'HEAD',
+      url: `/api/repos/${repoId}/raw?path=${encodeURIComponent('캐시/노트.txt')}`,
+      headers: auth(owner),
+    });
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.headers['content-length'], String(Buffer.byteLength('버전 2')));
+    assert.match(String(res.headers.etag), /^"[0-9a-f]{64}"$/);
+    assert.equal(res.body, '');
+  });
+
+  it('파일이 있는 이름 아래에는 파일을 만들 수 없다', async () => {
+    const file = await uploadFile(h.app, owner, repoId, '겹침/이름', '파일');
+    assert.equal(file.statusCode, 201);
+    const res = await uploadFile(h.app, owner, repoId, '겹침/이름/안.txt', 'x');
+    assert.equal(res.statusCode, 409);
+    assert.equal(res.json().error.code, 'conflict');
+    assert.match(res.json().error.message, /상위 경로에 파일이 있습니다/);
+  });
+
+  it('폴더가 있는 이름으로는 파일을 만들 수 없다', async () => {
+    const inner = await uploadFile(h.app, owner, repoId, '겹침/폴더/안.txt', 'x');
+    assert.equal(inner.statusCode, 201);
+    const res = await uploadFile(h.app, owner, repoId, '겹침/폴더', '파일');
+    assert.equal(res.statusCode, 409);
+    assert.match(res.json().error.message, /같은 이름의 폴더가 이미 있습니다/);
+  });
+
+  it('이동할 때도 파일과 폴더 이름이 겹치면 거부한다', async () => {
+    const move = (from: string, to: string) =>
+      h.app.inject({
+        method: 'POST',
+        url: `/api/repos/${repoId}/files/move`,
+        headers: auth(owner),
+        payload: { from, to },
+      });
+
+    // 파일을 기존 폴더 이름으로
+    const ontoFolder = await move('겹침/이름', '겹침/폴더');
+    assert.equal(ontoFolder.statusCode, 409);
+    assert.match(ontoFolder.json().error.message, /같은 이름의 폴더가 이미 있습니다/);
+
+    // 폴더를 기존 파일 아래로
+    const underFile = await move('겹침/폴더', '겹침/이름/하위');
+    assert.equal(underFile.statusCode, 409);
+    assert.match(underFile.json().error.message, /상위 경로에 파일이 있습니다/);
+
+    // 폴더의 유일한 파일을 폴더 이름 자리로 옮기면 폴더가 사라지므로 겹치지 않는다.
+    const collapse = await move('겹침/폴더/안.txt', '겹침/폴더');
+    assert.equal(collapse.statusCode, 200);
+    const read = await h.app.inject({
+      method: 'GET',
+      url: `/api/repos/${repoId}/raw?path=${encodeURIComponent('겹침/폴더')}`,
+      headers: auth(owner),
+    });
+    assert.equal(read.body, 'x');
+  });
+
+  it('NFD 로 올린 한글 경로도 NFC 로 저장되고 조회된다', async () => {
+    const nfc = '정규화/한글.txt';
+    const nfd = nfc.normalize('NFD');
+    assert.notEqual(nfd, nfc);
+
+    const res = await uploadFile(h.app, owner, repoId, nfd, '내용');
+    assert.equal(res.statusCode, 201);
+    assert.equal(res.json().file.path, nfc);
+
+    const tree = await h.app.inject({
+      method: 'GET',
+      url: `/api/repos/${repoId}/files?path=${encodeURIComponent('정규화')}`,
+      headers: auth(owner),
+    });
+    assert.deepEqual(
+      (tree.json().tree as TreeListing).files.map((f) => f.name),
+      ['한글.txt'],
+    );
+
+    const raw = await h.app.inject({
+      method: 'GET',
+      url: `/api/repos/${repoId}/raw?path=${encodeURIComponent(nfc)}`,
+      headers: auth(owner),
+    });
+    assert.equal(raw.statusCode, 200);
+    assert.equal(raw.body, '내용');
+  });
+
+  it('제로폭 문자가 든 경로는 거부한다', async () => {
+    const res = await uploadFile(h.app, owner, repoId, '보이지\u200B않음.txt', 'x');
+    assert.equal(res.statusCode, 400);
+
+    const read = await h.app.inject({
+      method: 'GET',
+      url: `/api/repos/${repoId}/raw?path=${encodeURIComponent('a\u200Bb.txt')}`,
+      headers: auth(owner),
+    });
+    assert.equal(read.statusCode, 400);
+  });
+
   it('멤버가 아니면 저장소가 있는지조차 알 수 없다', async () => {
     const outsider = await signup(h.app, '외부인');
     const res = await h.app.inject({
@@ -222,5 +429,11 @@ describe('Content-Disposition', () => {
     const header = contentDisposition('a"b\nc.txt', false);
     assert.equal(header.includes('\n'), false);
     assert.equal(header.split('filename="')[1].split('"')[0].includes('"'), false);
+  });
+
+  it("RFC 8187 이 금지한 '()* 도 filename* 에서 퍼센트 인코딩한다", () => {
+    const header = contentDisposition("a'b(c)*.txt", false);
+    const encoded = header.split("filename*=UTF-8''")[1];
+    assert.equal(encoded, 'a%27b%28c%29%2A.txt');
   });
 });

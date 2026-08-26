@@ -206,7 +206,7 @@ export interface ProposalDetail extends Proposal {
   comments: Comment[];
   /** 현재 head 기준으로 병합 가능한지. */
   mergeable: boolean;
-  /** 병합을 막는 경로들 (base 이후 head 에서 바뀐 파일). */
+  /** 병합을 막는 경로들 (base 이후 head 에서 바뀐 파일, 또는 head 의 파일/폴더와 이름이 겹치는 경로). */
   conflicts: string[];
 }
 
@@ -226,24 +226,33 @@ export const MAX_PATH_SEGMENTS = 24;
 
 /**
  * 저장소 내부 경로를 정규화한다.
- * - 앞뒤 `/` 제거, 중복 `/` 축약
+ * - 유니코드 NFC 로 통일 (macOS 는 한글 파일명을 NFD 로 만들어, 같은 이름이 다른 경로가 된다)
+ * - 앞뒤 `/` 제거, 중복 `/` 축약, 각 이름의 앞뒤 공백 제거
  * - `.` / `..` 및 제어문자 거부 (경로 탈출 방지)
+ * - 제로폭 공백·양방향 제어 같은 유니코드 format 문자 거부 (눈에 안 보이는 다른 이름을 만든다)
  * 유효하지 않으면 null.
  */
 export function normalizePath(input: string): string | null {
   if (typeof input !== 'string') return null;
   // 윈도우 구분자도 받아준다.
-  const raw = input.replace(/\\/g, '/').trim();
-  const segments = raw.split('/').filter((s) => s.length > 0);
-  if (segments.length === 0) return null;
-  if (segments.length > MAX_PATH_SEGMENTS) return null;
-  for (const seg of segments) {
+  const raw = input.normalize('NFC').replace(/\\/g, '/').trim();
+  const segments: string[] = [];
+  for (const part of raw.split('/')) {
+    if (part.length === 0) continue; // 앞뒤·중복 구분자
+    // 이름 앞뒤 공백은 화면에서 구분이 안 돼 "a" 와 "a " 가 다른 파일이 되는 혼란을 낳는다.
+    const seg = part.trim();
+    if (seg.length === 0) return null;
     if (seg === '.' || seg === '..') return null;
     // 제어문자 금지
     // eslint-disable-next-line no-control-regex
     if (/[\u0000-\u001f\u007f]/.test(seg)) return null;
+    // format 문자(Cf: 제로폭 공백, RTL 오버라이드 등)는 보이지 않아 같은 이름처럼 보이는 다른 경로를 만든다.
+    if (/\p{Cf}/u.test(seg)) return null;
     if (seg.length > 255) return null;
+    segments.push(seg);
   }
+  if (segments.length === 0) return null;
+  if (segments.length > MAX_PATH_SEGMENTS) return null;
   const joined = segments.join('/');
   if (joined.length > MAX_PATH_LENGTH) return null;
   return joined;

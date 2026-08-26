@@ -5,7 +5,6 @@ export interface Palette {
   surface: string;
   surfaceAlt: string;
   border: string;
-  borderStrong: string;
   text: string;
   textMuted: string;
   textFaint: string;
@@ -17,8 +16,9 @@ export interface Palette {
   success: string;
   successSoft: string;
   warning: string;
+  /** warning 배경 위에 올리는 글자색 (배지 숫자 등). */
+  warningText: string;
   warningSoft: string;
-  overlay: string;
 }
 
 const light: Palette = {
@@ -26,10 +26,10 @@ const light: Palette = {
   surface: '#ffffff',
   surfaceAlt: '#f0f2f5',
   border: '#e3e6ea',
-  borderStrong: '#cdd2d9',
   text: '#16191d',
-  textMuted: '#5c646e',
-  textFaint: '#8b939d',
+  // textMuted/textFaint 는 bg·surface·surfaceAlt 위에서 WCAG AA(4.5:1) 를 넘긴다.
+  textMuted: '#535b65',
+  textFaint: '#686e76',
   accent: '#2f6df6',
   accentText: '#ffffff',
   accentSoft: '#e8f0ff',
@@ -37,9 +37,9 @@ const light: Palette = {
   dangerSoft: '#fdeaea',
   success: '#12805c',
   successSoft: '#e3f5ee',
-  warning: '#a76a00',
+  warning: '#996100',
+  warningText: '#ffffff',
   warningSoft: '#fdf1dd',
-  overlay: 'rgba(15, 18, 22, 0.45)',
 };
 
 const dark: Palette = {
@@ -47,10 +47,9 @@ const dark: Palette = {
   surface: '#181b21',
   surfaceAlt: '#20242b',
   border: '#282d36',
-  borderStrong: '#3a414c',
   text: '#f2f4f7',
   textMuted: '#a4acb8',
-  textFaint: '#727b88',
+  textFaint: '#838b96',
   accent: '#5b8dff',
   accentText: '#0d1117',
   accentSoft: '#1c2740',
@@ -59,8 +58,8 @@ const dark: Palette = {
   success: '#3fca9a',
   successSoft: '#12312a',
   warning: '#e5a54a',
+  warningText: '#0d1117',
   warningSoft: '#33280f',
-  overlay: 'rgba(0, 0, 0, 0.6)',
 };
 
 export const spacing = {

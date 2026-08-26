@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import type { ComponentProps, ReactNode } from 'react';
+import { useState, type ComponentProps, type ReactNode } from 'react';
 import {
   ActivityIndicator,
   Platform,
@@ -24,34 +24,25 @@ type IconName = ComponentProps<typeof Ionicons>['name'];
 
 export function Screen({
   children,
-  scroll = true,
   refreshControl,
   padded = true,
 }: {
   children: ReactNode;
-  scroll?: boolean;
   refreshControl?: ComponentProps<typeof ScrollView>['refreshControl'];
   padded?: boolean;
 }) {
   const { colors } = useTheme();
-  const inner = (
-    <View style={[styles.contentWrap, padded && { padding: spacing.lg }]}>{children}</View>
-  );
 
   return (
     <SafeAreaView edges={['bottom']} style={{ flex: 1, backgroundColor: colors.bg }}>
-      {scroll ? (
-        <ScrollView
-          style={{ flex: 1 }}
-          contentContainerStyle={styles.scrollContent}
-          refreshControl={refreshControl}
-          keyboardShouldPersistTaps="handled"
-        >
-          {inner}
-        </ScrollView>
-      ) : (
-        <View style={{ flex: 1 }}>{inner}</View>
-      )}
+      <ScrollView
+        style={{ flex: 1 }}
+        contentContainerStyle={styles.scrollContent}
+        refreshControl={refreshControl}
+        keyboardShouldPersistTaps="handled"
+      >
+        <View style={[styles.contentWrap, padded && { padding: spacing.lg }]}>{children}</View>
+      </ScrollView>
     </SafeAreaView>
   );
 }
@@ -279,23 +270,38 @@ export function Field({
   );
 }
 
+const INPUT_FOCUS_BORDER = 2;
+
 export function Input(props: ComponentProps<typeof TextInput>) {
   const { colors } = useTheme();
+  const [focused, setFocused] = useState(false);
+  // 포커스 때 테두리가 두꺼워져도 안쪽 글자가 움직이지 않게 여백으로 상쇄한다.
+  const borderWidth = focused ? INPUT_FOCUS_BORDER : StyleSheet.hairlineWidth;
+  const padding = spacing.md + INPUT_FOCUS_BORDER - borderWidth;
+
   return (
     <TextInput
       placeholderTextColor={colors.textFaint}
       {...props}
+      onFocus={(event) => {
+        setFocused(true);
+        props.onFocus?.(event);
+      }}
+      onBlur={(event) => {
+        setFocused(false);
+        props.onBlur?.(event);
+      }}
       style={[
         {
           backgroundColor: colors.surface,
-          borderColor: colors.border,
-          borderWidth: StyleSheet.hairlineWidth,
+          borderColor: focused ? colors.accent : colors.border,
+          borderWidth,
           borderRadius: radius.md,
-          paddingHorizontal: spacing.md,
-          paddingVertical: spacing.md,
+          paddingHorizontal: padding,
+          paddingVertical: padding,
           color: colors.text,
           fontSize: fontSize.md,
-          // 웹에서 기본 파란 아웃라인 대신 테두리 색으로 포커스를 표시한다.
+          // 웹의 기본 파란 아웃라인은 끄고, 위의 accent 테두리로 포커스를 표시한다.
           ...(Platform.OS === 'web' ? { outlineStyle: 'none' } : null),
         } as ViewStyle,
         props.style,
@@ -451,55 +457,6 @@ export function Row({
     >
       {children}
     </View>
-  );
-}
-
-/** 누를 수 있는 목록 한 줄. */
-export function ListRow({
-  icon,
-  iconColor,
-  title,
-  subtitle,
-  right,
-  onPress,
-  onLongPress,
-}: {
-  icon?: IconName;
-  iconColor?: string;
-  title: string;
-  subtitle?: string;
-  right?: ReactNode;
-  onPress?: () => void;
-  onLongPress?: () => void;
-}) {
-  const { colors } = useTheme();
-  return (
-    <Pressable
-      onPress={onPress}
-      onLongPress={onLongPress}
-      accessibilityRole={onPress ? 'button' : undefined}
-      style={({ pressed }) => ({
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: spacing.md,
-        paddingVertical: spacing.md,
-        paddingHorizontal: spacing.lg,
-        backgroundColor: pressed && onPress ? colors.surfaceAlt : 'transparent',
-      })}
-    >
-      {icon ? <Ionicons name={icon} size={20} color={iconColor ?? colors.textMuted} /> : null}
-      <View style={{ flex: 1, gap: 2 }}>
-        <Text numberOfLines={1} style={{ color: colors.text, fontSize: fontSize.md, fontWeight: '500' }}>
-          {title}
-        </Text>
-        {subtitle ? (
-          <Text numberOfLines={1} style={{ color: colors.textFaint, fontSize: fontSize.xs }}>
-            {subtitle}
-          </Text>
-        ) : null}
-      </View>
-      {right}
-    </Pressable>
   );
 }
 

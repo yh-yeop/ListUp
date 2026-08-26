@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../src/app.ts';
-import { loadConfig } from '../src/config.ts';
+import { loadConfig, type Config } from '../src/config.ts';
 import { createContext, type AppContext } from '../src/context.ts';
 
 export interface Harness {
@@ -13,7 +13,8 @@ export interface Harness {
   close(): Promise<void>;
 }
 
-export async function createHarness(): Promise<Harness> {
+/** 테스트용 서버. `overrides` 로 용량 한도 같은 설정을 작게 잡을 수 있다. */
+export async function createHarness(overrides: Partial<Config> = {}): Promise<Harness> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'listup-test-'));
   const config = loadConfig({
     dbPath: path.join(dir, 'test.db'),
@@ -22,6 +23,7 @@ export async function createHarness(): Promise<Harness> {
     corsOrigin: '*',
     maxUploadBytes: 5 * 1024 * 1024,
     webDir: null,
+    ...overrides,
   });
   const ctx = createContext(config);
   const app = await buildApp(ctx, { logger: false });

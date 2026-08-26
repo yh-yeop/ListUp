@@ -1,3 +1,4 @@
+import { Readable } from 'node:stream';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import {
   MAX_FILES_PER_REPO,
@@ -6,12 +7,15 @@ import {
   normalizeDirPath,
   normalizePath,
 } from '@listup/shared';
+import type { Config } from '../config.ts';
 import type { AppContext } from '../context.ts';
-import { badRequest, conflict, notFound } from '../lib/errors.ts';
+import { badRequest, conflict, notFound, tooLarge } from '../lib/errors.ts';
 import { DEFAULT_MIME, isInlineSafe, mimeForPath } from '../lib/mime.ts';
 import { body, queryString, requireUser, requiredString } from '../lib/request.ts';
-import { requireAccess } from '../services/repos.ts';
+import { manifestBytes } from '../services/proposals.ts';
+import { getRepoRow, requireAccess } from '../services/repos.ts';
 import {
+  findPathConflict,
   listTree,
   readManifest,
   snapshotBelongsTo,
@@ -22,9 +26,34 @@ import {
 /** 파일명에 따옴표/개행이 들어가도 안전한 Content-Disposition 을 만든다. */
 export function contentDisposition(fileName: string, inline: boolean): string {
   const ascii = fileName.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_');
-  const encoded = encodeURIComponent(fileName);
+  // RFC 8187 의 attr-char 에는 `'()*` 가 없는데 encodeURIComponent 는 이들을 남겨 두므로 따로 인코딩한다.
+  const encoded = encodeURIComponent(fileName).replace(
+    /['()*]/g,
+    (ch) => `%${ch.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
   return `${inline ? 'inline' : 'attachment'}; filename="${ascii}"; filename*=UTF-8''${encoded}`;
 }
+
+/** 새 경로가 기존 파일/폴더와 이름 공간이 겹치면(파일 "a" 와 폴더 "a/") 409 를 던진다. */
+export function assertNoPathConflict(manifest: Map<string, EntryRow>, filePath: string): void {
+  const clash = findPathConflict(manifest, filePath);
+  if (clash === null) return;
+  throw conflict(
+    clash.startsWith(`${filePath}/`)
+      ? `같은 이름의 폴더가 이미 있습니다: ${filePath}`
+      : `상위 경로에 파일이 있습니다: ${clash}`,
+  );
+}
+
+/** 저장소 총 용량이 한도를 넘으면 413. 업로드·제안 생성·병합이 같은 메시지를 쓴다. */
+export function assertRepoBytes(config: Config, totalBytes: number): void {
+  if (totalBytes <= config.maxRepoBytes) return;
+  throw tooLarge(
+    `저장소 용량 한도(${Math.floor(config.maxRepoBytes / 1024 / 1024)}MB)를 넘습니다.`,
+  );
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** 요청에서 경로 파라미터를 읽고 정규화한다. */
 function requirePathParam(req: FastifyRequest, key = 'path'): string {
@@ -64,7 +93,7 @@ export async function registerFileRoutes(app: FastifyInstance, ctx: AppContext):
   app.post('/repos/:repoId/files', async (req, reply) => {
     const user = requireUser(req);
     const { repoId } = req.params as { repoId: string };
-    const { repo } = requireAccess(db, repoId, user.id, 'editor');
+    requireAccess(db, repoId, user.id, 'editor');
 
     const part = await req.file();
     if (!part) throw badRequest('업로드할 파일이 없습니다.');
@@ -82,21 +111,37 @@ export async function registerFileRoutes(app: FastifyInstance, ctx: AppContext):
     const now = Date.now();
     const mimeType = mimeForPath(filePath);
 
-    const snapshotId = db.transaction(() => {
+    const result = db.transaction(() => {
       db.prepare(
         `INSERT INTO blobs (hash, size, mime_type, created_at) VALUES (?, ?, ?, ?)
          ON CONFLICT(hash) DO NOTHING`,
       ).run(stored.hash, stored.size, mimeType, now);
 
-      const manifest = readManifest(db, repo.head_snapshot_id);
+      // 스트림을 받는 동안 다른 커밋이 끼어들 수 있으므로 head 는 트랜잭션 안에서 다시 읽는다.
+      // (권한 검사 때 읽은 값을 쓰면 그 사이 커밋된 파일이 새 스냅샷에서 빠진다)
+      const current = getRepoRow(db, repoId);
+      if (!current) throw notFound('저장소를 찾을 수 없습니다.');
+      const head = current.head_snapshot_id;
+
+      // 이 저장소로 올라온 blob 으로 기록해 두면 나중에 제안에도 담을 수 있다.
+      db.prepare(
+        `INSERT OR IGNORE INTO repo_blobs (repo_id, hash, uploaded_by, created_at) VALUES (?, ?, ?, ?)`,
+      ).run(repoId, stored.hash, user.id, now);
+
+      const manifest = readManifest(db, head);
       const existing = manifest.get(filePath);
-      if (!existing && manifest.size >= MAX_FILES_PER_REPO) {
-        throw conflict(`저장소당 파일은 최대 ${MAX_FILES_PER_REPO}개입니다.`);
+      if (!existing) {
+        if (manifest.size >= MAX_FILES_PER_REPO) {
+          throw conflict(`저장소당 파일은 최대 ${MAX_FILES_PER_REPO}개입니다.`);
+        }
+        assertNoPathConflict(manifest, filePath);
       }
       if (existing && existing.blob_hash === stored.hash) {
         // 내용이 같으면 새 스냅샷을 만들지 않는다.
-        return repo.head_snapshot_id;
+        return { snapshotId: head, unchanged: true };
       }
+      // 교체되는 파일의 크기는 빼고 결과 총량으로 한도를 본다.
+      assertRepoBytes(config, manifestBytes(manifest) - (existing?.size ?? 0) + stored.size);
 
       manifest.set(filePath, {
         path: filePath,
@@ -106,14 +151,15 @@ export async function registerFileRoutes(app: FastifyInstance, ctx: AppContext):
         updated_at: now,
       });
 
-      return writeSnapshot(db, {
+      const snapshotId = writeSnapshot(db, {
         repoId,
-        parentId: repo.head_snapshot_id,
+        parentId: head,
         authorId: user.id,
         message: `${existing ? '수정' : '추가'}: ${filePath}`,
         manifest,
         now,
       });
+      return { snapshotId, unchanged: false };
     })();
 
     return reply.code(201).send({
@@ -125,8 +171,8 @@ export async function registerFileRoutes(app: FastifyInstance, ctx: AppContext):
         mimeType,
         updatedAt: now,
       },
-      snapshotId,
-      unchanged: snapshotId === repo.head_snapshot_id,
+      snapshotId: result.snapshotId,
+      unchanged: result.unchanged,
     });
   });
 
@@ -194,8 +240,12 @@ export async function registerFileRoutes(app: FastifyInstance, ctx: AppContext):
       }
       if (moves.length === 0) throw notFound('해당 경로에 파일이 없습니다.');
 
+      // 이동으로 사라지는 원본 경로는 빼고, 남는 항목과 새 경로가 겹치는지 본다.
+      const remaining = new Map(manifest);
+      for (const move of moves) remaining.delete(move.from);
       for (const move of moves) {
-        if (manifest.has(move.to)) throw conflict(`이미 존재하는 경로입니다: ${move.to}`);
+        if (remaining.has(move.to)) throw conflict(`이미 존재하는 경로입니다: ${move.to}`);
+        assertNoPathConflict(remaining, move.to);
       }
 
       for (const move of moves) {
@@ -251,6 +301,8 @@ export async function registerFileRoutes(app: FastifyInstance, ctx: AppContext):
       mimeType: entry.mime_type,
       size: entry.size,
       inline: queryString(req, 'inline') === '1',
+      // 스냅샷을 지정한 URL 은 내용이 고정이지만, head 기준 URL 은 같은 경로에 새 파일이 올라올 수 있다.
+      cache: requested ? 'immutable' : 'revalidate',
     });
   });
 
@@ -267,14 +319,66 @@ export async function registerFileRoutes(app: FastifyInstance, ctx: AppContext):
     const part = await req.file();
     if (!part) throw badRequest('업로드할 파일이 없습니다.');
 
+    const quotaError = () =>
+      tooLarge(
+        `하루 업로드 한도(${Math.floor(config.maxStagingBytesPerDay / 1024 / 1024)}MB)를 넘었습니다.`,
+      );
+    /** 사용자가 최근 24시간 동안 스테이징에 올린 총량. */
+    const stagedBytes = (since: number) =>
+      db
+        .prepare<[string, number], { total: number }>(
+          `SELECT COALESCE(SUM(b.size), 0) AS total
+             FROM repo_blobs rb JOIN blobs b ON b.hash = rb.hash
+            WHERE rb.uploaded_by = ? AND rb.created_at > ?`,
+        )
+        .get(user.id, since)!.total;
+
+    // 이미 한도를 다 쓴 사용자는 스트림을 받기 전에 거절해 디스크에 아무것도 쓰지 않는다.
+    // (여기를 통과해도 아래 트랜잭션에서 다시 검사하므로, 초과분은 업로드 1건 크기로 제한된다)
+    if (stagedBytes(Date.now() - DAY_MS) >= config.maxStagingBytesPerDay) {
+      part.file.resume();
+      throw quotaError();
+    }
+
     const fileName = part.filename ?? '';
     const stored = await blobs.writeStream(part.file, config.maxUploadBytes);
     const mimeType = fileName ? mimeForPath(fileName) : DEFAULT_MIME;
+    const now = Date.now();
 
-    db.prepare(
-      `INSERT INTO blobs (hash, size, mime_type, created_at) VALUES (?, ?, ?, ?)
-       ON CONFLICT(hash) DO NOTHING`,
-    ).run(stored.hash, stored.size, mimeType, Date.now());
+    // 한도 초과로 거절할 때 이 요청이 처음 저장한 blob 파일이면 지워야 디스크가 차지 않는다.
+    // (GC 가 없으므로 여기서 지우지 않으면 영영 남는다)
+    const isNewBlob =
+      db
+        .prepare<[string], { ok: number }>(`SELECT 1 AS ok FROM blobs WHERE hash = ?`)
+        .get(stored.hash) === undefined;
+
+    try {
+      db.transaction(() => {
+        const already = db
+          .prepare<[string, string], { ok: number }>(
+            `SELECT 1 AS ok FROM repo_blobs WHERE repo_id = ? AND hash = ?`,
+          )
+          .get(repoId, stored.hash);
+        if (!already) {
+          // 어디에도 반영되지 않는 업로드로 디스크를 채우지 못하게 사용자별 하루 총량을 제한한다.
+          // 같은 내용을 같은 저장소에 다시 올리는 것은 새로 저장되지 않으므로 세지 않는다.
+          if (stagedBytes(now - DAY_MS) + stored.size > config.maxStagingBytesPerDay) {
+            throw quotaError();
+          }
+        }
+
+        db.prepare(
+          `INSERT INTO blobs (hash, size, mime_type, created_at) VALUES (?, ?, ?, ?)
+           ON CONFLICT(hash) DO NOTHING`,
+        ).run(stored.hash, stored.size, mimeType, now);
+        db.prepare(
+          `INSERT OR IGNORE INTO repo_blobs (repo_id, hash, uploaded_by, created_at) VALUES (?, ?, ?, ?)`,
+        ).run(repoId, stored.hash, user.id, now);
+      })();
+    } catch (err) {
+      if (isNewBlob) await blobs.remove(stored.hash);
+      throw err;
+    }
 
     return reply.code(201).send({
       blob: { hash: stored.hash, size: stored.size, mimeType, name: baseName(fileName) },
@@ -287,6 +391,20 @@ export interface SendBlobOptions {
   mimeType: string;
   size: number;
   inline: boolean;
+  /**
+   * immutable: URL 이 특정 내용을 고정한다(스냅샷 지정, 제안 파일) — 1년 캐시.
+   * revalidate: 같은 URL 의 내용이 바뀔 수 있다(head 기준 경로) — 매번 ETag 로 확인.
+   */
+  cache: 'immutable' | 'revalidate';
+}
+
+/** If-None-Match 에 이 blob 의 ETag 가 들어 있는지. 약한 태그(W/)와 `*` 도 인정한다. */
+function etagMatches(header: string | undefined, hash: string): boolean {
+  if (!header) return false;
+  return header.split(',').some((raw) => {
+    const tag = raw.trim().replace(/^W\//, '');
+    return tag === '*' || tag === `"${hash}"` || tag === hash;
+  });
 }
 
 /** blob 을 스트림으로 내려준다. 파일이 사라졌으면 404. */
@@ -298,15 +416,29 @@ export async function sendBlob(
 ): Promise<FastifyReply> {
   if (!(await ctx.blobs.has(hash))) throw notFound('파일 데이터를 찾을 수 없습니다.');
 
+  // 콘텐츠 주소라 해시가 곧 ETag 다. 내용이 바뀌면 해시도 바뀐다.
+  const etag = `"${hash}"`;
+  const cacheControl =
+    options.cache === 'immutable' ? 'private, max-age=31536000, immutable' : 'private, no-cache';
+  const req = reply.request;
+
+  if (etagMatches(req.headers['if-none-match'], hash)) {
+    return reply.code(304).header('ETag', etag).header('Cache-Control', cacheControl).send();
+  }
+
   const inline = options.inline && isInlineSafe(options.mimeType);
   const safeName = options.fileName.slice(0, MAX_NAME_LENGTH * 4) || 'download';
 
-  return reply
+  reply
     .header('Content-Type', options.mimeType || DEFAULT_MIME)
     .header('Content-Length', String(options.size))
     .header('Content-Disposition', contentDisposition(safeName, inline))
-    // 콘텐츠 주소라 내용이 바뀌면 해시도 바뀐다 — 마음껏 캐시해도 된다.
-    .header('Cache-Control', 'private, max-age=31536000, immutable')
-    .header('X-Content-Type-Options', 'nosniff')
-    .send(ctx.blobs.createReadStream(hash));
+    .header('Cache-Control', cacheControl)
+    .header('ETag', etag)
+    .header('X-Content-Type-Options', 'nosniff');
+
+  // HEAD 는 헤더만 필요하다 — 파일 스트림을 열지 않는다.
+  // (Fastify 의 자동 HEAD 라우트는 본문이 없으면 Content-Length 를 0 으로 덮어쓰므로 빈 스트림을 준다)
+  if (req.method === 'HEAD') return reply.send(Readable.from([]));
+  return reply.send(ctx.blobs.createReadStream(hash));
 }

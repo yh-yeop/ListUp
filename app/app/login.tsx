@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
-import { Link, router } from 'expo-router';
-import { useState } from 'react';
+import { Link, router, useFocusEffect } from 'expo-router';
+import { useCallback, useState } from 'react';
 import { KeyboardAvoidingView, Platform, View } from 'react-native';
 import {
   Body,
@@ -14,7 +14,7 @@ import {
   Title,
 } from '../src/components/ui';
 import { useAuth } from '../src/state/auth';
-import { API_BASE_URL, ApiError } from '../src/api/client';
+import { ApiError, getApiBaseUrl } from '../src/api/client';
 import { radius, spacing, useTheme } from '../src/theme';
 
 export default function LoginScreen() {
@@ -24,6 +24,14 @@ export default function LoginScreen() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [serverUrl, setServerUrl] = useState(getApiBaseUrl);
+
+  // 서버 주소 화면에서 돌아오면 바뀐 주소를 다시 읽는다.
+  useFocusEffect(
+    useCallback(() => {
+      setServerUrl(getApiBaseUrl());
+    }, []),
+  );
 
   const submit = async () => {
     if (busy) return;
@@ -31,7 +39,8 @@ export default function LoginScreen() {
     setBusy(true);
     try {
       await login(email.trim(), password);
-      router.replace('/repos');
+      // index 가 로그인 여부를 보고 저장소 목록으로 보낸다. 로그인 화면은 스택에 남지 않는다.
+      router.replace('/');
     } catch (err) {
       setError(err instanceof ApiError ? err.message : '로그인에 실패했습니다.');
     } finally {
@@ -101,9 +110,21 @@ export default function LoginScreen() {
             </View>
           </Card>
 
-          <Body muted style={{ textAlign: 'center', fontSize: 12 }}>
-            서버: {API_BASE_URL}
-          </Body>
+          <View
+            style={{
+              flexDirection: 'row',
+              flexWrap: 'wrap',
+              justifyContent: 'center',
+              gap: spacing.xs,
+            }}
+          >
+            <Body muted style={{ fontSize: 12 }}>
+              서버: {serverUrl}
+            </Body>
+            <Link href="/server" style={{ color: colors.accent, fontSize: 12, fontWeight: '600' }}>
+              바꾸기
+            </Link>
+          </View>
         </View>
       </Screen>
     </KeyboardAvoidingView>

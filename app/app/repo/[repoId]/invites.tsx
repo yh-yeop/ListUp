@@ -31,6 +31,7 @@ import { RepoNav } from '../../../src/components/RepoNav';
 import { ApiError, api } from '../../../src/api/client';
 import { confirmAction, notify } from '../../../src/lib/dialogs';
 import { useAsync } from '../../../src/lib/useAsync';
+import { useAuth } from '../../../src/state/auth';
 import { fontSize, monoFont, radius, spacing, useTheme } from '../../../src/theme';
 
 const EXPIRY_OPTIONS = [
@@ -50,6 +51,7 @@ const USE_OPTIONS = [
 export default function InvitesScreen() {
   const { repoId } = useLocalSearchParams<{ repoId: string }>();
   const { colors } = useTheme();
+  const { user } = useAuth();
   const [role, setRole] = useState<Role>('viewer');
   const [expiryDays, setExpiryDays] = useState<number | null>(7);
   const [maxUses, setMaxUses] = useState<number | null>(null);
@@ -65,6 +67,8 @@ export default function InvitesScreen() {
 
   const repo = state.data?.repo;
   const canInvite = hasRole(repo?.role, 'editor');
+  // 회수는 서버 규칙대로 발급자 본인 또는 소유자만.
+  const canRevoke = (invite: Invite) => invite.createdBy === user?.id || repo?.role === 'owner';
 
   async function create() {
     setCreating(true);
@@ -234,7 +238,7 @@ export default function InvitesScreen() {
                         compact
                         onPress={() => void copy(invite)}
                       />
-                      {invite.revokedAt === null ? (
+                      {invite.revokedAt === null && canRevoke(invite) ? (
                         <Button
                           label="회수"
                           variant="ghost"

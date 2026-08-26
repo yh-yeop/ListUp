@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import type { Invite, InvitePreview, Role } from '@listup/shared';
-import { parseInviteCode } from '@listup/shared';
+import { hasRole, parseInviteCode } from '@listup/shared';
 import type { AppContext } from '../context.ts';
 import { badRequest, conflict, forbidden, notFound } from '../lib/errors.ts';
 import { newId, newInviteCode } from '../lib/ids.ts';
@@ -21,14 +21,27 @@ interface InviteRow {
   revoked_at: number | null;
 }
 
-function isActive(row: InviteRow, now: number): boolean {
+/** 초대 행 + 발급자의 현재 역할. 발급자가 추방·강등됐으면 초대는 더 이상 쓸 수 없다. */
+type InviteView = InviteRow & { creator_role: Role | null };
+
+const INVITE_VIEW_SELECT = `
+  SELECT i.*, m.role AS creator_role
+    FROM invites i
+    LEFT JOIN repo_members m ON m.repo_id = i.repo_id AND m.user_id = i.created_by`;
+
+function creatorCanInvite(row: InviteView): boolean {
+  return hasRole(row.creator_role, 'editor');
+}
+
+function isActive(row: InviteView, now: number): boolean {
   if (row.revoked_at !== null) return false;
+  if (!creatorCanInvite(row)) return false;
   if (row.expires_at !== null && row.expires_at <= now) return false;
   if (row.max_uses !== null && row.use_count >= row.max_uses) return false;
   return true;
 }
 
-function toInvite(row: InviteRow, now: number): Invite {
+function toInvite(row: InviteView, now: number): Invite {
   return {
     id: row.id,
     repoId: row.repo_id,
@@ -54,7 +67,7 @@ export async function registerInviteRoutes(app: FastifyInstance, ctx: AppContext
   app.post('/repos/:repoId/invites', async (req, reply) => {
     const user = requireUser(req);
     const { repoId } = req.params as { repoId: string };
-    requireAccess(db, repoId, user.id, 'editor');
+    const { role: creatorRole } = requireAccess(db, repoId, user.id, 'editor');
     const input = body(req);
 
     const role = input.role === undefined ? 'viewer' : input.role;
@@ -108,7 +121,7 @@ export async function registerInviteRoutes(app: FastifyInstance, ctx: AppContext
     }
     if (!row) throw conflict('초대 코드를 만들지 못했습니다. 다시 시도해 주세요.');
 
-    return reply.code(201).send({ invite: toInvite(row, Date.now()) });
+    return reply.code(201).send({ invite: toInvite({ ...row, creator_role: creatorRole }, Date.now()) });
   });
 
   app.get('/repos/:repoId/invites', async (req) => {
@@ -117,8 +130,8 @@ export async function registerInviteRoutes(app: FastifyInstance, ctx: AppContext
     requireAccess(db, repoId, user.id, 'editor');
     const now = Date.now();
     const rows = db
-      .prepare<[string], InviteRow>(
-        `SELECT * FROM invites WHERE repo_id = ? ORDER BY created_at DESC`,
+      .prepare<[string], InviteView>(
+        `${INVITE_VIEW_SELECT} WHERE i.repo_id = ? ORDER BY i.created_at DESC`,
       )
       .all(repoId);
     return { invites: rows.map((row) => toInvite(row, now)) };
@@ -220,19 +233,21 @@ export async function registerInviteRoutes(app: FastifyInstance, ctx: AppContext
 }
 
 /** 코드 문자열을 검증하고 초대를 찾는다. 사용 가능 여부는 보지 않는다. */
-function lookupInvite(db: AppContext['db'], rawCode: string): InviteRow {
+function lookupInvite(db: AppContext['db'], rawCode: string): InviteView {
   const code = parseInviteCode(rawCode);
   if (!code) throw badRequest('초대 코드 형식이 올바르지 않습니다.');
 
-  const row = db.prepare<[string], InviteRow>(`SELECT * FROM invites WHERE code = ?`).get(code);
+  const row = db.prepare<[string], InviteView>(`${INVITE_VIEW_SELECT} WHERE i.code = ?`).get(code);
   if (!row) throw notFound('초대 코드를 찾을 수 없습니다.');
   return row;
 }
 
 /** 지금 이 코드로 새로 참여할 수 있는지. 이미 멤버인 경우에는 부르지 않는다. */
-function assertUsable(row: InviteRow): void {
+function assertUsable(row: InviteView): void {
   const now = Date.now();
   if (row.revoked_at !== null) throw conflict('회수된 초대 코드입니다.');
+  // 추방·강등 시 초대를 회수하지만, 그 전에 만들어진 데이터나 다른 경로를 대비해 사용 시점에도 확인한다.
+  if (!creatorCanInvite(row)) throw conflict('초대를 만든 사람이 더 이상 초대 권한이 없습니다.');
   if (row.expires_at !== null && row.expires_at <= now) throw conflict('만료된 초대 코드입니다.');
   if (row.max_uses !== null && row.use_count >= row.max_uses) {
     throw conflict('사용 횟수를 모두 쓴 초대 코드입니다.');

@@ -22,6 +22,14 @@ import {
 } from '../services/repos.ts';
 import { listSnapshots } from '../services/snapshots.ts';
 
+/** 이 사람이 만든 미회수 초대를 모두 회수한다. 추방·강등과 같은 트랜잭션 안에서 부른다. */
+function revokeInvitesBy(db: AppContext['db'], repoId: string, userId: string, now: number): void {
+  db.prepare(
+    `UPDATE invites SET revoked_at = ?
+      WHERE repo_id = ? AND created_by = ? AND revoked_at IS NULL`,
+  ).run(now, repoId, userId);
+}
+
 export async function registerRepoRoutes(app: FastifyInstance, ctx: AppContext): Promise<void> {
   const { db } = ctx;
 
@@ -131,11 +139,15 @@ export async function registerRepoRoutes(app: FastifyInstance, ctx: AppContext):
     if (userId === repo.owner_id) throw badRequest('소유자의 역할은 바꿀 수 없습니다.');
     if (!getRole(db, repoId, userId)) throw notFound('멤버를 찾을 수 없습니다.');
 
-    db.prepare(`UPDATE repo_members SET role = ? WHERE repo_id = ? AND user_id = ?`).run(
-      role,
-      repoId,
-      userId,
-    );
+    db.transaction(() => {
+      db.prepare(`UPDATE repo_members SET role = ? WHERE repo_id = ? AND user_id = ?`).run(
+        role,
+        repoId,
+        userId,
+      );
+      // 초대는 편집자 이상만 만들 수 있으므로, 열람자로 강등되면 그 사람의 초대도 거둔다.
+      if (role === 'viewer') revokeInvitesBy(db, repoId, userId, Date.now());
+    })();
     return { members: listMembers(db, repoId, 'owner') };
   });
 
@@ -153,7 +165,11 @@ export async function registerRepoRoutes(app: FastifyInstance, ctx: AppContext):
     }
     if (!getRole(db, repoId, userId)) throw notFound('멤버를 찾을 수 없습니다.');
 
-    db.prepare(`DELETE FROM repo_members WHERE repo_id = ? AND user_id = ?`).run(repoId, userId);
+    db.transaction(() => {
+      db.prepare(`DELETE FROM repo_members WHERE repo_id = ? AND user_id = ?`).run(repoId, userId);
+      // 나간 사람이 만든 초대로 다시 들어오거나 남을 들일 수 없게 한다.
+      revokeInvitesBy(db, repoId, userId, Date.now());
+    })();
     return { ok: true };
   });
 
@@ -196,12 +212,16 @@ export async function registerRepoRoutes(app: FastifyInstance, ctx: AppContext):
     const { repoId } = req.params as { repoId: string };
     requireAccess(db, repoId, user.id, 'viewer');
     const limit = queryInt(req, 'limit', 30, 100);
+    // 커서는 (created_at, id) 쌍이다. 같은 밀리초에 만들어진 스냅샷을 건너뛰지 않기 위해서다.
     const beforeRaw = queryString(req, 'before');
-    const before = beforeRaw ? Number.parseInt(beforeRaw, 10) : undefined;
-    const snapshots = listSnapshots(db, repoId, limit, Number.isFinite(before!) ? before : undefined);
+    const beforeId = queryString(req, 'beforeId');
+    const before = beforeRaw ? Number.parseInt(beforeRaw, 10) : Number.NaN;
+    const cursor = Number.isFinite(before) && beforeId ? { before, beforeId } : undefined;
+    const snapshots = listSnapshots(db, repoId, limit, cursor);
+    const last = snapshots[snapshots.length - 1];
     return {
       snapshots,
-      nextBefore: snapshots.length === limit ? snapshots[snapshots.length - 1].createdAt : null,
+      next: snapshots.length === limit && last ? { before: last.createdAt, beforeId: last.id } : null,
     };
   });
 }

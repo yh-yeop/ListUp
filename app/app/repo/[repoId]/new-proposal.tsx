@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
-import { Stack, router, useLocalSearchParams } from 'expo-router';
-import { useState } from 'react';
+import { Stack, router, useLocalSearchParams, useNavigation } from 'expo-router';
+import { useEffect, useRef, useState } from 'react';
 import { Pressable, View } from 'react-native';
 import { formatBytes, normalizePath, type TreeListing } from '@listup/shared';
 import {
@@ -20,8 +20,8 @@ import {
   Subtitle,
   Title,
 } from '../../../src/components/ui';
-import { ApiError, api } from '../../../src/api/client';
-import { notify } from '../../../src/lib/dialogs';
+import { ApiError, api, getMaxUploadBytes } from '../../../src/api/client';
+import { confirmAction, notify } from '../../../src/lib/dialogs';
 import { pickFiles } from '../../../src/lib/files';
 import { useAsync } from '../../../src/lib/useAsync';
 import { fontSize, monoFont, spacing, useTheme } from '../../../src/theme';
@@ -39,6 +39,7 @@ interface StagedChange {
 export default function NewProposalScreen() {
   const { repoId, path: initialPath } = useLocalSearchParams<{ repoId: string; path?: string }>();
   const { colors } = useTheme();
+  const navigation = useNavigation();
 
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
@@ -47,6 +48,10 @@ export default function NewProposalScreen() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [browsePath, setBrowsePath] = useState(initialPath ?? '');
+  // 같은 파일을 두 번 담아도 key 가 겹치지 않도록 화면 안에서만 쓰는 일련번호.
+  const keySeq = useRef(0);
+  // 제출 성공 뒤 router.replace 는 '작성 중 나가기' 경고를 띄우지 않도록 표시한다.
+  const submittedRef = useRef(false);
 
   // 삭제 제안을 고르기 위해 현재 저장소 내용을 보여준다.
   const treeState = useAsync<TreeListing>(
@@ -54,7 +59,23 @@ export default function NewProposalScreen() {
     [repoId, browsePath],
   );
 
-  const currentFolder = initialPath ?? '';
+  // 작성 중인 내용이 있으면 뒤로 가기 전에 한 번 확인한다.
+  const hasDraft = staged.length > 0 || title.trim() !== '' || description.trim() !== '';
+  useEffect(() => {
+    if (!hasDraft) return;
+    return navigation.addListener('beforeRemove', (event) => {
+      if (submittedRef.current) return;
+      event.preventDefault();
+      void confirmAction({
+        title: '작성 중인 제안을 버릴까요?',
+        message: '담은 파일과 입력한 제목·설명이 사라집니다.',
+        confirmLabel: '버리기',
+        destructive: true,
+      }).then((ok) => {
+        if (ok) navigation.dispatch(event.data.action);
+      });
+    });
+  }, [navigation, hasDraft]);
 
   async function addFiles() {
     if (uploading) return;
@@ -69,14 +90,24 @@ export default function NewProposalScreen() {
 
     setUploading(true);
     setError(null);
+    // 새로 담는 파일은 지금 탐색 중인 폴더에 넣는다.
+    const targetFolder = browsePath;
+    // 한도는 서버 설정을 따르므로 서버에 물어본 값으로 거른다.
+    const maxBytes = await getMaxUploadBytes();
     const added: StagedChange[] = [];
+    const tooLarge: string[] = [];
     for (const source of sources) {
+      if (source.size > maxBytes) {
+        tooLarge.push(source.name);
+        continue;
+      }
       try {
         // 제안용 blob 은 미리 올려 둔다. 저장소 내용은 아직 그대로다.
         const { blob } = await api.uploadBlob(repoId, source);
+        keySeq.current += 1;
         added.push({
-          key: `${blob.hash}:${source.name}:${added.length}`,
-          path: currentFolder ? `${currentFolder}/${source.name}` : source.name,
+          key: `upload:${keySeq.current}`,
+          path: targetFolder ? `${targetFolder}/${source.name}` : source.name,
           blobHash: blob.hash,
           size: blob.size,
           originalName: source.name,
@@ -89,6 +120,12 @@ export default function NewProposalScreen() {
     }
     setStaged((prev) => [...prev, ...added]);
     setUploading(false);
+    if (tooLarge.length > 0) {
+      notify(
+        '너무 큰 파일은 건너뛰었습니다.',
+        `파일 하나는 ${formatBytes(maxBytes)}까지 담을 수 있습니다: ${tooLarge.join(', ')}`,
+      );
+    }
   }
 
   function stageDeletion(filePath: string) {
@@ -152,6 +189,7 @@ export default function NewProposalScreen() {
           blobHash: change.blobHash,
         })),
       });
+      submittedRef.current = true;
       router.replace(`/proposal/${proposal.id}`);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : '제안을 만들지 못했습니다.');
@@ -204,6 +242,10 @@ export default function NewProposalScreen() {
             loading={uploading}
           />
         </Row>
+        <Caption>
+          현재 폴더: {browsePath === '' ? '최상위 폴더' : browsePath} — 새로 담는 파일은 이
+          폴더에 저장됩니다. 아래 목록에서 다른 폴더를 열면 바뀝니다.
+        </Caption>
 
         {staged.length === 0 ? (
           <Caption>

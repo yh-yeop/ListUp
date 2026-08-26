@@ -258,3 +258,114 @@ describe('멤버 관리', () => {
     assert.equal(res.json().repo.ownerId, successor.userId);
   });
 });
+
+describe('초대 발급자의 권한이 사라지면', () => {
+  let h: Harness;
+  let owner: Session;
+  let repoId: string;
+
+  before(async () => {
+    h = await createHarness();
+    owner = await signup(h.app, '주인');
+    repoId = await createRepo(h.app, owner, '프로젝트');
+  });
+  after(async () => {
+    await h.close();
+  });
+
+  /** 편집자로 들어온 사람이 초대를 하나 만든 상태를 만든다. */
+  async function editorWithInvite(name: string) {
+    const editor = await signup(h.app, name);
+    const seed = await createInvite(h.app, owner, repoId, { role: 'editor' });
+    assert.equal((await join(h.app, editor, seed.code)).statusCode, 200);
+    const invite = await createInvite(h.app, editor, repoId, { role: 'editor' });
+    return { editor, seed, invite };
+  }
+
+  async function listInvites() {
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/repos/${repoId}/invites`,
+      headers: auth(owner),
+    });
+    assert.equal(res.statusCode, 200);
+    return res.json().invites as { id: string; active: boolean; revokedAt: number | null }[];
+  }
+
+  it('추방된 사람이 만든 초대로는 참여할 수 없다', async () => {
+    const { editor, seed, invite } = await editorWithInvite('추방될 편집자');
+
+    const kick = await h.app.inject({
+      method: 'DELETE',
+      url: `/api/repos/${repoId}/members/${editor.userId}`,
+      headers: auth(owner),
+    });
+    assert.equal(kick.statusCode, 200);
+
+    // 추방된 본인이 자기 초대로 editor 로 다시 들어오려는 경우.
+    const rejoin = await join(h.app, editor, invite.code);
+    assert.equal(rejoin.statusCode, 409);
+
+    // 추방과 함께 초대가 회수된다. 소유자가 만든 초대는 그대로다.
+    const invites = await listInvites();
+    const mine = invites.find((i) => i.id === invite.id)!;
+    assert.equal(mine.active, false);
+    assert.equal(typeof mine.revokedAt, 'number');
+    assert.equal(invites.find((i) => i.id === seed.id)!.revokedAt, null);
+
+    // 회수 표시가 없는 옛 데이터라도 사용 시점에 발급자 권한을 다시 본다.
+    h.ctx.db.prepare(`UPDATE invites SET revoked_at = NULL WHERE id = ?`).run(invite.id);
+    const stranger = await signup(h.app, '초대받은 사람');
+    const preview = await h.app.inject({
+      method: 'GET',
+      url: `/api/invites/${invite.code}`,
+      headers: auth(stranger),
+    });
+    assert.equal(preview.statusCode, 409);
+    const denied = await join(h.app, stranger, invite.code);
+    assert.equal(denied.statusCode, 409);
+    assert.match(JSON.parse(denied.body).error.message, /초대 권한/);
+    assert.equal((await listInvites()).find((i) => i.id === invite.id)!.active, false);
+  });
+
+  it('열람자로 강등되면 그 사람이 만든 초대가 회수된다', async () => {
+    const { editor, seed, invite } = await editorWithInvite('강등될 편집자');
+
+    const demote = await h.app.inject({
+      method: 'PATCH',
+      url: `/api/repos/${repoId}/members/${editor.userId}`,
+      headers: auth(owner),
+      payload: { role: 'viewer' },
+    });
+    assert.equal(demote.statusCode, 200);
+
+    const invites = await listInvites();
+    const mine = invites.find((i) => i.id === invite.id)!;
+    assert.equal(mine.active, false);
+    assert.equal(typeof mine.revokedAt, 'number');
+    assert.equal(invites.find((i) => i.id === seed.id)!.active, true);
+
+    const stranger = await signup(h.app, '강등 후 손님');
+    const denied = await join(h.app, stranger, invite.code);
+    assert.equal(denied.statusCode, 409);
+  });
+
+  it('다시 편집자로 올려도 회수된 초대는 되살아나지 않는다', async () => {
+    const { editor, invite } = await editorWithInvite('복귀할 편집자');
+    for (const role of ['viewer', 'editor']) {
+      const res = await h.app.inject({
+        method: 'PATCH',
+        url: `/api/repos/${repoId}/members/${editor.userId}`,
+        headers: auth(owner),
+        payload: { role },
+      });
+      assert.equal(res.statusCode, 200);
+    }
+    assert.equal((await listInvites()).find((i) => i.id === invite.id)!.active, false);
+
+    // 대신 새 초대는 만들 수 있다.
+    const fresh = await createInvite(h.app, editor, repoId);
+    const guest = await signup(h.app, '복귀 후 손님');
+    assert.equal((await join(h.app, guest, fresh.code)).statusCode, 200);
+  });
+});

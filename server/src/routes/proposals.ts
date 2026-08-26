@@ -16,8 +16,11 @@ import { getRepoRow, requireAccess } from '../services/repos.ts';
 import { readManifest, writeSnapshot } from '../services/snapshots.ts';
 import {
   applyChanges,
+  blobBelongsToRepo,
   findConflicts,
+  findPathConflicts,
   getProposalRow,
+  manifestBytes,
   readChanges,
   readComments,
   toChange,
@@ -25,7 +28,7 @@ import {
   type ChangeRow,
   type ProposalRow,
 } from '../services/proposals.ts';
-import { sendBlob } from './files.ts';
+import { assertRepoBytes, sendBlob } from './files.ts';
 
 const MAX_CHANGES = 200;
 const MAX_COMMENT_LENGTH = 2000;
@@ -38,7 +41,7 @@ interface ChangeInput {
 }
 
 export async function registerProposalRoutes(app: FastifyInstance, ctx: AppContext): Promise<void> {
-  const { db } = ctx;
+  const { db, config } = ctx;
 
   /**
    * 변경 제안 만들기. 열람 권한만 있어도 올릴 수 있다 — 이게 초대받은 사람이
@@ -100,6 +103,10 @@ export async function registerProposalRoutes(app: FastifyInstance, ctx: AppConte
         )
         .get(blobHash);
       if (!blob) throw badRequest(`먼저 파일을 업로드해 주세요: ${path}`);
+      // 다른 저장소에서 알아낸 해시로 남의 파일을 끌어오는 것을 막는다.
+      if (!blobBelongsToRepo(db, repoId, blobHash)) {
+        throw badRequest(`이 저장소에 올린 파일만 제안에 담을 수 있습니다: ${path}`);
+      }
 
       if (baseEntry && baseEntry.blob_hash === blobHash) {
         throw badRequest(`내용이 그대로입니다: ${path}`);
@@ -117,10 +124,32 @@ export async function registerProposalRoutes(app: FastifyInstance, ctx: AppConte
       });
     }
 
-    const addCount = [...prepared.values()].filter((c) => c.op === 'add').length;
+    // 제안 안에서 파일과 폴더 이름이 겹치면(예: "a" 와 "a/b") 병합 결과가 성립하지 않는다.
+    for (const path of prepared.keys()) {
+      for (let idx = path.indexOf('/'); idx !== -1; idx = path.indexOf('/', idx + 1)) {
+        const ancestor = path.slice(0, idx);
+        if (prepared.has(ancestor)) {
+          throw badRequest(`제안 안에서 경로가 겹칩니다: ${ancestor} 와 ${path}`);
+        }
+      }
+    }
+
+    const changes = [...prepared.values()];
+    const addCount = changes.filter((c) => c.op === 'add').length;
     if (base.size + addCount > MAX_FILES_PER_REPO) {
       throw conflict(`저장소당 파일은 최대 ${MAX_FILES_PER_REPO}개입니다.`);
     }
+    const pathConflicts = findPathConflicts(base, changes);
+    if (pathConflicts.length > 0) {
+      throw conflict(
+        `기존 파일·폴더와 이름이 겹치는 경로가 있습니다: ${pathConflicts.join(', ')}`,
+        { conflicts: pathConflicts },
+      );
+    }
+    // base 총량에 추가·수정분을 더하고 교체·삭제되는 원본 크기를 뺀 결과로 한도를 본다.
+    let bytes = manifestBytes(base);
+    for (const change of changes) bytes += change.size - (change.base_size ?? 0);
+    assertRepoBytes(config, bytes);
 
     const now = Date.now();
     const proposalId = newId('prop');
@@ -204,6 +233,8 @@ export async function registerProposalRoutes(app: FastifyInstance, ctx: AppConte
       mimeType: change.mime_type ?? mimeForPath(change.path),
       size: change.size,
       inline: queryString(req, 'inline') === '1',
+      // 제안의 변경 내용은 만들어진 뒤 바뀌지 않는다.
+      cache: 'immutable',
     });
   });
 
@@ -248,9 +279,21 @@ export async function registerProposalRoutes(app: FastifyInstance, ctx: AppConte
         );
       }
 
-      const now = Date.now();
       const head = readManifest(db, repo.head_snapshot_id);
+      // 제안 이후 head 에 같은 이름의 파일/폴더가 생겼을 수 있다 (예: 제안은 "a/b" 추가, head 에 파일 "a").
+      const pathConflicts = findPathConflicts(head, changes);
+      if (pathConflicts.length > 0) {
+        throw conflict('제안 이후 이름이 겹치는 파일이나 폴더가 생겨 병합할 수 없습니다.', {
+          conflicts: pathConflicts,
+        });
+      }
+
+      const now = Date.now();
       const nextManifest = applyChanges(head, changes, now);
+      if (nextManifest.size > MAX_FILES_PER_REPO) {
+        throw conflict(`저장소당 파일은 최대 ${MAX_FILES_PER_REPO}개입니다.`);
+      }
+      assertRepoBytes(config, manifestBytes(nextManifest));
 
       const snapshotId = writeSnapshot(db, {
         repoId: row.repo_id,
@@ -317,6 +360,8 @@ export async function registerProposalRoutes(app: FastifyInstance, ctx: AppConte
     if (!row) throw notFound('제안을 찾을 수 없습니다.');
     requireAccess(db, row.repo_id, user.id, 'viewer');
     if (row.author_id !== user.id) throw forbidden('작성자만 수정할 수 있습니다.');
+    // 병합·닫힌 제안은 기록이므로 제목·설명도 고정한다.
+    if (row.status !== 'open') throw conflict('열린 제안만 수정할 수 있습니다.');
 
     const input = body(req);
     const title =
@@ -347,8 +392,14 @@ export function detail(ctx: AppContext, proposalId: string): ProposalDetail {
   const row = getProposalRow(db, proposalId)!;
   const repo = getRepoRow(db, row.repo_id)!;
   const changes = readChanges(db, proposalId);
+  // 병합을 막는 경로: base 이후 head 에서 바뀐 파일 + head 의 파일/폴더와 이름이 겹치게 된 추가 항목.
   const conflicts =
-    row.status === 'open' ? findConflicts(db, changes, row.base_snapshot_id, repo.head_snapshot_id) : [];
+    row.status === 'open'
+      ? [
+          ...findConflicts(db, changes, row.base_snapshot_id, repo.head_snapshot_id),
+          ...findPathConflicts(readManifest(db, repo.head_snapshot_id), changes),
+        ]
+      : [];
 
   return {
     ...toProposal(db, row),
