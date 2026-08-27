@@ -1,5 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
-import { router, useFocusEffect } from 'expo-router';
+import Constants from 'expo-constants';
+import { Link, router, useFocusEffect } from 'expo-router';
 import { useCallback, useState } from 'react';
 import { Pressable, View } from 'react-native';
 import {
@@ -18,7 +19,11 @@ import {
 import { ApiError, api, describeApiBaseUrl } from '../src/api/client';
 import { confirmAction, notify } from '../src/lib/dialogs';
 import { useAuth } from '../src/state/auth';
-import { spacing, useTheme } from '../src/theme';
+import { fontSize, spacing, useTheme } from '../src/theme';
+
+/** AGPL-3.0 §13 을 지키려면 이 주소가 실제로 소스를 받을 수 있는 곳이어야 한다. */
+const SOURCE_URL = 'https://github.com/yh-yeop/ListUp';
+const APP_VERSION = (Constants.expoConfig?.version as string | undefined) ?? '';
 
 export default function SettingsScreen() {
   const { user, updateProfile, logout, changePassword } = useAuth();
@@ -148,6 +153,22 @@ export default function SettingsScreen() {
             </Row>
           </Row>
         </Pressable>
+
+        {/*
+          AGPL-3.0 §13 — 네트워크로 이 프로그램을 쓰는 사람에게 소스를 받을 길을 알려야 한다.
+          그래서 이 줄은 장식이 아니라 라이선스 조건을 지키는 부분이다.
+        */}
+        <Row style={{ justifyContent: 'space-between' }}>
+          <Caption>ListUp {APP_VERSION} · AGPL-3.0</Caption>
+          <Link
+            href={SOURCE_URL}
+            style={{ color: colors.accent, fontSize: fontSize.sm }}
+            accessibilityLabel="소스 코드 보기"
+          >
+            소스 코드
+          </Link>
+        </Row>
+
         <Button label="로그아웃" variant="danger" icon="log-out-outline" onPress={signOut} full />
       </Card>
     </Screen>

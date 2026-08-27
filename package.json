@@ -2,6 +2,7 @@
   "name": "listup",
   "version": "1.0.0",
   "private": true,
+  "license": "AGPL-3.0-only",
   "description": "초대코드로 참여하는 파일 공유 협업 플랫폼 (모바일/PC 크로스플랫폼)",
   "workspaces": [
     "shared",

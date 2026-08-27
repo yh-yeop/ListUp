@@ -60,6 +60,7 @@ copy('server/tsconfig.json', 'server/tsconfig.json');
 copy('shared', 'shared', (src) => !src.includes('node_modules'));
 copy('app/dist', 'app/dist');
 copy('README.md', 'README.md');
+copy('LICENSE', 'LICENSE');
 copy('docs', 'docs');
 
 // 실행에 필요한 스크립트만. release.mjs 는 만드는 쪽 도구라 뺀다.
@@ -82,6 +83,7 @@ const releasePkg = {
     backup: 'npm run backup --workspace @listup/server --',
     gc: 'npm run gc --workspace @listup/server --',
   },
+  license: rootPkg.license,
   dependencies: { 'qrcode-terminal': rootPkg.dependencies['qrcode-terminal'] },
   engines: rootPkg.engines,
   // 네이티브 모듈이 프리빌드를 받아야 하므로 설치 스크립트를 미리 허용해 둔다.
@@ -109,6 +111,9 @@ fs.writeFileSync(
     '     macOS    brew install cloudflared',
     '',
     '4. 브라우저가 열리면 회원가입부터 하세요. 그 계정이 이 서버의 첫 사용자입니다.',
+    '',
+    '이 프로그램은 AGPL-3.0 입니다. 자세한 것은 LICENSE 파일을 보세요.',
+    '고쳐서 남에게 서비스하거나 배포하려면 소스를 함께 공개해야 합니다.',
     '',
     '자세한 내용은 README.md 를 보세요.',
     '내 파일은 server/data 에 쌓입니다 — 이 폴더를 지우면 전부 사라집니다.',
