@@ -169,6 +169,9 @@ npm run build:web --workspace @listup/app    # app/dist/ 에 생성
 
 ### 5. 임시 공개 — Cloudflare 빠른 터널
 
+**계정 없이** 되는 대신 시험용입니다 — 주소가 매번 바뀌고 가동 보장이 없습니다.
+계속 쓸 거라면 아래 6번으로 옮기세요.
+
 서버 하나만 공개하면 웹까지 같이 나갑니다. cloudflared 설치
 (`winget install Cloudflare.cloudflared`) 후:
 
@@ -182,6 +185,29 @@ powershell -ExecutionPolicy Bypass -File deploy-tunnel.ps1
 - **Windows PowerShell 에서 빌드하세요.** Git Bash 는 `EXPO_PUBLIC_LISTUP_API_URL=/` 의
   `/` 를 Windows 경로로 바꿔 버려(MSYS path 변환) 번들이 깨집니다.
 - 처음 보는 사람에게 공개하기 전에 `LISTUP_AUTH_SECRET` 을 지정했는지 확인하세요.
+
+### 6. 계속 쓰려면 — 고정 주소
+
+빠른 터널은 켤 때마다 주소가 바뀌어 폰과 다른 PC 에 매번 다시 입력해야 합니다.
+계속 쓸 거라면 **개인 계정으로 고정 주소**를 마련하세요. 두 갈래입니다.
+
+| 상황 | 방법 | 필요한 것 |
+| --- | --- | --- |
+| 도메인이 있음 | Cloudflare 이름 있는 터널 | Cloudflare 계정 + 그 계정에 등록한 도메인 |
+| 도메인이 없음 | Tailscale Funnel | Tailscale 계정만 (`*.ts.net` 고정 주소를 무료로 줍니다) |
+
+Cloudflare 이름 있는 터널은 **자기 도메인이 있어야** 합니다 — 계정만으로는 안 됩니다.
+
+```bash
+cloudflared tunnel login                       # 브라우저로 계정 인증
+cloudflared tunnel create listup
+cloudflared tunnel route dns listup listup.내도메인.com
+cloudflared tunnel run --url http://localhost:4000 listup
+```
+
+고정 주소가 생기면 `LISTUP_CORS_ORIGIN` 을 그 주소로 좁히고, 앱의 서버 주소를 한 번만
+넣으면 됩니다. Windows 서비스로 등록(`cloudflared service install`)하면 부팅 시 자동으로
+뜹니다. 이 과정을 스크립트로 자동화하는 것은 [TODO.md](TODO.md) 의 *고정 주소* 항목에 있습니다.
 
 ---
 
