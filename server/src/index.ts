@@ -1,3 +1,14 @@
+/*
+ * ListUp — 초대 코드로 참여하는 파일 공유 협업 플랫폼
+ * Copyright (C) 2026 yh-yeop
+ *
+ * 이 프로그램은 자유 소프트웨어입니다. Free Software Foundation 이 펴낸 GNU Affero
+ * General Public License 버전 3 의 조건에 따라 재배포하거나 고칠 수 있습니다.
+ *
+ * 이 프로그램은 쓸모가 있기를 바라며 배포하지만 아무런 보증도 하지 않습니다.
+ * 자세한 내용은 GNU Affero General Public License 를 보세요.
+ * 사본은 함께 있는 LICENSE 파일 또는 <https://www.gnu.org/licenses/> 에 있습니다.
+ */
 import type { FastifyRequest } from 'fastify';
 import { buildApp } from './app.ts';
 import { loadConfig } from './config.ts';
