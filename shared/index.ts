@@ -362,6 +362,7 @@ export type ApiErrorCode =
   | 'not_found'
   | 'conflict'
   | 'payload_too_large'
+  | 'too_many_requests'
   | 'internal';
 
 export interface ApiErrorBody {

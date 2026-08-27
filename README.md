@@ -80,6 +80,11 @@ npm run server        # http://localhost:4000
 | `LISTUP_WEB_DIR` | `app/dist` | 함께 서빙할 웹 빌드 위치 |
 | `LISTUP_TRUST_PROXY` | (없음) | `1` 이면 프록시(터널·리버스 프록시)가 준 클라이언트 IP 를 신뢰 |
 | `LISTUP_LOG_LEVEL` | `info` | 로그 레벨 (`debug`, `warn`, `error` …) |
+| `LISTUP_LOGIN_FAILURE_LIMIT` | `10` | 이만큼 로그인에 실패하면 잠시 막습니다 |
+| `LISTUP_LOGIN_FAILURE_WINDOW_MIN` | `15` | 이 시간 동안 조용하면 실패 횟수를 잊습니다(분) |
+| `LISTUP_LOGIN_BLOCK_MIN` | `15` | 막아 두는 시간(분) |
+| `LISTUP_GC_MIN_AGE_HOURS` | `24` | 참조되지 않는 파일을 지우기 전 유예 시간 |
+| `LISTUP_GC_INTERVAL_HOURS` | `6` | 정리 작업을 도는 주기 (`0` 이면 끔) |
 
 값이 잘못되면(정수가 아니거나 범위를 벗어나면) 기본값으로 넘어가지 않고 서버가 뜨지 않습니다.
 이름을 잘못 쓴 `LISTUP_*` 변수는 경고로 알려줍니다.
@@ -92,6 +97,14 @@ npm run server        # http://localhost:4000
 
 ```bash
 npm run backup -- ./backups     # ./backups/listup-<날짜시각>.db 생성
+```
+
+어디에서도 참조하지 않는 파일(제안에 담기 전에 버려진 업로드 등)은 서버가 주기적으로
+정리합니다. 직접 돌리려면:
+
+```bash
+npm run gc            # 기본 유예(24시간)가 지난 것만
+npm run gc -- 0       # 유예 없이 지금 참조 없는 것 전부
 ```
 
 ### 3. 앱 켜기
@@ -148,7 +161,7 @@ powershell -ExecutionPolicy Bypass -File deploy-tunnel.ps1
 - URL 은 실행할 때마다 바뀌고, 프로세스가 꺼지면 사라집니다.
 - **Windows PowerShell 에서 빌드하세요.** Git Bash 는 `EXPO_PUBLIC_LISTUP_API_URL=/` 의
   `/` 를 Windows 경로로 바꿔 버려(MSYS path 변환) 번들이 깨집니다.
-- 로그인 요청 제한이 아직 없으므로(TODO `P0`) URL 은 아는 사람에게만 공유하세요.
+- 처음 보는 사람에게 공개하기 전에 `LISTUP_AUTH_SECRET` 을 지정했는지 확인하세요.
 
 ---
 
@@ -186,5 +199,6 @@ npm run app -- --tunnel     # @expo/ngrok 필요
   의미가 없기 때문입니다.
 - **빈 폴더는 없습니다.** 폴더는 파일 경로에서 만들어지므로, 안에 파일이 없으면 사라집니다(git 과 같음).
 - **삭제해도 이전 시점은 남습니다.** 스냅샷마다 그 시점의 전체 파일 목록이 보관됩니다.
-- 참조되지 않는 업로드 파일(제안에 담기 전에 버려진 것 등)을 지우는 정리 작업은 아직 없습니다.
-  실제 운영 시에는 주기적인 GC 가 필요합니다. → [TODO.md](TODO.md) `P0`
+- **로그인은 실패 횟수를 셉니다.** 같은 계정이나 같은 IP 에서 여러 번 틀리면 잠시 막습니다.
+- **비밀번호를 바꾸면 다른 기기의 로그인이 모두 끊깁니다.** 바꾼 기기만 그대로 이어 씁니다.
+- 참조되지 않는 업로드 파일은 서버가 주기적으로 정리합니다(기본 6시간마다, 24시간 지난 것).

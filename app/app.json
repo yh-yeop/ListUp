@@ -2,7 +2,7 @@
   "expo": {
     "name": "ListUp",
     "slug": "listup",
-    "version": "0.1.0",
+    "version": "1.0.0",
     "orientation": "default",
     "scheme": "listup",
     "userInterfaceStyle": "automatic",

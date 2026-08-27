@@ -178,4 +178,11 @@ export const MIGRATIONS: {
       }
     },
   },
+  {
+    // 비밀번호를 바꿔도 이미 나간 토큰이 계속 유효했다. 토큰이 무상태(HMAC)라 서버가
+    // 개별 토큰을 폐기할 수 없기 때문이다. 사용자마다 세대(epoch)를 두고 토큰에 실어,
+    // 비밀번호를 바꾸면 세대를 올려 이전 세대 토큰을 한 번에 끊는다.
+    version: 4,
+    up: `ALTER TABLE users ADD COLUMN token_epoch INTEGER NOT NULL DEFAULT 0;`,
+  },
 ];

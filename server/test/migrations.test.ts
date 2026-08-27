@@ -45,9 +45,11 @@ describe('마이그레이션 v3 (경로 재정규화)', () => {
         .run('p1', nfdPath, 'h1');
       old.close();
 
-      const db = openDb(dbPath); // 남은 마이그레이션(v3)이 여기서 적용된다.
+      const db = openDb(dbPath); // 남은 마이그레이션이 여기서 적용된다.
       try {
-        assert.equal(db.pragma('user_version', { simple: true }), 3);
+        // 마이그레이션을 더 붙여도 깨지지 않게 최신 버전과 비교한다.
+        const latest = Math.max(...MIGRATIONS.map((m) => m.version));
+        assert.equal(db.pragma('user_version', { simple: true }), latest);
         const entryPaths = db
           .prepare(`SELECT path FROM snapshot_entries WHERE snapshot_id = 's1' ORDER BY blob_hash`)
           .all() as { path: string }[];

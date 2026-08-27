@@ -7,6 +7,7 @@ const STATUS: Record<ApiErrorCode, number> = {
   not_found: 404,
   conflict: 409,
   payload_too_large: 413,
+  too_many_requests: 429,
   internal: 500,
 };
 
@@ -34,3 +35,5 @@ export const notFound = (message = '대상을 찾을 수 없습니다.') => new 
 export const conflict = (message: string, details?: unknown) =>
   new ApiError('conflict', message, details);
 export const tooLarge = (message: string) => new ApiError('payload_too_large', message);
+export const tooManyRequests = (message: string, details?: unknown) =>
+  new ApiError('too_many_requests', message, details);

@@ -25,9 +25,21 @@ export interface Config {
   trustProxy: boolean;
   /** 로그 레벨 (pino). */
   logLevel: string;
+  /** 이 횟수만큼 로그인에 실패하면 잠시 막는다 (IP 기준·이메일 기준을 따로 센다). */
+  loginFailureLimit: number;
+  /** 마지막 실패로부터 이 시간이 지나면 실패 횟수를 잊는다(ms). */
+  loginFailureWindowMs: number;
+  /** 한도를 넘겼을 때 막아 두는 시간(ms). */
+  loginBlockMs: number;
+  /** 참조되지 않는 blob 을 지우기 전에 기다리는 시간(ms). 0 이면 GC 를 돌리지 않는다. */
+  gcMinAgeMs: number;
+  /** GC 를 도는 주기(ms). 0 이면 주기 실행을 하지 않는다(수동 `npm run gc` 는 가능). */
+  gcIntervalMs: number;
 }
 
-const DAY = 24 * 60 * 60 * 1000;
+const MINUTE = 60 * 1000;
+const HOUR = 60 * MINUTE;
+const DAY = 24 * HOUR;
 
 /** 서버가 읽는 환경변수 전부. 여기 없는 `LISTUP_*` 는 오타로 보고 경고한다. */
 const KNOWN_ENV = new Set([
@@ -45,6 +57,11 @@ const KNOWN_ENV = new Set([
   'LISTUP_WEB_DIR',
   'LISTUP_TRUST_PROXY',
   'LISTUP_LOG_LEVEL',
+  'LISTUP_LOGIN_FAILURE_LIMIT',
+  'LISTUP_LOGIN_FAILURE_WINDOW_MIN',
+  'LISTUP_LOGIN_BLOCK_MIN',
+  'LISTUP_GC_MIN_AGE_HOURS',
+  'LISTUP_GC_INTERVAL_HOURS',
 ]);
 
 const LOG_LEVELS = ['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'];
@@ -120,6 +137,11 @@ export function loadConfig(overrides: Partial<Config> = {}): Config {
     webDir: process.env.LISTUP_WEB_DIR ?? path.resolve(process.cwd(), '../app/dist'),
     trustProxy: envBool('LISTUP_TRUST_PROXY'),
     logLevel,
+    loginFailureLimit: envInt('LISTUP_LOGIN_FAILURE_LIMIT', 10, { min: 1 }),
+    loginFailureWindowMs: envInt('LISTUP_LOGIN_FAILURE_WINDOW_MIN', 15, { min: 1 }) * MINUTE,
+    loginBlockMs: envInt('LISTUP_LOGIN_BLOCK_MIN', 15, { min: 1 }) * MINUTE,
+    gcMinAgeMs: envInt('LISTUP_GC_MIN_AGE_HOURS', 24, { min: 0 }) * HOUR,
+    gcIntervalMs: envInt('LISTUP_GC_INTERVAL_HOURS', 6, { min: 0 }) * HOUR,
     ...overrides,
   };
 }

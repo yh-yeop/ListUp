@@ -21,7 +21,7 @@ import { useAuth } from '../src/state/auth';
 import { spacing, useTheme } from '../src/theme';
 
 export default function SettingsScreen() {
-  const { user, updateProfile, logout } = useAuth();
+  const { user, updateProfile, logout, changePassword } = useAuth();
   const { colors } = useTheme();
   const [displayName, setDisplayName] = useState(user?.displayName ?? '');
   const [currentPassword, setCurrentPassword] = useState('');
@@ -59,10 +59,10 @@ export default function SettingsScreen() {
     }
     setSavingPassword(true);
     try {
-      await api.changePassword({ currentPassword, newPassword });
+      await changePassword(currentPassword, newPassword);
       setCurrentPassword('');
       setNewPassword('');
-      notify('비밀번호를 바꿨습니다.');
+      notify('비밀번호를 바꿨습니다.', '다른 기기에서는 다시 로그인해야 합니다.');
     } catch (err) {
       setError(err instanceof ApiError ? err.message : '비밀번호를 바꾸지 못했습니다.');
     } finally {

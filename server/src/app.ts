@@ -98,14 +98,16 @@ export async function buildApp(ctx: AppContext, options: BuildOptions = {}): Pro
   app.addHook('onRequest', async (req) => {
     const header = req.headers.authorization;
     if (!header || !header.startsWith('Bearer ')) return;
-    const userId = verifyToken(header.slice(7).trim(), ctx.config.authSecret);
-    if (!userId) return;
+    const claims = verifyToken(header.slice(7).trim(), ctx.config.authSecret);
+    if (!claims) return;
     const row = ctx.db
-      .prepare<[string], { id: string; email: string; display_name: string }>(
-        `SELECT id, email, display_name FROM users WHERE id = ?`,
+      .prepare<[string], { id: string; email: string; display_name: string; token_epoch: number }>(
+        `SELECT id, email, display_name, token_epoch FROM users WHERE id = ?`,
       )
-      .get(userId);
+      .get(claims.userId);
     if (!row) return;
+    // 비밀번호를 바꾸면 세대가 올라간다 — 그 전에 나간 토큰은 서명이 맞아도 받지 않는다.
+    if (row.token_epoch !== claims.epoch) return;
     const user: AuthUser = { id: row.id, email: row.email, displayName: row.display_name };
     req.user = user;
   });

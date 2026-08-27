@@ -23,6 +23,8 @@ interface AuthState {
   signup(email: string, password: string, displayName: string): Promise<void>;
   logout(): Promise<void>;
   updateProfile(displayName: string): Promise<void>;
+  /** 비밀번호를 바꾸고, 서버가 새로 준 토큰으로 이 기기의 세션을 이어 간다. */
+  changePassword(currentPassword: string, newPassword: string): Promise<void>;
 }
 
 const AuthContext = createContext<AuthState | null>(null);
@@ -115,6 +117,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       },
       async logout() {
         clearSession();
+      },
+      async changePassword(currentPassword, newPassword) {
+        const result = await api.changePassword({ currentPassword, newPassword });
+        // 서버가 토큰 세대를 올려 이전 토큰을 모두 끊는다. 지금 기기만 새 토큰으로 이어 간다.
+        setAuthToken(result.token);
+        await AsyncStorage.setItem(TOKEN_KEY, result.token);
       },
       async updateProfile(displayName) {
         const result = await api.updateProfile({ displayName });

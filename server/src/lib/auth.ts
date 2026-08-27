@@ -52,20 +52,40 @@ export async function verifyPassword(password: string, stored: string): Promise<
 interface TokenPayload {
   sub: string;
   exp: number;
+  /** 토큰 세대. 비밀번호를 바꾸면 사용자의 세대가 올라가 이전 토큰이 한 번에 무효가 된다. */
+  ep?: number;
+}
+
+/** 토큰에서 확인한 사용자와 세대. */
+export interface TokenClaims {
+  userId: string;
+  epoch: number;
 }
 
 function sign(data: string, secret: string): string {
   return createHmac('sha256', secret).update(data).digest('base64url');
 }
 
-export function issueToken(userId: string, secret: string, ttlMs: number): string {
-  const payload: TokenPayload = { sub: userId, exp: Date.now() + ttlMs };
+export function issueToken(
+  userId: string,
+  secret: string,
+  ttlMs: number,
+  epoch: number = 0,
+): string {
+  const payload: TokenPayload = { sub: userId, exp: Date.now() + ttlMs, ep: epoch };
   const body = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
   return `${body}.${sign(body, secret)}`;
 }
 
-/** 유효하면 userId, 아니면 null. */
-export function verifyToken(token: string, secret: string, now: number = Date.now()): string | null {
+/**
+ * 서명과 만료를 확인한다. 유효하면 사용자와 세대, 아니면 null.
+ * 세대가 지금도 맞는지는 사용자 행을 읽는 쪽(app.ts)에서 비교한다.
+ */
+export function verifyToken(
+  token: string,
+  secret: string,
+  now: number = Date.now(),
+): TokenClaims | null {
   const dot = token.indexOf('.');
   if (dot <= 0) return null;
   const body = token.slice(0, dot);
@@ -79,7 +99,9 @@ export function verifyToken(token: string, secret: string, now: number = Date.no
     const payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf8')) as TokenPayload;
     if (typeof payload.sub !== 'string' || typeof payload.exp !== 'number') return null;
     if (payload.exp <= now) return null;
-    return payload.sub;
+    // ep 가 없는 토큰은 세대 도입 전에 나간 것이라 0 세대로 본다.
+    const epoch = typeof payload.ep === 'number' ? payload.ep : 0;
+    return { userId: payload.sub, epoch };
   } catch {
     return null;
   }

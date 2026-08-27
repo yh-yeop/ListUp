@@ -152,6 +152,8 @@ UPDATE invites SET use_count = use_count + 1
 | 업로드 파일로 XSS | Content-Type 을 업로더 말이 아니라 **확장자 화이트리스트**로 결정. `nosniff` 헤더. SVG·HTML 은 inline 금지 |
 | 비밀번호 | scrypt(N=16384, 비동기) + 랜덤 솔트, 파라미터를 해시 문자열에 함께 저장 |
 | 토큰 위조 | HMAC-SHA256 서명, `timingSafeEqual` 비교 |
+| 비밀번호 대입 | 로그인 실패를 이메일·IP 기준으로 세어 한도를 넘으면 일정 시간 차단 (`lib/rate-limit.ts`) |
+| 유출된 토큰 | 사용자마다 토큰 세대(`users.token_epoch`)를 두고 토큰에 실어, 비밀번호를 바꾸면 세대를 올려 이전 토큰을 한 번에 끊는다 |
 | 계정 존재 여부 노출 | 로그인 실패 메시지를 하나로 통일하고, 없는 계정도 더미 해시를 검증해 응답 시간을 맞춤 |
 | 저장소 존재 여부 노출 | 비멤버에게 404 |
 | 파일명에 개행/따옴표 | `Content-Disposition` 에 ASCII 대체명 + RFC 5987 `filename*` 동시 사용 |

@@ -252,8 +252,9 @@ export const api = {
   updateProfile: (payload: { displayName: string }) =>
     request<{ user: User }>('/api/auth/me', { method: 'PATCH', body: payload }),
 
+  /** 성공하면 새 토큰을 준다 — 서버가 이전 토큰을 전부 끊으므로 이 값으로 갈아 끼워야 한다. */
   changePassword: (payload: { currentPassword: string; newPassword: string }) =>
-    request<{ ok: true }>('/api/auth/password', { method: 'POST', body: payload }),
+    request<{ ok: true; token: string }>('/api/auth/password', { method: 'POST', body: payload }),
 
   // 저장소 ----------------------------------------------------------------
   listRepos: () => request<{ repos: RepoSummary[] }>('/api/repos'),

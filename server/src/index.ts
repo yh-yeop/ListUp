@@ -2,6 +2,7 @@ import type { FastifyRequest } from 'fastify';
 import { buildApp } from './app.ts';
 import { loadConfig } from './config.ts';
 import { createContext } from './context.ts';
+import { scheduleGc } from './services/gc.ts';
 
 const config = loadConfig();
 const ctx = createContext(config);
@@ -29,6 +30,17 @@ const app = await buildApp(ctx, {
   },
 });
 
+// 어디에서도 참조하지 않는 blob 을 주기적으로 지운다 (제안에 담기 전에 버려진 업로드 등).
+const stopGc = scheduleGc(
+  ctx,
+  (result) => {
+    if (result.removed > 0 || result.orphanFiles > 0 || result.failed > 0) {
+      app.log.info(result, 'blob GC');
+    }
+  },
+  (err) => app.log.error({ err }, 'blob GC 실패'),
+);
+
 let shuttingDown = false;
 const shutdown = async (signal: string) => {
   if (shuttingDown) return;
@@ -36,6 +48,7 @@ const shutdown = async (signal: string) => {
   app.log.info({ signal }, 'shutting down');
   // 연결이 안 닫혀 close 가 끝나지 않아도 10초 뒤에는 강제로 끝낸다. 타이머가 종료를 붙들지 않게 unref.
   setTimeout(() => process.exit(1), 10_000).unref();
+  stopGc();
   await app.close();
   ctx.close();
   process.exit(0);

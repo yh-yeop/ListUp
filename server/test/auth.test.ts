@@ -27,7 +27,12 @@ describe('토큰', () => {
 
   it('발급한 토큰을 되돌려 읽는다', () => {
     const token = issueToken('usr_1', secret, 60_000);
-    assert.equal(verifyToken(token, secret), 'usr_1');
+    assert.deepEqual(verifyToken(token, secret), { userId: 'usr_1', epoch: 0 });
+  });
+
+  it('토큰에 실린 세대를 그대로 돌려준다', () => {
+    const token = issueToken('usr_1', secret, 60_000, 3);
+    assert.deepEqual(verifyToken(token, secret), { userId: 'usr_1', epoch: 3 });
   });
 
   it('서명이 다르면 거부한다', () => {
