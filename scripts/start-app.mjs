@@ -37,8 +37,18 @@ function outboundAddress() {
 }
 
 const host = process.env.REACT_NATIVE_PACKAGER_HOSTNAME ?? (await outboundAddress());
+// `npm run app -- --tunnel` 처럼 뒤에 붙인 인자는 expo 에 그대로 넘긴다.
+const extra = process.argv.slice(2);
+// --tunnel 은 폰이 다른 네트워크(LTE 등)에 있을 때 Metro 를 인터넷에 공개한다(@expo/ngrok 필요).
+// 이때는 LAN IP 가 쓰이지 않고, 앱이 접속 주소에서 유추하는 API 주소도 맞지 않으므로
+// 앱의 "서버 주소" 화면에서 공개된 서버 주소를 직접 지정해야 한다.
+const tunneled = extra.includes('--tunnel');
+
 const env = { ...process.env };
-if (host) {
+if (tunneled) {
+  console.log('Expo 터널 모드 — Metro 를 인터넷에 공개합니다. 폰이 다른 네트워크여도 됩니다.');
+  console.log('앱의 "서버 주소" 화면에서 공개된 서버 주소를 지정해 주세요.\n');
+} else if (host) {
   env.REACT_NATIVE_PACKAGER_HOSTNAME = host;
   console.log(`실기기가 접속할 주소: exp://${host}:8081 (API 는 http://${host}:4000)`);
   console.log('폰과 이 PC 가 같은 공유기에 있어야 합니다.\n');
@@ -46,9 +56,10 @@ if (host) {
   console.log('LAN 주소를 찾지 못했습니다 — Expo 가 고르는 주소를 씁니다.\n');
 }
 
-const child = spawn('npm', ['run', 'start', '--workspace', '@listup/app'], {
+// Windows 에서 npm 은 npm.cmd 다. shell:true 로 넘기면 인자가 이스케이프되지 않아 경고가 난다.
+const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+const child = spawn(npm, ['run', 'start', '--workspace', '@listup/app', '--', ...extra], {
   stdio: 'inherit',
-  shell: process.platform === 'win32',
   env,
 });
 child.on('exit', (code) => process.exit(code ?? 0));
