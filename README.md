@@ -52,6 +52,20 @@ listup/
 
 ## 실행하기
 
+### 0. 그냥 써보고 싶다면 — 배포본
+
+[Releases](https://github.com/yh-yeop/ListUp/releases) 에서 `listup-<버전>.zip` 을 받아
+압축을 풀고:
+
+```bash
+npm install
+npm run serve -- --tunnel
+```
+
+웹이 미리 빌드돼 있고 앱(Expo) 의존성이 빠져 있어, 설치가 **10여 초에 64MB** 로 끝납니다
+(소스에서 시작하면 397MB 를 받고 웹을 직접 빌드해야 합니다).
+아래 1~4번은 코드를 고칠 사람을 위한 것입니다.
+
 ### 1. 설치
 
 ```bash

@@ -18,6 +18,7 @@
     "sync": "node scripts/sync-folder.mjs",
     "serve": "node scripts/serve.mjs",
     "tunnel": "node scripts/tunnel.mjs",
+    "release": "node scripts/release.mjs",
     "test": "npm run test --workspace @listup/server",
     "typecheck": "npm run typecheck --workspace @listup/server && npm run typecheck --workspace @listup/app"
   },

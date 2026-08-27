@@ -69,6 +69,13 @@ function runNpm(args, options = {}) {
 
 const builtFor = fs.existsSync(API_URL_STAMP) ? fs.readFileSync(API_URL_STAMP, 'utf8').trim() : null;
 const needBuild = !fs.existsSync(path.join(WEB_DIR, 'index.html')) || builtFor !== WEB_API_URL;
+// 배포 묶음에는 웹이 이미 들어 있고 앱 워크스페이스가 없다 — 빌드를 시도하면 안 된다.
+const canBuild = fs.existsSync(path.join(ROOT, 'app', 'package.json'));
+if (needBuild && !canBuild) {
+  console.error('웹 빌드 결과(app/dist)가 없거나 다른 주소로 만들어졌습니다.');
+  console.error('이 묶음에는 앱 소스가 없어 다시 빌드할 수 없습니다 — 배포본을 다시 받으세요.');
+  process.exit(1);
+}
 if (needBuild && !has('no-build')) {
   say('웹을 빌드합니다 (처음이면 몇 분 걸립니다)…');
   await runNpm(['run', 'build:web', '--workspace', '@listup/app', '--', '--clear'], {
