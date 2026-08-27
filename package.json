@@ -11,7 +11,7 @@
   "scripts": {
     "server": "npm run dev --workspace @listup/server",
     "start": "npm run start --workspace @listup/server",
-    "app": "npm run start --workspace @listup/app",
+    "app": "node scripts/start-app.mjs",
     "build:web": "npm run build:web --workspace @listup/app",
     "backup": "npm run backup --workspace @listup/server --",
     "test": "npm run test --workspace @listup/server",
