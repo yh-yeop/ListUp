@@ -236,7 +236,7 @@ POST /api/proposals/:proposalId/merge
 | 항목 | 값 |
 | --- | --- |
 | 파일 하나 최대 크기 | 100MB (`LISTUP_MAX_UPLOAD_MB`) |
-| 저장소 총량 | 2GB (`LISTUP_MAX_REPO_MB`) |
+| 저장소 총량 | 4GB (`LISTUP_MAX_REPO_MB`) |
 | 사용자별 하루 제안용 업로드 | 1GB (`LISTUP_MAX_STAGING_MB_PER_DAY`) |
 | 저장소당 파일 수 | 5,000 |
 | 한 제안의 변경 수 | 200 |

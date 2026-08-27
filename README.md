@@ -74,7 +74,7 @@ npm run server        # http://localhost:4000
 | `LISTUP_AUTH_SECRET` | (개발 시 자동 생성) | 토큰 서명 키. **운영에서는 반드시 지정** |
 | `LISTUP_TOKEN_TTL_DAYS` | `30` | 로그인 유지 기간 |
 | `LISTUP_MAX_UPLOAD_MB` | `100` | 파일 하나의 최대 크기 |
-| `LISTUP_MAX_REPO_MB` | `2048` | 저장소 하나의 총량 |
+| `LISTUP_MAX_REPO_MB` | `4096` | 저장소 하나의 총량 |
 | `LISTUP_MAX_STAGING_MB_PER_DAY` | `1024` | 사용자별 하루 제안용 업로드 총량 |
 | `LISTUP_CORS_ORIGIN` | `*` | 허용 오리진 (쉼표로 여러 개) |
 | `LISTUP_WEB_DIR` | `app/dist` | 함께 서빙할 웹 빌드 위치 |

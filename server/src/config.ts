@@ -15,7 +15,10 @@ export interface Config {
   /** CORS 허용 오리진. `*` 이면 전부 허용(개발용). 쉼표로 여러 개를 줄 수 있다. */
   corsOrigin: string;
   maxUploadBytes: number;
-  /** 저장소 하나의 총 용량 한도(바이트). 업로드·제안 생성·병합 결과가 이를 넘으면 413. */
+  /**
+   * 저장소 하나의 총 용량 한도(바이트). 업로드·제안 생성·병합 결과가 이를 넘으면 413.
+   * 음악·사진 폴더를 통째로 올리면 금방 GB 단위가 되므로 넉넉하게 잡는다.
+   */
   maxRepoBytes: number;
   /** 사용자 한 명이 24시간 동안 저장소에 올릴 수 있는 blob 총량(바이트). 제안용 업로드에 적용한다. */
   maxStagingBytesPerDay: number;
@@ -131,7 +134,7 @@ export function loadConfig(overrides: Partial<Config> = {}): Config {
     tokenTtlMs: envInt('LISTUP_TOKEN_TTL_DAYS', 30, { min: 1 }) * DAY,
     corsOrigin: process.env.LISTUP_CORS_ORIGIN ?? '*',
     maxUploadBytes: envInt('LISTUP_MAX_UPLOAD_MB', 100, { min: 1 }) * 1024 * 1024,
-    maxRepoBytes: envInt('LISTUP_MAX_REPO_MB', 2048, { min: 1 }) * 1024 * 1024,
+    maxRepoBytes: envInt('LISTUP_MAX_REPO_MB', 4096, { min: 1 }) * 1024 * 1024,
     maxStagingBytesPerDay:
       envInt('LISTUP_MAX_STAGING_MB_PER_DAY', 1024, { min: 1 }) * 1024 * 1024,
     webDir: process.env.LISTUP_WEB_DIR ?? path.resolve(process.cwd(), '../app/dist'),
