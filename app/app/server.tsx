@@ -150,8 +150,13 @@ export default function ServerScreen() {
 
         <Card style={{ gap: spacing.xs }}>
           <Caption>현재 주소</Caption>
-          <Body style={{ fontFamily: monoFont }}>{current}</Body>
-          <Caption>{isDefault ? '기본값을 쓰고 있습니다.' : `기본값: ${DEFAULT_API_BASE_URL}`}</Caption>
+          {/* 웹을 서버와 같은 오리진으로 빌드하면 주소가 빈 문자열이라 말로 알려준다. */}
+          <Body style={{ fontFamily: monoFont }}>{current || '이 사이트와 같은 주소'}</Body>
+          <Caption>
+            {isDefault
+              ? '기본값을 쓰고 있습니다.'
+              : `기본값: ${DEFAULT_API_BASE_URL || '이 사이트와 같은 주소'}`}
+          </Caption>
         </Card>
 
         <Card style={{ gap: spacing.lg }}>

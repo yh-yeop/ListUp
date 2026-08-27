@@ -51,6 +51,15 @@ export function getApiBaseUrl(): string {
   return apiBaseUrl;
 }
 
+/**
+ * 화면에 보여줄 서버 주소.
+ * 웹을 서버와 같은 오리진으로 빌드하면(`EXPO_PUBLIC_LISTUP_API_URL=/`) 주소가 빈 문자열이라
+ * 그대로 쓰면 "서버:" 뒤가 비어 보인다. 그때는 무엇을 보고 있는지 말로 알려준다.
+ */
+export function describeApiBaseUrl(): string {
+  return apiBaseUrl || '이 사이트와 같은 주소';
+}
+
 /** 서버 주소를 바꾼다. null 이면 기본값으로 되돌린다. 끝 슬래시는 떼어 낸다. */
 export function setApiBaseUrl(url: string | null): void {
   apiBaseUrl = url ? url.replace(/\/+$/, '') : DEFAULT_API_BASE_URL;

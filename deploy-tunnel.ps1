@@ -19,40 +19,39 @@ if (-not (Test-Path $secretFile)) {
 $env:LISTUP_AUTH_SECRET = (Get-Content $secretFile -Raw).Trim()
 $env:NODE_ENV = 'production'
 
-# 2. 웹 번들이 없거나 잘못 빌드됐으면 빌드한다.
+# 2. 웹 번들이 없거나 다른 설정으로 빌드됐으면 빌드한다.
 #    EXPO_PUBLIC_LISTUP_API_URL=/ 는 "API 를 같은 오리진에서 상대 경로로 불러라"는 뜻.
 #    (Git Bash 에서는 / 가 Windows 경로로 변환돼 깨지므로 반드시 PowerShell 에서 빌드)
-#    번들에 'localhost:4000' 이 박혀 있으면 절대 URL 로 잘못 빌드된 것이라 다시 만든다.
+#
+#    번들 안의 문자열로는 판정할 수 없다 — app.json 이 통째로 번들에 들어가므로 정상 빌드에도
+#    extra.listupApiUrl 의 'localhost:4000' 이 남는다. 그래서 빌드가 끝나면 어떤 주소로
+#    만들었는지 도장 파일에 적어 두고, 그걸 보고 판단한다.
+#    (dist 안의 숨김 파일은 서버가 서빙하지 않는다 — app.ts 의 dotfiles: 'ignore')
+$apiUrl = '/'
 $distDir = Join-Path $root 'app\dist'
-$bundleDir = Join-Path $distDir '_expo\static\js\web'
-$needBuild = $false
-if (-not (Test-Path (Join-Path $distDir 'index.html'))) {
-  $needBuild = $true
-} elseif (-not (Test-Path $bundleDir)) {
-  Write-Host '웹 번들 디렉터리가 없습니다 — 다시 빌드합니다.'
-  $needBuild = $true
-} else {
-  foreach ($bundle in Get-ChildItem -Path $bundleDir -Filter '*.js') {
-    if (Select-String -Path $bundle.FullName -Pattern 'localhost:4000' -SimpleMatch -Quiet) {
-      Write-Host "웹 번들에 localhost:4000 이 박혀 있습니다 ($($bundle.Name)) — 다시 빌드합니다."
-      $needBuild = $true
-      break
-    }
-  }
+$stampFile = Join-Path $distDir '.listup-api-url'
+$needBuild = $true
+if ((Test-Path (Join-Path $distDir 'index.html')) -and (Test-Path $stampFile)) {
+  if ((Get-Content $stampFile -Raw).Trim() -eq $apiUrl) { $needBuild = $false }
+  else { Write-Host '웹 번들이 다른 서버 주소로 빌드돼 있습니다 — 다시 빌드합니다.' }
 }
 if ($needBuild) {
-  $env:EXPO_PUBLIC_LISTUP_API_URL = '/'
+  $env:EXPO_PUBLIC_LISTUP_API_URL = $apiUrl
   npm run build:web --workspace "@listup/app" -- --clear
   if ($LASTEXITCODE -ne 0) { throw '웹 빌드 실패' }
+  # expo export 가 dist 를 비우므로 도장은 빌드 뒤에 찍는다.
+  Out-File -FilePath $stampFile -Encoding ascii -InputObject $apiUrl
 }
 
-# 3. 서버를 별도 창으로 띄우고 (http://localhost:4000), 뜰 때까지 최대 30초 기다린다.
+# 3. 서버를 별도 창으로 띄우고 (http://localhost:4000), 뜰 때까지 기다린다.
+#    바로 앞에서 웹 빌드를 돌렸으면 머신이 바빠 tsx 첫 기동에 1분 가까이 걸리기도 한다.
 Start-Process -WorkingDirectory (Join-Path $root 'server') -FilePath 'cmd' `
   -ArgumentList '/k', 'npm run start'
 
 $healthUrl = 'http://localhost:4000/api/health'
 $healthy = $false
-for ($i = 0; $i -lt 30; $i++) {
+Write-Host "서버가 뜨기를 기다립니다 ($healthUrl) …"
+for ($i = 0; $i -lt 90; $i++) {
   Start-Sleep -Seconds 1
   try {
     $res = Invoke-WebRequest -Uri $healthUrl -UseBasicParsing -TimeoutSec 2
@@ -62,7 +61,7 @@ for ($i = 0; $i -lt 30; $i++) {
   }
 }
 if (-not $healthy) {
-  Write-Host "서버가 30초 안에 뜨지 않았습니다 ($healthUrl). 서버 창의 오류를 확인하세요. 터널은 열지 않습니다." -ForegroundColor Red
+  Write-Host "서버가 90초 안에 뜨지 않았습니다 ($healthUrl). 서버 창의 오류를 확인하세요. 터널은 열지 않습니다." -ForegroundColor Red
   exit 1
 }
 

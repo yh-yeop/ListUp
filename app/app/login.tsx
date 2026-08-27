@@ -14,7 +14,7 @@ import {
   Title,
 } from '../src/components/ui';
 import { useAuth } from '../src/state/auth';
-import { ApiError, getApiBaseUrl } from '../src/api/client';
+import { ApiError, describeApiBaseUrl } from '../src/api/client';
 import { radius, spacing, useTheme } from '../src/theme';
 
 export default function LoginScreen() {
@@ -24,12 +24,12 @@ export default function LoginScreen() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [serverUrl, setServerUrl] = useState(getApiBaseUrl);
+  const [serverUrl, setServerUrl] = useState(describeApiBaseUrl);
 
   // 서버 주소 화면에서 돌아오면 바뀐 주소를 다시 읽는다.
   useFocusEffect(
     useCallback(() => {
-      setServerUrl(getApiBaseUrl());
+      setServerUrl(describeApiBaseUrl());
     }, []),
   );
 
