@@ -167,24 +167,27 @@ npm run build:web --workspace @listup/app    # app/dist/ 에 생성
 `EXPO_PUBLIC_LISTUP_API_URL=/` 로 빌드하면 웹 번들이 상대 경로로 API 를 부르므로,
 도메인이 무엇이든 재빌드 없이 동작합니다.
 
-### 5. 임시 공개 — Cloudflare 빠른 터널
+### 5. 밖에서 접속 — `npm run serve`
 
-**계정 없이** 되는 대신 시험용입니다 — 주소가 매번 바뀌고 가동 보장이 없습니다.
-계속 쓸 거라면 아래 6번으로 옮기세요.
-
-서버 하나만 공개하면 웹까지 같이 나갑니다. cloudflared 설치
-(`winget install Cloudflare.cloudflared`) 후:
+서명 키 챙기기 → 웹 빌드 → 서버 켜기 → 공개 주소 열기까지 한 명령으로 합니다.
+Windows·macOS·Linux 어디서든 같습니다.
 
 ```bash
-powershell -ExecutionPolicy Bypass -File deploy-tunnel.ps1
+npm run serve              # 서버만 (이 PC·같은 공유기)
+npm run serve -- --tunnel  # + 공개 주소
+npm run serve -- --check   # 무엇이 준비됐는지만 확인
 ```
 
-출력에 나오는 `https://….trycloudflare.com` 이 공개 주소입니다. 주의:
+주소와 함께 **QR 코드**가 나옵니다. 폰으로 찍으면 바로 열립니다.
 
-- URL 은 실행할 때마다 바뀌고, 프로세스가 꺼지면 사라집니다.
-- **Windows PowerShell 에서 빌드하세요.** Git Bash 는 `EXPO_PUBLIC_LISTUP_API_URL=/` 의
-  `/` 를 Windows 경로로 바꿔 버려(MSYS path 변환) 번들이 깨집니다.
-- 처음 보는 사람에게 공개하기 전에 `LISTUP_AUTH_SECRET` 을 지정했는지 확인하세요.
+공개 방식은 준비된 것을 보고 알아서 고릅니다 — 고정 주소(이름 있는 터널 / Tailscale)가
+준비돼 있으면 그것을, 없으면 Cloudflare 빠른 터널을 씁니다. 지금 무엇을 쓰는지와 모자란
+것은 `npm run tunnel` 로 볼 수 있고, `npm run tunnel use <quick|named|tailscale>` 로 직접
+정할 수도 있습니다.
+
+빠른 터널은 **계정 없이** 되는 대신 시험용입니다 — 주소가 매번 바뀌고 가동 보장이 없습니다
+(cloudflared 가 기동할 때 그렇게 알려줍니다). 계속 쓸 거라면 아래 6번으로 옮기세요.
+`winget install Cloudflare.cloudflared` 로 설치해 두어야 합니다.
 
 ### 6. 계속 쓰려면 — 고정 주소
 
@@ -202,8 +205,13 @@ Cloudflare 이름 있는 터널은 **자기 도메인이 있어야** 합니다 �
 cloudflared tunnel login                       # 브라우저로 계정 인증
 cloudflared tunnel create listup
 cloudflared tunnel route dns listup listup.내도메인.com
-cloudflared tunnel run --url http://localhost:4000 listup
+
+npm run tunnel use named --tunnel listup --hostname listup.내도메인.com
+npm run serve -- --tunnel                      # 이제 늘 같은 주소로 뜹니다
 ```
+
+Tailscale 을 쓴다면 `tailscale up` 으로 로그인만 해두고
+`npm run tunnel use tailscale` 이면 됩니다 — 주소는 알아서 찾습니다.
 
 고정 주소가 생기면 `LISTUP_CORS_ORIGIN` 을 그 주소로 좁히고, 앱의 서버 주소를 한 번만
 넣으면 됩니다. Windows 서비스로 등록(`cloudflared service install`)하면 부팅 시 자동으로

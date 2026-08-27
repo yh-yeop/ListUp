@@ -8,8 +8,8 @@
  * 기본 경로(default route)로 나가는 인터페이스의 IP 를 골라 REACT_NATIVE_PACKAGER_HOSTNAME
  * 으로 넘긴다. 네트워크가 없으면 아무것도 정하지 않고 Expo 판단에 맡긴다.
  */
-import { spawn } from 'node:child_process';
 import { createSocket } from 'node:dgram';
+import { spawnNpm } from './run-npm.mjs';
 
 /** 바깥으로 나갈 때 쓰는 인터페이스의 IPv4 주소. 패킷은 보내지 않는다. */
 function outboundAddress() {
@@ -56,9 +56,7 @@ if (tunneled) {
   console.log('LAN 주소를 찾지 못했습니다 — Expo 가 고르는 주소를 씁니다.\n');
 }
 
-// Windows 에서 npm 은 npm.cmd 다. shell:true 로 넘기면 인자가 이스케이프되지 않아 경고가 난다.
-const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-const child = spawn(npm, ['run', 'start', '--workspace', '@listup/app', '--', ...extra], {
+const child = spawnNpm(['run', 'start', '--workspace', '@listup/app', '--', ...extra], {
   stdio: 'inherit',
   env,
 });

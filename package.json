@@ -16,6 +16,8 @@
     "backup": "npm run backup --workspace @listup/server --",
     "gc": "npm run gc --workspace @listup/server --",
     "sync": "node scripts/sync-folder.mjs",
+    "serve": "node scripts/serve.mjs",
+    "tunnel": "node scripts/tunnel.mjs",
     "test": "npm run test --workspace @listup/server",
     "typecheck": "npm run typecheck --workspace @listup/server && npm run typecheck --workspace @listup/app"
   },
@@ -25,5 +27,8 @@
   "allowScripts": {
     "better-sqlite3@12.11.1": true,
     "esbuild@0.28.2": true
+  },
+  "dependencies": {
+    "qrcode-terminal": "^0.12.0"
   }
 }
