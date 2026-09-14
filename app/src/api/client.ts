@@ -23,8 +23,8 @@ import type {
  *   3) Expo 개발 서버의 호스트 (실기기에서 localhost 는 기기 자신을 가리키므로,
  *      개발 중에는 PC 의 LAN IP 를 자동으로 알아낸다)
  *
- * 사용자가 서버 주소 화면에서 바꾼 주소는 AsyncStorage(API_URL_STORAGE_KEY)에 저장되고,
- * 앱 시작 시 auth 가 토큰 복원 전에 setApiBaseUrl 로 적용한다.
+ * 사용자가 더한 서버는 서버 목록(state/servers.ts)에 저장되고, 어느 서버를 쓸지는
+ * auth 가 setApiTarget 으로 주소와 토큰을 함께 적용한다.
  */
 function resolveBaseUrl(): string {
   const fromEnv = process.env.EXPO_PUBLIC_LISTUP_API_URL;
@@ -42,29 +42,25 @@ function resolveBaseUrl(): string {
 }
 
 export const DEFAULT_API_BASE_URL = resolveBaseUrl();
-/** 사용자가 바꾼 서버 주소를 저장하는 AsyncStorage 키. */
-export const API_URL_STORAGE_KEY = 'listup.apiUrl';
 
 let apiBaseUrl = DEFAULT_API_BASE_URL;
+let authToken: string | null = null;
 
 export function getApiBaseUrl(): string {
   return apiBaseUrl;
 }
 
 /**
- * 화면에 보여줄 서버 주소.
- * 웹을 서버와 같은 오리진으로 빌드하면(`EXPO_PUBLIC_LISTUP_API_URL=/`) 주소가 빈 문자열이라
- * 그대로 쓰면 "서버:" 뒤가 비어 보인다. 그때는 무엇을 보고 있는지 말로 알려준다.
+ * 요청을 보낼 서버와 그 서버에서 받은 토큰을 함께 바꾼다.
+ * 주소와 토큰은 짝이다 — 따로 바꾸면 그 사이에 나간 요청이 한 서버의 토큰을 다른 서버로
+ * 보낸다. 그래서 둘을 바꾸는 길은 이 함수 하나뿐이고, 동기 함수라 중간에 끼어들 틈이 없다.
  */
-export function describeApiBaseUrl(): string {
-  return apiBaseUrl || '이 사이트와 같은 주소';
-}
-
-/** 서버 주소를 바꾼다. null 이면 기본값으로 되돌린다. 끝 슬래시는 떼어 낸다. */
-export function setApiBaseUrl(url: string | null): void {
-  apiBaseUrl = url ? url.replace(/\/+$/, '') : DEFAULT_API_BASE_URL;
+export function setApiTarget(url: string, token: string | null): void {
+  const nextUrl = url.replace(/\/+$/, '');
   // 업로드 한도는 서버마다 다르므로 주소가 바뀌면 다시 받아온다.
-  maxUploadBytesCache = null;
+  if (nextUrl !== apiBaseUrl) maxUploadBytesCache = null;
+  apiBaseUrl = nextUrl;
+  authToken = token;
 }
 
 /** 서버가 알려준 파일 하나의 업로드 한도(바이트). */
@@ -109,15 +105,10 @@ export class ApiError extends Error {
   }
 }
 
-let authToken: string | null = null;
-/** 토큰이 더는 유효하지 않을 때 호출된다 (자동 로그아웃). */
-let onUnauthorized: (() => void) | null = null;
+/** 토큰이 더는 유효하지 않을 때 무효가 된 그 토큰으로 호출된다 (자동 로그아웃). */
+let onUnauthorized: ((token: string) => void) | null = null;
 
-export function setAuthToken(token: string | null): void {
-  authToken = token;
-}
-
-export function setUnauthorizedHandler(handler: (() => void) | null): void {
+export function setUnauthorizedHandler(handler: ((token: string) => void) | null): void {
   onUnauthorized = handler;
 }
 
@@ -147,8 +138,9 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     body = JSON.stringify(options.body);
   }
 
-  // 401 판정은 "이 요청에 쓴 토큰" 기준으로 한다. 토큰 복원 전에 나간 요청이
-  // 401 로 돌아오는 사이 새 토큰이 들어왔다면 그 토큰을 지우면 안 된다.
+  // 401 판정은 "이 요청에 쓴 서버와 토큰" 기준으로 한다. 요청이 돌아오는 사이 새로
+  // 로그인했거나 다른 서버로 옮겼다면, 늦게 온 401 이 지금 세션을 지우면 안 된다.
+  const usedBaseUrl = apiBaseUrl;
   const usedToken = authToken;
 
   // 호출자가 signal 을 주지 않은 일반 요청에는 타임아웃을 건다.
@@ -186,9 +178,14 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
       );
     }
 
-    if (response.status === 401 && usedToken && authToken === usedToken) {
+    if (
+      response.status === 401 &&
+      usedToken &&
+      authToken === usedToken &&
+      apiBaseUrl === usedBaseUrl
+    ) {
       authToken = null;
-      onUnauthorized?.();
+      onUnauthorized?.(usedToken);
     }
 
     if (!response.ok) {

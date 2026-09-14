@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
-import { Link, router, useFocusEffect } from 'expo-router';
-import { useCallback, useState } from 'react';
+import { Link } from 'expo-router';
+import { useState } from 'react';
 import { Pressable, View } from 'react-native';
 import {
   Body,
@@ -16,9 +16,11 @@ import {
   Subtitle,
   Title,
 } from '../src/components/ui';
-import { ApiError, api, describeApiBaseUrl } from '../src/api/client';
+import { ApiError } from '../src/api/client';
 import { confirmAction, notify } from '../src/lib/dialogs';
 import { useAuth } from '../src/state/auth';
+import { openServerList } from '../src/lib/server-list';
+import { serverTitle } from '../src/state/servers';
 import { fontSize, spacing, useTheme } from '../src/theme';
 
 /** AGPL-3.0 §13 을 지키려면 이 주소가 실제로 소스를 받을 수 있는 곳이어야 한다. */
@@ -26,7 +28,7 @@ const SOURCE_URL = 'https://github.com/yh-yeop/ListUp';
 const APP_VERSION = (Constants.expoConfig?.version as string | undefined) ?? '';
 
 export default function SettingsScreen() {
-  const { user, updateProfile, logout, changePassword } = useAuth();
+  const { user, updateProfile, logout, changePassword, activeServer } = useAuth();
   const { colors } = useTheme();
   const [displayName, setDisplayName] = useState(user?.displayName ?? '');
   const [currentPassword, setCurrentPassword] = useState('');
@@ -34,14 +36,6 @@ export default function SettingsScreen() {
   const [error, setError] = useState<string | null>(null);
   const [savingName, setSavingName] = useState(false);
   const [savingPassword, setSavingPassword] = useState(false);
-  const [serverUrl, setServerUrl] = useState(describeApiBaseUrl);
-
-  // 서버 주소 화면에서 돌아오면 바뀐 주소를 다시 읽는다.
-  useFocusEffect(
-    useCallback(() => {
-      setServerUrl(describeApiBaseUrl());
-    }, []),
-  );
 
   const saveName = async () => {
     setError(null);
@@ -78,7 +72,7 @@ export default function SettingsScreen() {
   const signOut = async () => {
     const ok = await confirmAction({
       title: '로그아웃할까요?',
-      message: '다시 로그인하면 저장소는 그대로 남아 있습니다.',
+      message: '이 서버에서만 로그아웃합니다. 다시 로그인하면 저장소는 그대로 남아 있습니다.',
       confirmLabel: '로그아웃',
     });
     if (!ok) return;
@@ -138,16 +132,16 @@ export default function SettingsScreen() {
 
       <Card style={{ gap: spacing.md }}>
         <Pressable
-          onPress={() => router.push('/server')}
+          onPress={openServerList}
           accessibilityRole="button"
-          accessibilityLabel="서버 주소 바꾸기"
+          accessibilityLabel="서버 목록 열기"
           style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
         >
           <Row style={{ justifyContent: 'space-between' }}>
             <Caption>서버</Caption>
             <Row gap={spacing.xs} style={{ flexShrink: 1 }}>
               <Caption numberOfLines={1} style={{ flexShrink: 1 }}>
-                {serverUrl}
+                {serverTitle(activeServer)}
               </Caption>
               <Ionicons name="chevron-forward" size={14} color={colors.textFaint} />
             </Row>

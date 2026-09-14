@@ -1,5 +1,4 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { router } from 'expo-router';
+import { Stack, router, useLocalSearchParams } from 'expo-router';
 import { useState } from 'react';
 import { KeyboardAvoidingView, Platform, View } from 'react-native';
 import {
@@ -15,66 +14,55 @@ import {
   Subtitle,
   Title,
 } from '../src/components/ui';
-import {
-  API_URL_STORAGE_KEY,
-  DEFAULT_API_BASE_URL,
-  getApiBaseUrl,
-  setApiBaseUrl,
-} from '../src/api/client';
-import { notify } from '../src/lib/dialogs';
+import { confirmAction } from '../src/lib/dialogs';
 import { useAuth } from '../src/state/auth';
+import {
+  checkServer,
+  describeUrl,
+  isDefaultServer,
+  normalizeServerUrl,
+  serverUrl,
+} from '../src/state/servers';
 import { monoFont, spacing, useTheme } from '../src/theme';
 
-/** 연결 확인 응답을 기다리는 최대 시간. */
-const HEALTH_TIMEOUT_MS = 5_000;
-
-/** 입력한 주소를 정리한다. http(s):// 로 시작하지 않으면 null. 끝 슬래시는 뗀다. */
-function normalizeUrl(raw: string): string | null {
-  const trimmed = raw.trim().replace(/\/+$/, '');
-  return /^https?:\/\/[^\s/]+(\/\S*)?$/i.test(trimmed) ? trimmed : null;
-}
-
-/** GET {url}/api/health 가 ok:true 를 돌려주는지 확인한다. */
-async function checkServer(url: string): Promise<boolean> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), HEALTH_TIMEOUT_MS);
-  try {
-    const response = await fetch(`${url}/api/health`, { signal: controller.signal });
-    if (!response.ok) return false;
-    const body = (await response.json()) as { ok?: unknown } | null;
-    return body?.ok === true;
-  } catch {
-    return false;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-/** 네이티브 빌드에서도 서버 주소를 바꿀 수 있게 하는 화면. 로그인 전후 모두 들어올 수 있다. */
-export default function ServerScreen() {
+/**
+ * 서버 추가·수정 폼. `?id=` 가 있으면 그 서버를 고친다. 로그인 전후 모두 들어올 수 있다.
+ * 새 서버를 더하면 바로 그 서버로 들어간다 — 서버를 더하는 이유가 들어가려는 것이기 때문이다.
+ */
+export default function ServerFormScreen() {
   const { colors } = useTheme();
-  const { logout } = useAuth();
-  const [current, setCurrent] = useState(getApiBaseUrl);
-  const [input, setInput] = useState(current);
+  const { id } = useLocalSearchParams<{ id?: string }>();
+  const { servers, activeServer, saveServer, switchServer, removeServer } = useAuth();
+  const editing = id ? servers.find((entry) => entry.id === id) : undefined;
+  const isDefault = editing ? isDefaultServer(editing) : false;
+
+  const [label, setLabel] = useState(editing?.label ?? '');
+  const [input, setInput] = useState(editing ? serverUrl(editing) : '');
   const [checking, setChecking] = useState(false);
   const [saving, setSaving] = useState(false);
   /** 연결 확인에 성공한 주소. 입력이 바뀌면 다시 확인해야 한다. */
   const [verified, setVerified] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const normalized = normalizeUrl(input);
-  const canSave = verified !== null && verified === normalized;
-  const isDefault = current === DEFAULT_API_BASE_URL;
+  const normalized = isDefault ? serverUrl(editing!) : normalizeServerUrl(input);
+  const urlChanged = !editing || (!isDefault && normalized !== editing.url);
+  // 주소가 그대로면(이름만 바꿀 때) 다시 확인하지 않아도 된다.
+  const canSave = !saving && normalized !== null && (!urlChanged || verified === normalized);
 
-  const onChange = (text: string) => {
+  if (id && !editing) {
+    return (
+      <Screen>
+        <Stack.Screen options={{ title: '서버' }} />
+        <ErrorNotice message="목록에 없는 서버입니다." />
+        <Button label="서버 목록으로" variant="secondary" onPress={() => router.back()} />
+      </Screen>
+    );
+  }
+
+  const onChangeUrl = (text: string) => {
     setInput(text);
     setVerified(null);
     setError(null);
-  };
-
-  const leave = () => {
-    if (router.canGoBack()) router.back();
-    else router.replace('/');
   };
 
   const check = async () => {
@@ -86,8 +74,7 @@ export default function ServerScreen() {
     }
     setChecking(true);
     try {
-      const ok = await checkServer(normalized);
-      if (ok) {
+      if (await checkServer(normalized)) {
         setVerified(normalized);
       } else {
         setVerified(null);
@@ -101,106 +88,128 @@ export default function ServerScreen() {
   };
 
   const save = async () => {
-    if (saving || !verified || verified !== normalized) return;
-    setSaving(true);
-    try {
-      // 저장이 실패하면 이번 실행의 주소도 바꾸지 않는다 (표시와 실제가 어긋나지 않게).
-      await AsyncStorage.setItem(API_URL_STORAGE_KEY, verified);
-    } catch {
-      setError('서버 주소를 저장하지 못했습니다.');
-      setSaving(false);
-      return;
+    if (!canSave || normalized === null) return;
+    // 주소를 바꾸면 그 서버의 토큰을 지운다 — 토큰은 발급한 서버에만 보낸다.
+    if (editing && urlChanged && editing.token) {
+      const ok = await confirmAction({
+        title: '주소를 바꿀까요?',
+        message: '주소를 바꾸면 이 서버에서 로그아웃됩니다. 새 주소에서 다시 로그인해야 합니다.',
+        confirmLabel: '바꾸기',
+      });
+      if (!ok) return;
     }
+    setSaving(true);
+    setError(null);
     try {
-      // 다른 서버로 바꿀 때는 세션을 지운다 — 지금 서버에서 받은 토큰이 새 서버로 전송되면 안 된다.
-      if (verified !== current) await logout();
-      setApiBaseUrl(verified);
-      leave();
-    } finally {
+      // 새 서버로 들어가거나 지금 서버의 주소를 바꾸면 _layout 이 스택을 비우고 그 서버로
+      // 들여보낸다. 그 밖의 수정은 목록으로 돌아간다.
+      const savedId = await saveServer({ id: editing?.id, url: normalized, label });
+      if (!editing) await switchServer(savedId);
+      else if (!(urlChanged && editing.id === activeServer.id)) router.back();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '서버를 저장하지 못했습니다.');
       setSaving(false);
     }
   };
 
-  const reset = async () => {
-    // 주소가 실제로 바뀌면 세션도 지운다 — 토큰은 발급한 서버에만 보내야 한다.
-    if (current !== DEFAULT_API_BASE_URL) await logout();
-    setApiBaseUrl(null);
+  const remove = async () => {
+    if (!editing || isDefault) return;
+    const ok = await confirmAction({
+      title: '이 서버를 목록에서 지울까요?',
+      message:
+        '이 기기에서 기억하던 주소와 로그인만 지웁니다. 서버의 계정과 저장소는 그대로 남습니다.',
+      confirmLabel: '지우기',
+      destructive: true,
+    });
+    if (!ok) return;
+    const wasActive = editing.id === activeServer.id;
     try {
-      await AsyncStorage.removeItem(API_URL_STORAGE_KEY);
-    } catch {
-      // 저장소 정리에 실패해도 이번 실행에서는 기본값이 적용된다.
+      // 지금 서버를 지우면 기본 서버로 새로 들어간다(_layout 이 이동). 아니면 목록으로.
+      await removeServer(editing.id);
+      if (!wasActive) router.back();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '서버를 지우지 못했습니다.');
     }
-    setCurrent(DEFAULT_API_BASE_URL);
-    setInput(DEFAULT_API_BASE_URL);
-    setVerified(null);
-    setError(null);
-    notify('기본 서버 주소로 되돌렸습니다.');
   };
 
   return (
     <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <Screen>
+        <Stack.Screen options={{ title: editing ? '서버 설정' : '서버 추가' }} />
         <View style={{ gap: spacing.sm }}>
-          <Title>서버 주소</Title>
+          <Title>{editing ? '서버 설정' : '서버 추가'}</Title>
           <Subtitle>
-            ListUp 서버가 다른 곳에서 돌고 있다면 여기서 주소를 바꿉니다. 모바일과 PC 가 같은 서버를
-            봐야 같은 저장소가 보입니다.
+            {editing
+              ? '목록에 보일 이름과 주소를 고칩니다.'
+              : '들어갈 ListUp 서버의 주소를 넣습니다. 초대 코드를 준 사람에게 주소를 받으세요.'}
           </Subtitle>
         </View>
 
-        <Card style={{ gap: spacing.xs }}>
-          <Caption>현재 주소</Caption>
-          {/* 웹을 서버와 같은 오리진으로 빌드하면 주소가 빈 문자열이라 말로 알려준다. */}
-          <Body style={{ fontFamily: monoFont }}>{current || '이 사이트와 같은 주소'}</Body>
-          <Caption>
-            {isDefault
-              ? '기본값을 쓰고 있습니다.'
-              : `기본값: ${DEFAULT_API_BASE_URL || '이 사이트와 같은 주소'}`}
-          </Caption>
-        </Card>
-
         <Card style={{ gap: spacing.lg }}>
-          <Field label="새 주소" hint="예: http://192.168.0.10:4000 또는 https://listup.example.com">
+          <Field label="이름" hint="비워 두면 주소가 이름 자리에 보입니다.">
             <Input
-              value={input}
-              onChangeText={onChange}
-              autoCapitalize="none"
-              autoCorrect={false}
-              keyboardType="url"
-              inputMode="url"
-              placeholder="http://"
-              onSubmitEditing={check}
+              value={label}
+              onChangeText={setLabel}
+              placeholder={isDefault ? '기본 서버' : '예: 우리집 음악서버'}
+              maxLength={60}
             />
           </Field>
 
+          {isDefault ? (
+            <View style={{ gap: spacing.xs }}>
+              <Caption>주소</Caption>
+              <Body style={{ fontFamily: monoFont }}>{describeUrl(normalized ?? '')}</Body>
+              <Caption>기본 서버는 이 앱이 정한 주소를 따라갑니다. 주소는 바꿀 수 없습니다.</Caption>
+            </View>
+          ) : (
+            <Field label="주소" hint="예: http://192.168.0.10:4000 또는 https://listup.example.com">
+              <Input
+                value={input}
+                onChangeText={onChangeUrl}
+                autoCapitalize="none"
+                autoCorrect={false}
+                keyboardType="url"
+                inputMode="url"
+                placeholder="http://"
+                onSubmitEditing={check}
+              />
+            </Field>
+          )}
+
           {error ? <ErrorNotice message={error} /> : null}
-          {canSave ? (
-            <Body style={{ color: colors.success }}>연결을 확인했습니다. 저장하면 이 주소를 씁니다.</Body>
+          {urlChanged && verified !== null && verified === normalized ? (
+            <Body style={{ color: colors.success }}>
+              {editing ? '연결을 확인했습니다.' : '연결을 확인했습니다. 저장하면 이 서버로 들어갑니다.'}
+            </Body>
           ) : null}
 
           <Row wrap>
+            {!isDefault ? (
+              <Button
+                label="연결 확인"
+                variant="secondary"
+                icon="pulse-outline"
+                onPress={check}
+                loading={checking}
+                disabled={!normalized || !urlChanged}
+              />
+            ) : null}
             <Button
-              label="연결 확인"
-              variant="secondary"
-              icon="pulse-outline"
-              onPress={check}
-              loading={checking}
-              disabled={!normalized}
+              label={editing ? '저장' : '저장하고 들어가기'}
+              icon="checkmark"
+              onPress={save}
+              loading={saving}
+              disabled={!canSave}
             />
-            <Button label="저장" icon="checkmark" onPress={save} loading={saving} disabled={!canSave} />
           </Row>
         </Card>
 
-        <Card style={{ gap: spacing.md }}>
-          <Body muted>앱에 설정된 기본 주소로 되돌립니다.</Body>
-          <Button
-            label="기본값으로"
-            variant="ghost"
-            icon="refresh-outline"
-            onPress={reset}
-            disabled={isDefault}
-          />
-        </Card>
+        {editing && !isDefault ? (
+          <Card style={{ gap: spacing.md }}>
+            <Body muted>이 기기의 서버 목록에서 지웁니다.</Body>
+            <Button label="목록에서 지우기" variant="danger" icon="trash-outline" onPress={remove} />
+          </Card>
+        ) : null}
       </Screen>
     </KeyboardAvoidingView>
   );

@@ -1,5 +1,6 @@
-import { Stack } from 'expo-router';
+import { Stack, router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
+import { useEffect } from 'react';
 import { View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { Loading } from '../src/components/ui';
@@ -11,15 +12,26 @@ import { useTheme } from '../src/theme';
  * 토큰 복원 전에 요청이 나가 401 을 받는다. 확인이 끝나면 로그인 여부에 따라
  * 보호 라우트가 들어갈 수 있는 화면을 정한다. 로그아웃 상태에서 보호 화면 주소로
  * 들어오거나 세션이 끊기면 index 로 돌아가고, index 가 로그인 화면으로 보낸다.
+ *
+ * 서버에 새로 들어가면(serverGeneration) 스택을 비우고 index 로 보낸다. 서버 목록은 늘 스택
+ * 맨 아래에서 열리므로(lib/server-list.ts) 비우면 목록만 남고, 보호 라우트와 엇갈리지 않는다.
+ * 이동을 화면이 아니라 여기서 하는 이유는, 전환하는 동안 로딩 화면을 보이느라 Stack 이
+ * 내려가 화면의 상태가 사라지기 때문이다.
  */
 function RootNavigator() {
-  const { user, loading } = useAuth();
+  const { user, loading, entering, serverGeneration } = useAuth();
   const { colors } = useTheme();
+
+  useEffect(() => {
+    if (serverGeneration === 0) return;
+    if (router.canDismiss()) router.dismissAll();
+    router.replace('/');
+  }, [serverGeneration]);
 
   if (loading) {
     return (
       <View style={{ flex: 1, justifyContent: 'center', backgroundColor: colors.bg }}>
-        <Loading label="ListUp 시작하는 중…" />
+        <Loading label={entering ? '서버에 들어가는 중…' : 'ListUp 시작하는 중…'} />
       </View>
     );
   }
@@ -36,7 +48,8 @@ function RootNavigator() {
     >
       {/* 로그인 전후 모두 접근하는 화면 */}
       <Stack.Screen name="index" options={{ headerShown: false }} />
-      <Stack.Screen name="server" options={{ title: '서버 주소' }} />
+      <Stack.Screen name="servers" options={{ title: '서버' }} />
+      <Stack.Screen name="server" options={{ title: '서버 추가' }} />
 
       {/* 로그인 전에만 */}
       <Stack.Protected guard={!user}>

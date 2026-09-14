@@ -169,14 +169,17 @@ UPDATE invites SET use_count = use_count + 1
 ```
 app/
 ├─ app/                       expo-router 라우트
-│  ├─ _layout.tsx             AuthProvider + Stack
+│  ├─ _layout.tsx             AuthProvider + Stack, 서버를 바꾸면 스택을 비우고 index 로
 │  ├─ index.tsx               저장된 토큰 확인 후 분기
+│  ├─ servers / server        서버 목록 · 서버 추가/수정 폼
 │  ├─ login / signup / join / settings / repos
 │  ├─ repo/[repoId]/          index(파일) · proposals · new-proposal · members · invites · history
 │  └─ proposal/[proposalId]   제안 상세 · 리뷰 · 병합
 └─ src/
    ├─ api/client.ts           타입이 붙은 API 래퍼, 401 시 자동 로그아웃
-   ├─ state/auth.tsx          토큰 보관(AsyncStorage) 및 복구
+   ├─ state/auth.tsx          세션 복구·로그인·서버 전환
+   ├─ state/servers.ts        서버 목록 저장(AsyncStorage)과 예전 키 이전
+   ├─ lib/server-list.ts      서버 목록을 스택 맨 아래로 열기
    ├─ lib/files.ts            플랫폼별 파일 선택/저장
    ├─ lib/dialogs.ts          웹/네이티브 확인 대화상자
    ├─ components/             공용 UI + 저장소 탭 네비게이션
@@ -196,9 +199,32 @@ app/
 
 ### 서버 주소 결정
 
+기본 주소는 이 순서로 정합니다.
+
 1. `EXPO_PUBLIC_LISTUP_API_URL`
 2. `app.json` 의 `extra.listupApiUrl`
 3. 개발 중이면 Expo 개발 서버의 호스트에서 유추 (실기기에서 `localhost` 는 기기 자신이므로)
+
+### 서버 목록
+
+계정은 서버마다 따로입니다(서버끼리는 서로 모름). 그래서 앱이 서버를 여러 개 기억하고, 서버마다
+받은 토큰을 따로 들고 있다가 고른 서버의 토큰으로 갈아 끼웁니다. 정체성을 서버 사이에 통합하지
+않기로 한 이유는 [TODO.md](../TODO.md) 의 *서버마다 계정* 절에 있습니다.
+
+- **저장** — AsyncStorage 키 `listup.servers` 하나에 `{activeId, servers: [{id, url, label,
+  token, user, lastUsedAt}]}`. 예전 키(`listup.apiUrl`·`listup.token`·`listup.user`)는 첫 실행에
+  옮기고, 새 키 저장이 성공한 뒤에만 지웁니다.
+- **기본 서버** — 늘 있고 지울 수 없습니다. 주소를 저장하지 않고 위의 기본 주소를 매번 따라갑니다.
+  개발 중 PC 의 LAN IP 가 바뀌어도, 같은 오리진 웹 빌드("이 사이트")여도 그대로 맞습니다.
+- **주소와 토큰은 짝** — `client.ts` 의 `setApiTarget(url, token)` 하나로만 바꿉니다. 따로 바꾸면
+  그 사이에 나간 요청이 한 서버의 토큰을 다른 서버로 보냅니다. 401 도 "그 요청에 쓴 서버와
+  토큰"이 지금과 같을 때만 그 서버의 세션을 지웁니다.
+- **서버 전환 = 앱을 다시 여는 것** — 연결을 먼저 확인하고(닿지 않으면 아무것도 바꾸지 않음),
+  로딩 화면을 띄운 채 토큰을 서버에 확인한 뒤, `_layout` 이 스택을 비우고 index 로 보냅니다.
+  확인 전에는 기억해 둔 사용자를 띄우지 않습니다.
+- **목록은 늘 스택 맨 아래에서 연다** — 목록을 여는 순간 지금 서버의 화면을 모두 닫습니다. 전환
+  뒤에 이전 서버의 화면(그 서버의 저장소 id 를 든 화면)을 걷어내려 하면, 로그인 상태가 바뀌며
+  보호 라우트가 화면을 걷어내는 것과 타이밍에 따라 엇갈렸기 때문입니다.
 
 ---
 

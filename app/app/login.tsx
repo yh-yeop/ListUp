@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
-import { Link, router, useFocusEffect } from 'expo-router';
-import { useCallback, useState } from 'react';
-import { KeyboardAvoidingView, Platform, View } from 'react-native';
+import { Link, router } from 'expo-router';
+import { useState } from 'react';
+import { KeyboardAvoidingView, Platform, Pressable, View } from 'react-native';
 import {
   Body,
   Button,
@@ -14,24 +14,18 @@ import {
   Title,
 } from '../src/components/ui';
 import { useAuth } from '../src/state/auth';
-import { ApiError, describeApiBaseUrl } from '../src/api/client';
+import { ApiError } from '../src/api/client';
+import { openServerList } from '../src/lib/server-list';
+import { serverTitle } from '../src/state/servers';
 import { radius, spacing, useTheme } from '../src/theme';
 
 export default function LoginScreen() {
-  const { login } = useAuth();
+  const { login, activeServer, servers } = useAuth();
   const { colors } = useTheme();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [serverUrl, setServerUrl] = useState(describeApiBaseUrl);
-
-  // 서버 주소 화면에서 돌아오면 바뀐 주소를 다시 읽는다.
-  useFocusEffect(
-    useCallback(() => {
-      setServerUrl(describeApiBaseUrl());
-    }, []),
-  );
 
   const submit = async () => {
     if (busy) return;
@@ -119,11 +113,13 @@ export default function LoginScreen() {
             }}
           >
             <Body muted style={{ fontSize: 12 }}>
-              서버: {serverUrl}
+              서버: {serverTitle(activeServer)}
             </Body>
-            <Link href="/server" style={{ color: colors.accent, fontSize: 12, fontWeight: '600' }}>
-              바꾸기
-            </Link>
+            <Pressable onPress={openServerList} accessibilityRole="link" hitSlop={8}>
+              <Body style={{ color: colors.accent, fontSize: 12, fontWeight: '600' }}>
+                {servers.length > 1 ? '다른 서버' : '바꾸기'}
+              </Body>
+            </Pressable>
           </View>
         </View>
       </Screen>
