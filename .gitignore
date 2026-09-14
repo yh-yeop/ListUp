@@ -12,3 +12,5 @@ release/
 # 네이티브 프로젝트는 app.json 에서 매번 만든다 (expo prebuild)
 android/
 ios/
+# 웹 흐름 테스트의 빌드·실패 캡처
+e2e/.cache/

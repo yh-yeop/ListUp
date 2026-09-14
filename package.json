@@ -24,6 +24,7 @@
     "release:publish": "node scripts/publish-release.mjs",
     "version:set": "node scripts/set-version.mjs",
     "test": "npm run test --workspace @listup/server",
+    "test:e2e": "node e2e/run.mjs",
     "typecheck": "npm run typecheck --workspace @listup/server && npm run typecheck --workspace @listup/app"
   },
   "engines": {
@@ -35,5 +36,8 @@
   },
   "dependencies": {
     "qrcode-terminal": "^0.12.0"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.63.0"
   }
 }

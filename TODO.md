@@ -83,6 +83,11 @@ PC 실행이 가능하다. 코드를 만지면 테스트·타입 검사를 바�
       - 확인: 클라이언트 모드 웹에 가짜 PC 저장소를 넣어 28개. **폰(`expo-secure-store`)은 새 APK 로 확인 필요.**
 - [ ] **④ PC 설치형 앱** — Electron 에 클라이언트 모드 웹 빌드를 넣는다. 고정 origin + http LAN 요청
       이 되는 띄우는 방식(커스텀 스킴)을 **먼저 시험**해야 한다.
+- [x] **앱 아이콘** — 2026-09-14. 로그인 화면 로고(파란 둥근 사각형 + 흰 folder-open)와 같은 모양.
+      `python scripts/make-icons.py` 가 앱이 쓰는 Ionicons 폰트에서 그려 `app/assets/` 에 icon(1024, 불투명)·
+      adaptive-icon(투명, 안전 원 안에 — 원·둥근 사각형 런처에서도 안 잘림, 안드로이드 13 테마 아이콘 겸용)·
+      favicon(웹 탭) 을 만든다. APK 에 적응형·단색 아이콘, 웹 빌드에 favicon.ico 가 들어간 것을 확인.
+      **올라가 있는 v1.1.0 APK 에는 아이콘이 없다** — 다음 릴리즈부터.
 - [~] **⑤ 배포** — 2026-09-14. **APK 는 GitHub 릴리즈에 올린다.** `npm run release:publish` 가 확인(깨끗한
       작업 트리·푸시됨·태그 없음·릴리즈 노트 `docs/releases/v<버전>.md`·버전 일치) → 서버 묶음·APK 빌드 →
       태그·릴리즈를 한 번에. 버전은 `npm run version:set -- <버전>` 으로 네 package.json·lock·app.json·
