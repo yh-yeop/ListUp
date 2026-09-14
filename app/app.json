@@ -2,7 +2,7 @@
   "expo": {
     "name": "ListUp",
     "slug": "listup",
-    "version": "1.1.0",
+    "version": "1.2.0",
     "icon": "./assets/icon.png",
     "orientation": "default",
     "scheme": "listup",
@@ -14,7 +14,7 @@
     },
     "android": {
       "package": "com.listup.app",
-      "versionCode": 10100,
+      "versionCode": 10200,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "monochromeImage": "./assets/adaptive-icon.png",
