@@ -500,7 +500,34 @@ function etagMatches(header: string | undefined, hash: string): boolean {
   });
 }
 
-/** blob 을 스트림으로 내려준다. 파일이 사라졌으면 404. */
+/**
+ * `Range: bytes=…` 한 구간을 [start, end] 로. 없거나 여러 구간이면 null(전체를 보낸다),
+ * 만족할 수 없으면 'unsatisfiable'. end 는 포함.
+ */
+export function parseRange(header: string | undefined, size: number): [number, number] | null | 'unsatisfiable' {
+  if (!header) return null;
+  const match = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
+  // 여러 구간(쉼표)이나 모르는 단위는 무시하고 전체를 보낸다 — RFC 9110 이 허용한다.
+  if (!match) return null;
+  const [, startText, endText] = match;
+  if (startText === '' && endText === '') return null;
+  let start: number;
+  let end: number;
+  if (startText === '') {
+    // 끝에서 n 바이트
+    const suffix = Number(endText);
+    if (suffix === 0) return 'unsatisfiable';
+    start = Math.max(0, size - suffix);
+    end = size - 1;
+  } else {
+    start = Number(startText);
+    end = endText === '' ? size - 1 : Math.min(Number(endText), size - 1);
+  }
+  if (start >= size || start > end) return 'unsatisfiable';
+  return [start, end];
+}
+
+/** blob 을 스트림으로 내려준다. 파일이 사라졌으면 404. 이어받기(Range) 한 구간을 지원한다. */
 export async function sendBlob(
   reply: FastifyReply,
   ctx: AppContext,
@@ -524,12 +551,30 @@ export async function sendBlob(
 
   reply
     .header('Content-Type', options.mimeType || DEFAULT_MIME)
-    .header('Content-Length', String(options.size))
     .header('Content-Disposition', contentDisposition(safeName, inline))
     .header('Cache-Control', cacheControl)
     .header('ETag', etag)
+    .header('Accept-Ranges', 'bytes')
     .header('X-Content-Type-Options', 'nosniff');
 
+  // 이어받기. If-Range 가 이 내용(ETag)이 아니면 그사이 파일이 바뀐 것이므로 전체를 보낸다.
+  const ifRangeHeader = req.headers['if-range'];
+  const ifRange = Array.isArray(ifRangeHeader) ? ifRangeHeader[0] : ifRangeHeader;
+  const range = ifRange && !etagMatches(ifRange, hash) ? null : parseRange(req.headers.range, options.size);
+  if (range === 'unsatisfiable') {
+    return reply.code(416).header('Content-Range', `bytes */${options.size}`).send();
+  }
+  if (range) {
+    const [start, end] = range;
+    reply
+      .code(206)
+      .header('Content-Range', `bytes ${start}-${end}/${options.size}`)
+      .header('Content-Length', String(end - start + 1));
+    if (req.method === 'HEAD') return reply.send(Readable.from([]));
+    return reply.send(ctx.blobs.createReadStream(hash, { start, end }));
+  }
+
+  reply.header('Content-Length', String(options.size));
   // HEAD 는 헤더만 필요하다 — 파일 스트림을 열지 않는다.
   // (Fastify 의 자동 HEAD 라우트는 본문이 없으면 Content-Length 를 0 으로 덮어쓰므로 빈 스트림을 준다)
   if (req.method === 'HEAD') return reply.send(Readable.from([]));

@@ -63,7 +63,7 @@ describe('여러 파일 커밋', () => {
       { path: '폴더/깊이/c.txt', blobHash: hashes[2] },
     ]);
     assert.equal(res.statusCode, 201, res.body);
-    assert.deepEqual({ ...res.json(), snapshotId: undefined }, { snapshotId: undefined, unchanged: false, added: 3, updated: 0, deleted: 0 });
+    assert.deepEqual({ ...(res.json() as Record<string, unknown>), snapshotId: undefined }, { snapshotId: undefined, unchanged: false, added: 3, updated: 0, deleted: 0 });
 
     const after = (await history()).snapshots;
     assert.equal(after.length, before + 1, '스냅샷은 하나만 생긴다');

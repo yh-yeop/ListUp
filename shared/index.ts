@@ -393,3 +393,46 @@ export interface HealthResponse {
   /** 서버 버전(package.json). 사람에게 보여주는 용도다 — 호환 판단은 apiVersion 으로 한다. */
   version: string;
 }
+
+// ---------------------------------------------------------------------------
+// 전송
+// ---------------------------------------------------------------------------
+
+/**
+ * 나눠 올리기 한 조각의 크기. 한 요청 본문이 프록시 한도(Cloudflare 100MB)를 넘지 않게 하고,
+ * 끊겼을 때 다시 보내는 양을 줄인다. 서버는 이보다 조금 큰 조각까지 받는다.
+ */
+export const UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024;
+
+/** 나눠 올리기 세션. received 가 size 에 닿으면 완료할 수 있다. */
+export interface UploadSession {
+  id: string;
+  repoId: string;
+  name: string;
+  size: number;
+  received: number;
+  chunkSize: number;
+}
+
+/** 올린 파일 내용(blob). 여러 파일 커밋·변경 제안에 hash 로 담는다. */
+export interface UploadedBlob {
+  hash: string;
+  size: number;
+  mimeType: string;
+  name: string;
+}
+
+/** 여러 파일 커밋 결과. */
+export interface CommitResult {
+  snapshotId: string | null;
+  unchanged: boolean;
+  added: number;
+  updated: number;
+  deleted: number;
+}
+
+/** 짧게 사는 다운로드 링크. url 은 서버 주소 뒤에 붙이는 경로(/api/dl?t=…)다. */
+export interface DownloadLink {
+  url: string;
+  expiresAt: number;
+}

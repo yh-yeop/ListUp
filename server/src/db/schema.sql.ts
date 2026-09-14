@@ -292,4 +292,24 @@ export const MIGRATIONS: {
       `);
     },
   },
+  {
+    // 나눠 올리기 세션. 한 요청 본문이 프록시 한도(Cloudflare 100MB)를 넘지 않게 조각으로 받고,
+    // 끊기면 받은 데까지에서 이어 간다. 서버를 다시 켜도 이어지게 DB 에 둔다.
+    // 조각은 blob 저장소의 tmp/session_<id> 에 쌓인다(lib/storage.ts).
+    version: 6,
+    up: `
+      CREATE TABLE upload_sessions (
+        id         TEXT PRIMARY KEY,
+        repo_id    TEXT NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+        user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        name       TEXT NOT NULL,
+        size       INTEGER NOT NULL,
+        received   INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE INDEX idx_upload_sessions_updated ON upload_sessions(updated_at);
+      CREATE INDEX idx_upload_sessions_user ON upload_sessions(user_id);
+    `,
+  },
 ];

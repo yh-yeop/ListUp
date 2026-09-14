@@ -14,6 +14,8 @@ import { registerRepoRoutes } from './routes/repos.ts';
 import { registerFileRoutes } from './routes/files.ts';
 import { registerInviteRoutes } from './routes/invites.ts';
 import { registerProposalRoutes } from './routes/proposals.ts';
+import { registerUploadRoutes } from './routes/uploads.ts';
+import { registerDownloadRoutes } from './routes/downloads.ts';
 
 /** 서버 버전. health 로 알려준다 — 사람이 "어느 버전 서버인지" 볼 수 있게. */
 const SERVER_VERSION = (
@@ -189,6 +191,8 @@ export async function buildApp(ctx: AppContext, options: BuildOptions = {}): Pro
     await registerFileRoutes(api, ctx);
     await registerInviteRoutes(api, ctx);
     await registerProposalRoutes(api, ctx);
+    await registerUploadRoutes(api, ctx);
+    await registerDownloadRoutes(api, ctx);
   }, { prefix: '/api' });
 
   return app;

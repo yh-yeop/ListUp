@@ -24,6 +24,8 @@ export interface GcResult {
   orphanFiles: number;
   /** 지우려다 실패한 것 (다음 번에 다시 시도한다). */
   failed: number;
+  /** 오래 멈춰 치운 나눠 올리기 세션 수. */
+  staleUploads: number;
 }
 
 interface BlobRow {
@@ -38,7 +40,8 @@ interface BlobRow {
 export async function collectGarbage(ctx: AppContext, minAgeMs: number): Promise<GcResult> {
   const { db, blobs } = ctx;
   const cutoff = Date.now() - minAgeMs;
-  const result: GcResult = { removed: 0, freedBytes: 0, orphanFiles: 0, failed: 0 };
+  const result: GcResult = { removed: 0, freedBytes: 0, orphanFiles: 0, failed: 0, staleUploads: 0 };
+  result.staleUploads = await sweepUploadSessions(ctx, cutoff);
 
   const candidates = db
     .prepare<[number], BlobRow>(
@@ -79,6 +82,36 @@ export async function collectGarbage(ctx: AppContext, minAgeMs: number): Promise
 
   result.orphanFiles = await sweepOrphanFiles(ctx, cutoff);
   return result;
+}
+
+/**
+ * 오래 멈춘 나눠 올리기 세션을 치운다 — 앱이 올리다 말고 사라진 경우. 유예 시간(cutoff) 동안 조각이
+ * 한 번도 오지 않은 세션과, 기록 없이 남은 세션 파일(저장소가 지워져 기록만 사라진 경우)을 지운다.
+ */
+async function sweepUploadSessions(ctx: AppContext, cutoff: number): Promise<number> {
+  const stale = ctx.db
+    .prepare<[number], { id: string }>(`SELECT id FROM upload_sessions WHERE updated_at < ?`)
+    .all(cutoff);
+  for (const { id } of stale) {
+    ctx.db.prepare(`DELETE FROM upload_sessions WHERE id = ?`).run(id);
+    await ctx.blobs.removeSession(id);
+  }
+  const live = new Set(
+    ctx.db.prepare<[], { id: string }>(`SELECT id FROM upload_sessions`).all().map((row) => row.id),
+  );
+  const tmp = path.join(ctx.config.blobDir, 'tmp');
+  for (const entry of readDirSafe(tmp)) {
+    if (!entry.isFile() || !entry.name.startsWith('session_')) continue;
+    const id = entry.name.slice('session_'.length);
+    if (live.has(id)) continue;
+    try {
+      if (fs.statSync(path.join(tmp, entry.name)).mtimeMs >= cutoff) continue;
+      fs.rmSync(path.join(tmp, entry.name), { force: true });
+    } catch {
+      // 방금 완료돼 옮겨 갔을 수 있다.
+    }
+  }
+  return stale.length;
 }
 
 /**

@@ -45,7 +45,7 @@ const app = await buildApp(ctx, {
 const stopGc = scheduleGc(
   ctx,
   (result) => {
-    if (result.removed > 0 || result.orphanFiles > 0 || result.failed > 0) {
+    if (result.removed > 0 || result.orphanFiles > 0 || result.failed > 0 || result.staleUploads > 0) {
       app.log.info(result, 'blob GC');
     }
   },

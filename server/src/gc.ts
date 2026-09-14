@@ -25,7 +25,7 @@ try {
   const result = await collectGarbage(ctx, minAgeMs);
   const mb = (result.freedBytes / 1024 / 1024).toFixed(1);
   console.log(
-    `blob ${result.removed}개 삭제 (${mb}MB 회수), 고아 파일 ${result.orphanFiles}개 정리` +
+    `blob ${result.removed}개 삭제 (${mb}MB 회수), 고아 파일 ${result.orphanFiles}개·멈춘 올리기 ${result.staleUploads}개 정리` +
       (result.failed > 0 ? `, 실패 ${result.failed}개(다음 실행에서 다시 시도)` : ''),
   );
 } finally {

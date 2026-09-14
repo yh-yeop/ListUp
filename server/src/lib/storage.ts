@@ -81,8 +81,13 @@ export class BlobStore {
     }
 
     const hash = hasher.digest('hex');
-    const finalPath = this.pathFor(hash);
+    await this.moveIntoPlace(tmpPath, hash, size);
+    return { hash, size };
+  }
 
+  /** 다 받은 임시 파일을 콘텐츠 주소 자리로 옮긴다. 실패하면 임시 파일을 지운다. */
+  private async moveIntoPlace(tmpPath: string, hash: string, size: number): Promise<void> {
+    const finalPath = this.pathFor(hash);
     try {
       await fsp.mkdir(path.dirname(finalPath), { recursive: true });
       // 이미 존재하면 내용이 같으므로 굳이 덮어쓰지 않는다.
@@ -97,8 +102,63 @@ export class BlobStore {
       await fsp.rm(tmpPath, { force: true });
       throw err;
     }
+  }
 
+  // -------------------------------------------------------------------------
+  // 나눠 올리기 세션 — 조각을 임시 파일(tmp/session_<id>)에 이어 붙이고, 다 받으면 해시를 구해 옮긴다.
+  // -------------------------------------------------------------------------
+
+  private sessionPath(id: string): string {
+    return path.join(this.tmpDir, `session_${id}`);
+  }
+
+  /** 빈 세션 파일을 만든다. */
+  async createSession(id: string): Promise<void> {
+    await fsp.mkdir(this.tmpDir, { recursive: true });
+    await fsp.writeFile(this.sessionPath(id), '');
+  }
+
+  /**
+   * offset 에서부터 조각을 이어 붙이고 새 길이를 돌려준다. 받기 전에 파일을 offset 으로 잘라,
+   * 앞선 요청이 쓰다가 끊겨 남긴 꼬리가 섞이지 않게 한다. maxBytes 를 넘으면 413.
+   */
+  async appendChunk(id: string, offset: number, stream: Readable, maxBytes: number): Promise<number> {
+    const filePath = this.sessionPath(id);
+    await fsp.truncate(filePath, offset);
+    let received = 0;
+    const counter = async function* (source: AsyncIterable<Buffer>) {
+      for await (const chunk of source) {
+        received += chunk.length;
+        if (received > maxBytes) throw tooLarge('조각이 너무 큽니다.');
+        yield chunk;
+      }
+    };
+    try {
+      await pipeline(stream, counter, fs.createWriteStream(filePath, { flags: 'r+', start: offset, flush: true }));
+    } catch (err) {
+      // 반쯤 쓴 조각은 버린다 — 다음 요청이 같은 offset 에서 다시 보낸다.
+      await fsp.truncate(filePath, offset).catch(() => {});
+      throw err;
+    }
+    return offset + received;
+  }
+
+  /** 세션 파일의 해시를 구해 콘텐츠 주소 자리로 옮긴다. */
+  async completeSession(id: string, size: number): Promise<StoredBlob> {
+    const filePath = this.sessionPath(id);
+    const stat = await fsp.stat(filePath);
+    if (stat.size !== size) throw new Error(`세션 파일 크기가 기록과 다릅니다 (${stat.size} ≠ ${size}).`);
+    const hasher = createHash('sha256');
+    await pipeline(fs.createReadStream(filePath), async function* (source: AsyncIterable<Buffer>) {
+      for await (const chunk of source) hasher.update(chunk);
+    });
+    const hash = hasher.digest('hex');
+    await this.moveIntoPlace(filePath, hash, size);
     return { hash, size };
+  }
+
+  async removeSession(id: string): Promise<void> {
+    await fsp.rm(this.sessionPath(id), { force: true });
   }
 
   async writeBuffer(buffer: Buffer): Promise<StoredBlob> {
@@ -111,8 +171,9 @@ export class BlobStore {
     return { hash, size: buffer.length };
   }
 
-  createReadStream(hash: string): fs.ReadStream {
-    return fs.createReadStream(this.pathFor(hash));
+  /** range 를 주면 그 구간만(end 포함). */
+  createReadStream(hash: string, range?: { start: number; end: number }): fs.ReadStream {
+    return fs.createReadStream(this.pathFor(hash), range);
   }
 
   async read(hash: string): Promise<Buffer> {
