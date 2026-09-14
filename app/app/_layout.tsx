@@ -4,6 +4,7 @@ import { useEffect } from 'react';
 import { View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { Loading } from '../src/components/ui';
+import { suggestUpdateOnce } from '../src/lib/updates';
 import { AuthProvider, useAuth } from '../src/state/auth';
 import { useTheme } from '../src/theme';
 
@@ -21,6 +22,11 @@ import { useTheme } from '../src/theme';
 function RootNavigator() {
   const { user, loading, entering, serverGeneration } = useAuth();
   const { colors } = useTheme();
+
+  // 설치형 클라이언트는 앱을 열 때 새 버전이 있는지 보고, 있으면 한 번 제안한다.
+  useEffect(() => {
+    if (!loading) void suggestUpdateOnce();
+  }, [loading]);
 
   useEffect(() => {
     if (serverGeneration === 0) return;

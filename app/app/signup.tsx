@@ -3,6 +3,8 @@ import { useState } from 'react';
 import { KeyboardAvoidingView, Platform, View } from 'react-native';
 import { Button, Card, ErrorNotice, Field, Input, Screen, Subtitle, Title } from '../src/components/ui';
 import { ApiError } from '../src/api/client';
+import { RememberLogin } from '../src/components/RememberLogin';
+import { credentialsSupported } from '../src/lib/credentials';
 import { useAuth } from '../src/state/auth';
 import { spacing } from '../src/theme';
 
@@ -13,6 +15,7 @@ export default function SignupScreen() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [remember, setRemember] = useState(credentialsSupported);
 
   const submit = async () => {
     if (busy) return;
@@ -25,7 +28,7 @@ export default function SignupScreen() {
 
     setBusy(true);
     try {
-      await signup(email.trim(), password, displayName.trim());
+      await signup(email.trim(), password, displayName.trim(), { remember });
       // index 가 저장소 목록으로 보낸다. 로그인·가입 화면은 스택에 남지 않는다.
       router.replace('/');
     } catch (err) {
@@ -72,6 +75,8 @@ export default function SignupScreen() {
               onSubmitEditing={submit}
             />
           </Field>
+
+          <RememberLogin value={remember} onChange={setRemember} />
 
           {error ? <ErrorNotice message={error} /> : null}
 

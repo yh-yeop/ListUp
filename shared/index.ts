@@ -368,3 +368,28 @@ export type ApiErrorCode =
 export interface ApiErrorBody {
   error: { code: ApiErrorCode; message: string; details?: unknown };
 }
+
+// ---------------------------------------------------------------------------
+// 버전
+// ---------------------------------------------------------------------------
+
+/**
+ * API 호환 버전. 서버와 앱이 서로 알아듣지 못하게 바뀔 때만 올린다 — 필드를 더하는 것처럼
+ * 옛 상대가 무시하면 되는 변경에는 올리지 않는다.
+ *
+ * 서버가 웹을 서빙하던 때는 서버와 앱이 늘 같은 버전이었다. 설치형 클라이언트는 서버와 따로
+ * 업데이트되므로, 서버에 들어가기 전에 이 값을 견준다. 이 필드가 없는 서버(1.0.0)는 1 이다.
+ */
+export const API_VERSION = 1;
+
+/** GET /api/health 응답. 로그인 없이 부를 수 있다. */
+export interface HealthResponse {
+  ok: true;
+  time: number;
+  /** 파일 하나의 업로드 한도(바이트). 앱이 업로드 전에 검사하는 데 쓴다. */
+  maxUploadBytes: number;
+  /** 이 서버가 말하는 API_VERSION. */
+  apiVersion: number;
+  /** 서버 버전(package.json). 사람에게 보여주는 용도다 — 호환 판단은 apiVersion 으로 한다. */
+  version: string;
+}

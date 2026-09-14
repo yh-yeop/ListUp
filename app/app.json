@@ -2,7 +2,7 @@
   "expo": {
     "name": "ListUp",
     "slug": "listup",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "orientation": "default",
     "scheme": "listup",
     "userInterfaceStyle": "automatic",
@@ -13,7 +13,7 @@
     },
     "android": {
       "package": "com.listup.app",
-      "edgeToEdgeEnabled": true
+      "versionCode": 10100
     },
     "web": {
       "bundler": "metro",
@@ -25,12 +25,24 @@
       "themeColor": "#f6f7f9",
       "backgroundColor": "#f6f7f9"
     },
-    "plugins": ["expo-router"],
+    "plugins": [
+      "expo-router",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ],
+      "expo-secure-store"
+    ],
     "experiments": {
       "typedRoutes": false
     },
     "extra": {
-      "listupApiUrl": "http://localhost:4000"
+      "listupApiUrl": "http://localhost:4000",
+      "updateRepo": "yh-yeop/ListUp"
     }
   }
 }

@@ -9,3 +9,6 @@ web-build/
 .DS_Store
 *.log
 release/
+# 네이티브 프로젝트는 app.json 에서 매번 만든다 (expo prebuild)
+android/
+ios/

@@ -1,6 +1,6 @@
 {
   "name": "listup",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "license": "AGPL-3.0-only",
   "description": "초대코드로 참여하는 파일 공유 협업 플랫폼 (모바일/PC 크로스플랫폼)",
@@ -14,12 +14,15 @@
     "start": "npm run start --workspace @listup/server",
     "app": "node scripts/start-app.mjs",
     "build:web": "npm run build:web --workspace @listup/app",
+    "build:android": "node scripts/build-android.mjs",
     "backup": "npm run backup --workspace @listup/server --",
     "gc": "npm run gc --workspace @listup/server --",
     "sync": "node scripts/sync-folder.mjs",
     "serve": "node scripts/serve.mjs",
     "tunnel": "node scripts/tunnel.mjs",
     "release": "node scripts/release.mjs",
+    "release:publish": "node scripts/publish-release.mjs",
+    "version:set": "node scripts/set-version.mjs",
     "test": "npm run test --workspace @listup/server",
     "typecheck": "npm run typecheck --workspace @listup/server && npm run typecheck --workspace @listup/app"
   },

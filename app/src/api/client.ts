@@ -43,20 +43,29 @@ function resolveBaseUrl(): string {
 
 export const DEFAULT_API_BASE_URL = resolveBaseUrl();
 
-let apiBaseUrl = DEFAULT_API_BASE_URL;
-let authToken: string | null = null;
+/**
+ * 설치형 클라이언트로 빌드됐는지.
+ *
+ * 설치형에는 "이 앱을 준 서버"가 없다 — 서버가 꺼져 있어도 켜지고, 서버 목록에서 들어갈 서버를
+ * 고른다. 그래서 기본 서버를 두지 않는다.
+ *   - 릴리스 네이티브 빌드 (APK)
+ *   - EXPO_PUBLIC_LISTUP_CLIENT=1 로 만든 웹 빌드 (PC 앱)
+ * 서버가 서빙하는 웹과 개발 중(Expo Go)은 서버 모드다 — 기본 주소가 뜻이 있다.
+ */
+export const IS_CLIENT_BUILD =
+  process.env.EXPO_PUBLIC_LISTUP_CLIENT === '1' || (Platform.OS !== 'web' && !__DEV__);
 
-export function getApiBaseUrl(): string {
-  return apiBaseUrl;
-}
+/** 요청을 보낼 서버. null 이면 아직 고른 서버가 없다(클라이언트 모드). */
+let apiBaseUrl: string | null = IS_CLIENT_BUILD ? null : DEFAULT_API_BASE_URL;
+let authToken: string | null = null;
 
 /**
  * 요청을 보낼 서버와 그 서버에서 받은 토큰을 함께 바꾼다.
  * 주소와 토큰은 짝이다 — 따로 바꾸면 그 사이에 나간 요청이 한 서버의 토큰을 다른 서버로
  * 보낸다. 그래서 둘을 바꾸는 길은 이 함수 하나뿐이고, 동기 함수라 중간에 끼어들 틈이 없다.
  */
-export function setApiTarget(url: string, token: string | null): void {
-  const nextUrl = url.replace(/\/+$/, '');
+export function setApiTarget(url: string | null, token: string | null): void {
+  const nextUrl = url === null ? null : url.replace(/\/+$/, '');
   // 업로드 한도는 서버마다 다르므로 주소가 바뀌면 다시 받아온다.
   if (nextUrl !== apiBaseUrl) maxUploadBytesCache = null;
   apiBaseUrl = nextUrl;
@@ -128,6 +137,9 @@ interface RequestOptions {
 const REQUEST_TIMEOUT_MS = 30_000;
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  if (apiBaseUrl === null) {
+    throw new ApiError(0, 'internal', '들어갈 서버를 먼저 골라 주세요.');
+  }
   const headers: Record<string, string> = { ...authHeaders() };
   let body: BodyInit | undefined;
 
@@ -337,13 +349,13 @@ export const api = {
     const params = new URLSearchParams({ path });
     if (options.snapshotId) params.set('snapshot', options.snapshotId);
     if (options.inline) params.set('inline', '1');
-    return `${apiBaseUrl}/api/repos/${repoId}/raw?${params.toString()}`;
+    return `${apiBaseUrl ?? ''}/api/repos/${repoId}/raw?${params.toString()}`;
   },
 
   proposalFileUrl: (proposalId: string, path: string, inline = false) => {
     const params = new URLSearchParams({ path });
     if (inline) params.set('inline', '1');
-    return `${apiBaseUrl}/api/proposals/${proposalId}/raw?${params.toString()}`;
+    return `${apiBaseUrl ?? ''}/api/proposals/${proposalId}/raw?${params.toString()}`;
   },
 
   // 초대 ------------------------------------------------------------------

@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import type { TreeListing } from '@listup/shared';
-import { MAX_NAME_LENGTH } from '@listup/shared';
+import { API_VERSION, MAX_NAME_LENGTH } from '@listup/shared';
 import {
   auth,
   createHarness,
@@ -302,5 +302,27 @@ describe('웹 정적 서빙', () => {
     }
     const api = await h.app.inject({ method: 'GET', url: '/api/health' });
     assert.equal(api.headers['x-frame-options'], undefined);
+  });
+});
+
+describe('서버 상태', () => {
+  let h: Harness;
+
+  before(async () => {
+    h = await createHarness();
+  });
+  after(async () => {
+    await h.close();
+  });
+
+  it('health 는 로그인 없이 API 버전과 서버 버전을 알려준다', async () => {
+    const res = await h.app.inject({ method: 'GET', url: '/api/health' });
+    assert.equal(res.statusCode, 200);
+    const body = res.json();
+    assert.equal(body.ok, true);
+    // 설치형 클라이언트가 이 값으로 들어갈 수 있는지 정한다.
+    assert.equal(body.apiVersion, API_VERSION);
+    const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+    assert.equal(body.version, pkg.version);
   });
 });

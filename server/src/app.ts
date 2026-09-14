@@ -1,10 +1,10 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
 import Fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastify';
-import type { ApiErrorBody } from '@listup/shared';
+import { API_VERSION, type ApiErrorBody, type HealthResponse } from '@listup/shared';
 import type { AppContext } from './context.ts';
 import { ApiError } from './lib/errors.ts';
 import { verifyToken } from './lib/auth.ts';
@@ -14,6 +14,11 @@ import { registerRepoRoutes } from './routes/repos.ts';
 import { registerFileRoutes } from './routes/files.ts';
 import { registerInviteRoutes } from './routes/invites.ts';
 import { registerProposalRoutes } from './routes/proposals.ts';
+
+/** 서버 버전. health 로 알려준다 — 사람이 "어느 버전 서버인지" 볼 수 있게. */
+const SERVER_VERSION = (
+  JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string }
+).version;
 
 export interface BuildOptions {
   logger?: boolean | FastifyServerOptions['logger'];
@@ -168,11 +173,14 @@ export async function buildApp(ctx: AppContext, options: BuildOptions = {}): Pro
     } satisfies ApiErrorBody);
   });
 
-  app.get('/api/health', async () => ({
+  app.get('/api/health', async (): Promise<HealthResponse> => ({
     ok: true,
     time: Date.now(),
     // 앱이 업로드 사전 검사에 쓰는 값. 서버 설정(LISTUP_MAX_UPLOAD_MB)을 따른다.
     maxUploadBytes: ctx.config.maxUploadBytes,
+    // 설치형 클라이언트가 들어오기 전에 견주는 값.
+    apiVersion: API_VERSION,
+    version: SERVER_VERSION,
   }));
 
   await app.register(async (api) => {

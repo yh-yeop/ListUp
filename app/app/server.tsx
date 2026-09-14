@@ -15,9 +15,11 @@ import {
   Title,
 } from '../src/components/ui';
 import { confirmAction } from '../src/lib/dialogs';
+import { openReleasePage, updateChecksEnabled } from '../src/lib/updates';
 import { useAuth } from '../src/state/auth';
 import {
   checkServer,
+  describeCheck,
   describeUrl,
   isDefaultServer,
   normalizeServerUrl,
@@ -74,14 +76,13 @@ export default function ServerFormScreen() {
     }
     setChecking(true);
     try {
-      if (await checkServer(normalized)) {
-        setVerified(normalized);
-      } else {
-        setVerified(null);
-        setError(
-          `${normalized} 에서 ListUp 서버 응답을 받지 못했습니다.\n주소와 서버 상태를 확인해 주세요.`,
-        );
-      }
+      // 닿지 않거나 API 버전이 다르면 저장하지 못하게 한다.
+      const result = await checkServer(normalized);
+      const problem = describeCheck(result, normalized);
+      setVerified(problem ? null : normalized);
+      setError(problem);
+      // 앱이 이 서버보다 오래됐다 — 업데이트가 꼭 필요하므로 릴리즈 페이지를 바로 연다.
+      if (result.status === 'app-older' && updateChecksEnabled()) void openReleasePage();
     } finally {
       setChecking(false);
     }
@@ -105,7 +106,7 @@ export default function ServerFormScreen() {
       // 들여보낸다. 그 밖의 수정은 목록으로 돌아간다.
       const savedId = await saveServer({ id: editing?.id, url: normalized, label });
       if (!editing) await switchServer(savedId);
-      else if (!(urlChanged && editing.id === activeServer.id)) router.back();
+      else if (!(urlChanged && editing.id === activeServer?.id)) router.back();
     } catch (err) {
       setError(err instanceof Error ? err.message : '서버를 저장하지 못했습니다.');
       setSaving(false);
@@ -122,7 +123,7 @@ export default function ServerFormScreen() {
       destructive: true,
     });
     if (!ok) return;
-    const wasActive = editing.id === activeServer.id;
+    const wasActive = editing.id === activeServer?.id;
     try {
       // 지금 서버를 지우면 기본 서버로 새로 들어간다(_layout 이 이동). 아니면 목록으로.
       await removeServer(editing.id);

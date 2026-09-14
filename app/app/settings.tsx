@@ -1,7 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
-import Constants from 'expo-constants';
 import { Link } from 'expo-router';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Pressable, View } from 'react-native';
 import {
   Body,
@@ -17,15 +16,20 @@ import {
   Title,
 } from '../src/components/ui';
 import { ApiError } from '../src/api/client';
+import { credentialsSupported, loadLogin, removeLogin } from '../src/lib/credentials';
+import {
+  APP_VERSION,
+  SOURCE_URL,
+  checkForUpdate,
+  openReleasePage,
+  type LatestRelease,
+} from '../src/lib/updates';
 import { confirmAction, notify } from '../src/lib/dialogs';
 import { useAuth } from '../src/state/auth';
 import { openServerList } from '../src/lib/server-list';
 import { serverTitle } from '../src/state/servers';
 import { fontSize, spacing, useTheme } from '../src/theme';
 
-/** AGPL-3.0 §13 을 지키려면 이 주소가 실제로 소스를 받을 수 있는 곳이어야 한다. */
-const SOURCE_URL = 'https://github.com/yh-yeop/ListUp';
-const APP_VERSION = (Constants.expoConfig?.version as string | undefined) ?? '';
 
 export default function SettingsScreen() {
   const { user, updateProfile, logout, changePassword, activeServer } = useAuth();
@@ -36,6 +40,45 @@ export default function SettingsScreen() {
   const [error, setError] = useState<string | null>(null);
   const [savingName, setSavingName] = useState(false);
   const [savingPassword, setSavingPassword] = useState(false);
+  const [hasSavedLogin, setHasSavedLogin] = useState(false);
+  const [update, setUpdate] = useState<LatestRelease | null>(null);
+
+  // 새 버전이 있으면 받을 수 있게 보여 준다(설치형 클라이언트만 확인한다).
+  useEffect(() => {
+    let cancelled = false;
+    void checkForUpdate().then((latest) => {
+      if (!cancelled) setUpdate(latest);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const activeId = activeServer?.id;
+  useEffect(() => {
+    if (!activeId || !credentialsSupported()) return;
+    let cancelled = false;
+    void loadLogin(activeId).then((saved) => {
+      if (!cancelled) setHasSavedLogin(saved !== null);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeId]);
+
+  const forgetLogin = async () => {
+    if (!activeId) return;
+    const ok = await confirmAction({
+      title: '저장된 로그인 정보를 지울까요?',
+      message: '이 서버에 저장한 이메일과 비밀번호를 이 기기에서 지웁니다. 지금 로그인은 그대로입니다.',
+      confirmLabel: '지우기',
+      destructive: true,
+    });
+    if (!ok) return;
+    await removeLogin(activeId);
+    setHasSavedLogin(false);
+    notify('저장된 로그인 정보를 지웠습니다.');
+  };
 
   const saveName = async () => {
     setError(null);
@@ -141,7 +184,7 @@ export default function SettingsScreen() {
             <Caption>서버</Caption>
             <Row gap={spacing.xs} style={{ flexShrink: 1 }}>
               <Caption numberOfLines={1} style={{ flexShrink: 1 }}>
-                {serverTitle(activeServer)}
+                {activeServer ? serverTitle(activeServer) : ''}
               </Caption>
               <Ionicons name="chevron-forward" size={14} color={colors.textFaint} />
             </Row>
@@ -162,6 +205,25 @@ export default function SettingsScreen() {
             소스 코드
           </Link>
         </Row>
+
+        {update ? (
+          <Button
+            label={`새 버전 v${update.version} 받기`}
+            icon="download-outline"
+            onPress={() => void openReleasePage(update.url)}
+            full
+          />
+        ) : null}
+
+        {hasSavedLogin ? (
+          <Button
+            label="저장된 로그인 정보 지우기"
+            variant="ghost"
+            icon="key-outline"
+            onPress={forgetLogin}
+            full
+          />
+        ) : null}
 
         <Button label="로그아웃" variant="danger" icon="log-out-outline" onPress={signOut} full />
       </Card>

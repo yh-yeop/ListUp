@@ -34,6 +34,24 @@ Authorization: Bearer <token>
 
 ---
 
+## 서버 상태
+
+| 메서드 | 경로 | 설명 |
+| --- | --- | --- |
+| GET | `/health` | 로그인 없이. `{ok, time, maxUploadBytes, apiVersion, version}` |
+
+```json
+{ "ok": true, "time": 1789355589634, "maxUploadBytes": 104857600, "apiVersion": 1, "version": "1.0.0" }
+```
+
+- **`apiVersion`** — API 호환 버전(`shared` 의 `API_VERSION`). 서버와 앱이 서로 알아듣지 못하게
+  바뀔 때만 올립니다. 설치형 클라이언트는 서버와 따로 업데이트되므로, 들어가기 전에 이 값을 자기
+  값과 견주고 다르면 들어가지 않습니다. **이 필드가 없는 서버(1.0.0)는 `1` 로 봅니다.**
+- `version` — 서버 버전(`server/package.json`). 사람에게 보여주는 용도이고 호환 판단에는 쓰지 않습니다.
+- `maxUploadBytes` — 파일 하나의 업로드 한도. 앱이 올리기 전에 검사합니다.
+
+---
+
 ## 인증
 
 | 메서드 | 경로 | 설명 |
