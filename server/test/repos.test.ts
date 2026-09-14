@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import type { TreeListing } from '@listup/shared';
-import { API_VERSION, MAX_NAME_LENGTH } from '@listup/shared';
+import { API_LEVEL, API_VERSION, MAX_NAME_LENGTH } from '@listup/shared';
 import {
   auth,
   createHarness,
@@ -322,6 +322,7 @@ describe('서버 상태', () => {
     assert.equal(body.ok, true);
     // 설치형 클라이언트가 이 값으로 들어갈 수 있는지 정한다.
     assert.equal(body.apiVersion, API_VERSION);
+    assert.equal(body.apiLevel, API_LEVEL);
     const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
     assert.equal(body.version, pkg.version);
   });

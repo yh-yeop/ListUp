@@ -214,8 +214,9 @@ try {
   const C = await startStatic(clientWeb, leaks);
   const NEWER = await startMockHealth({ ok: true, time: 0, maxUploadBytes: 1, apiVersion: 2, version: '9.0.0' });
   const LEGACY = await startMockHealth({ ok: true, time: 0, maxUploadBytes: 1 });
+  const V110 = await startMockHealth({ ok: true, time: 0, maxUploadBytes: 1, apiVersion: 1, version: '1.1.0' });
   const OLDER = await startMockHealth({ ok: true, time: 0, maxUploadBytes: 1, apiVersion: 0, version: '0.9.0' });
-  stops.push(C.stop, NEWER.stop, LEGACY.stop, OLDER.stop);
+  stops.push(C.stop, NEWER.stop, LEGACY.stop, V110.stop, OLDER.stop);
   const DEAD = `http://localhost:${await freePort()}`;
 
   const channel = process.env.E2E_BROWSER_CHANNEL ?? (process.platform === 'win32' ? 'msedge' : undefined);
@@ -275,6 +276,7 @@ try {
       C: C.url,
       NEWER: NEWER.url,
       LEGACY: LEGACY.url,
+      V110: V110.url,
       OLDER: OLDER.url,
       DEAD,
       leaks,

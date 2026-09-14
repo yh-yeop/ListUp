@@ -382,6 +382,21 @@ export interface ApiErrorBody {
  */
 export const API_VERSION = 1;
 
+/**
+ * API 기능 수준. **호환은 깨지 않고** 기능을 더할 때 올린다 — 옛 앱은 이 값을 모르고 그대로 쓴다.
+ * 새 앱이 새 기능에 기대게 되면 {@link REQUIRED_SERVER_API_LEVEL} 을 함께 올려, 그 기능이 없는
+ * 서버에는 들어가지 않는다. 이 필드가 없는 서버(1.1.0 까지)는 1 이다.
+ *
+ * - 2 (1.2.0): 나눠 올리기, 여러 파일 커밋, 다운로드 링크·폴더 zip, Range, 비밀번호 재설정
+ *
+ * API_VERSION 을 올리지 않은 이유: 옛 앱(1.1.0)은 API_VERSION 이 같아야만 들어가서, 올리면 멀쩡히
+ * 쓸 수 있는 새 서버에서 옛 앱이 모두 막힌다.
+ */
+export const API_LEVEL = 2;
+
+/** 이 앱이 쓰는 기능이 있는 가장 낮은 서버 API_LEVEL. 앱의 업로드·내려받기가 수준 2 를 쓴다. */
+export const REQUIRED_SERVER_API_LEVEL = 2;
+
 /** GET /api/health 응답. 로그인 없이 부를 수 있다. */
 export interface HealthResponse {
   ok: true;
@@ -390,6 +405,8 @@ export interface HealthResponse {
   maxUploadBytes: number;
   /** 이 서버가 말하는 API_VERSION. */
   apiVersion: number;
+  /** 이 서버의 API_LEVEL. */
+  apiLevel: number;
   /** 서버 버전(package.json). 사람에게 보여주는 용도다 — 호환 판단은 apiVersion 으로 한다. */
   version: string;
 }

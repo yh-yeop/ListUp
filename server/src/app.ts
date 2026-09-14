@@ -4,7 +4,7 @@ import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
 import Fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastify';
-import { API_VERSION, type ApiErrorBody, type HealthResponse } from '@listup/shared';
+import { API_LEVEL, API_VERSION, type ApiErrorBody, type HealthResponse } from '@listup/shared';
 import type { AppContext } from './context.ts';
 import { ApiError } from './lib/errors.ts';
 import { verifyToken } from './lib/auth.ts';
@@ -182,6 +182,7 @@ export async function buildApp(ctx: AppContext, options: BuildOptions = {}): Pro
     maxUploadBytes: ctx.config.maxUploadBytes,
     // 설치형 클라이언트가 들어오기 전에 견주는 값.
     apiVersion: API_VERSION,
+    apiLevel: API_LEVEL,
     version: SERVER_VERSION,
   }));
 

@@ -3,7 +3,7 @@ import { screen } from '../lib.mjs';
 export const title = '버전 확인 — API 버전이 다른 서버';
 
 export default async function run(t, env) {
-  const { C, A, NEWER, LEGACY, OLDER, DEAD } = env;
+  const { C, A, NEWER, LEGACY, V110, OLDER, DEAD } = env;
   const ctx = await env.newContext();
   const page = await ctx.newPage();
   const s = screen(page);
@@ -31,9 +31,14 @@ export default async function run(t, env) {
   r = await checkInForm(OLDER);
   t.must(r.text.includes('이 서버 (v0.9.0)는 앱보다 오래된 버전이라 들어갈 수 없습니다'), '옛 서버: "서버 업데이트" 안내');
   t.must(r.saveDisabled, '옛 서버: 저장 막힘');
+  // 1.0.0·1.1.0 서버는 API 버전은 같지만 나눠 올리기·다운로드 링크(apiLevel 2)가 없다.
   r = await checkInForm(LEGACY);
-  t.must(r.text.includes('연결을 확인했습니다'), 'apiVersion 없는 1.0.0 서버: 호환으로 봄');
-  t.must(!r.saveDisabled, '1.0.0 서버: 저장 가능');
+  t.must(r.text.includes('는 앱보다 오래된 버전이라 들어갈 수 없습니다'), '필드 없는 1.0.0 서버: 서버가 오래됨');
+  t.must(r.saveDisabled, '1.0.0 서버: 저장 막힘');
+  r = await checkInForm(V110);
+  t.must(r.text.includes('이 서버 (v1.1.0)는 앱보다 오래된 버전이라'), 'apiLevel 없는 1.1.0 서버: 서버가 오래됨');
+  r = await checkInForm(A);
+  t.must(r.text.includes('연결을 확인했습니다') && !r.saveDisabled, '지금 서버: 들어갈 수 있음');
 
   // 목록을 열면 서버마다 상태를 확인해 배지로
   await page.evaluate(

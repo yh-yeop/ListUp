@@ -1,5 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { API_VERSION, type HealthResponse, type User } from '@listup/shared';
+import { API_VERSION, REQUIRED_SERVER_API_LEVEL, type HealthResponse, type User } from '@listup/shared';
 import { DEFAULT_API_BASE_URL, IS_CLIENT_BUILD } from '../api/client';
 
 /**
@@ -109,7 +109,7 @@ export function normalizeServerUrl(raw: string): string | null {
  * 연결 확인 결과.
  * - ok: 들어갈 수 있다
  * - unreachable: ListUp 서버 응답을 받지 못했다 (꺼짐, 주소 틀림, ListUp 이 아님)
- * - server-older / app-older: 닿았지만 API 버전이 달라 들어갈 수 없다
+ * - server-older / app-older: 닿았지만 API 버전이 달라, 또는 서버에 이 앱이 쓰는 기능이 없어 들어갈 수 없다
  */
 export type ServerCheck =
   | { status: 'ok'; version: string | null }
@@ -133,6 +133,9 @@ export async function checkServer(url: string): Promise<ServerCheck> {
     const apiVersion = typeof body.apiVersion === 'number' ? body.apiVersion : 1;
     if (apiVersion < API_VERSION) return { status: 'server-older', version };
     if (apiVersion > API_VERSION) return { status: 'app-older', version };
+    // apiLevel 이 없는 서버(1.1.0 까지)는 나눠 올리기·다운로드 링크가 없어 이 앱으로는 파일을 주고받지 못한다.
+    const apiLevel = typeof body.apiLevel === 'number' ? body.apiLevel : 1;
+    if (apiLevel < REQUIRED_SERVER_API_LEVEL) return { status: 'server-older', version };
     return { status: 'ok', version };
   } catch {
     return { status: 'unreachable' };
