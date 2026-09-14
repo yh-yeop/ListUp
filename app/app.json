@@ -3,6 +3,7 @@
     "name": "ListUp",
     "slug": "listup",
     "version": "1.1.0",
+    "icon": "./assets/icon.png",
     "orientation": "default",
     "scheme": "listup",
     "userInterfaceStyle": "automatic",
@@ -13,7 +14,12 @@
     },
     "android": {
       "package": "com.listup.app",
-      "versionCode": 10100
+      "versionCode": 10100,
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "monochromeImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#2f6df6"
+      }
     },
     "web": {
       "bundler": "metro",
@@ -23,7 +29,8 @@
       "lang": "ko",
       "description": "팀과 함께 파일을 모으고 변경 제안으로 검토하는 저장소",
       "themeColor": "#f6f7f9",
-      "backgroundColor": "#f6f7f9"
+      "backgroundColor": "#f6f7f9",
+      "favicon": "./assets/favicon.png"
     },
     "plugins": [
       "expo-router",
