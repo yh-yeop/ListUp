@@ -36,7 +36,7 @@ describe('참조되지 않는 blob 정리', () => {
 
     const keepHash = (
       h.ctx.db
-        .prepare<[], { blob_hash: string }>(`SELECT blob_hash FROM snapshot_entries LIMIT 1`)
+        .prepare<[], { blob_hash: string }>(`SELECT blob_hash FROM repo_files LIMIT 1`)
         .get()!
     ).blob_hash;
 
@@ -95,7 +95,7 @@ describe('참조되지 않는 blob 정리', () => {
     await uploadFile(h.app, user, repoId, 'gone.txt', '저장소와 함께 사라질 내용');
     const hash = (
       h.ctx.db
-        .prepare<[], { blob_hash: string }>(`SELECT blob_hash FROM snapshot_entries LIMIT 1`)
+        .prepare<[], { blob_hash: string }>(`SELECT blob_hash FROM repo_files LIMIT 1`)
         .get()!
     ).blob_hash;
 
@@ -132,7 +132,7 @@ describe('참조되지 않는 blob 정리', () => {
 
     // 정상 파일은 그대로다.
     const kept = h.ctx.db
-      .prepare<[], { blob_hash: string }>(`SELECT blob_hash FROM snapshot_entries LIMIT 1`)
+      .prepare<[], { blob_hash: string }>(`SELECT blob_hash FROM repo_files LIMIT 1`)
       .get()!;
     assert.ok(await h.ctx.blobs.has(kept.blob_hash));
   });

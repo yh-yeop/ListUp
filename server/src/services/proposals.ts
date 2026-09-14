@@ -120,13 +120,13 @@ export function blobBelongsToRepo(db: Db, repoId: string, hash: string): boolean
     .get(repoId, hash);
   if (uploaded) return true;
   const referenced = db
-    .prepare<[string, string], { ok: number }>(
+    .prepare<[string, string, string], { ok: number }>(
       `SELECT 1 AS ok
-         FROM snapshot_entries e JOIN snapshots s ON s.id = e.snapshot_id
-        WHERE s.repo_id = ? AND e.blob_hash = ?
+         FROM snapshot_changes c JOIN snapshots s ON s.id = c.snapshot_id
+        WHERE s.repo_id = ? AND (c.blob_hash = ? OR c.prev_blob_hash = ?)
         LIMIT 1`,
     )
-    .get(repoId, hash);
+    .get(repoId, hash, hash);
   return referenced !== undefined;
 }
 

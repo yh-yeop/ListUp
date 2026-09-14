@@ -11,12 +11,13 @@ import type { Config } from '../config.ts';
 import type { AppContext } from '../context.ts';
 import { badRequest, conflict, notFound, tooLarge } from '../lib/errors.ts';
 import { DEFAULT_MIME, isInlineSafe, mimeForPath } from '../lib/mime.ts';
-import { body, queryString, requireUser, requiredString } from '../lib/request.ts';
-import { manifestBytes } from '../services/proposals.ts';
+import { body, optionalString, queryString, requireUser, requiredString } from '../lib/request.ts';
+import { blobBelongsToRepo, manifestBytes } from '../services/proposals.ts';
 import { getRepoRow, requireAccess } from '../services/repos.ts';
 import {
   findPathConflict,
   listTree,
+  readEntry,
   readManifest,
   snapshotBelongsTo,
   writeSnapshot,
@@ -177,17 +178,113 @@ export async function registerFileRoutes(app: FastifyInstance, ctx: AppContext):
   });
 
   /**
+   * 여러 파일을 커밋 하나로 — 먼저 올린 blob(나눠 올리기 결과 등)을 경로와 묶어 한 번에 반영한다.
+   * 폴더를 올릴 때 파일마다 스냅샷이 생기지 않게 한다. blobHash 가 null 이면 삭제.
+   * 내용이 같은 파일은 건너뛰고, 바뀐 것이 하나도 없으면 스냅샷을 만들지 않는다.
+   */
+  app.post('/repos/:repoId/files/commit', async (req, reply) => {
+    const user = requireUser(req);
+    const { repoId } = req.params as { repoId: string };
+    requireAccess(db, repoId, user.id, 'editor');
+    const input = body(req);
+    const message = optionalString(input, 'message', { max: 200, label: '설명' });
+
+    const rawChanges = input.changes;
+    if (!Array.isArray(rawChanges) || rawChanges.length === 0) throw badRequest('반영할 파일이 없습니다.');
+    if (rawChanges.length > MAX_FILES_PER_REPO) {
+      throw badRequest(`한 번에 최대 ${MAX_FILES_PER_REPO}개까지 반영할 수 있습니다.`);
+    }
+    const changes = new Map<string, string | null>();
+    for (const raw of rawChanges) {
+      const item = (raw ?? {}) as { path?: unknown; blobHash?: unknown };
+      const filePath = typeof item.path === 'string' ? normalizePath(item.path) : null;
+      if (!filePath) throw badRequest('경로가 올바르지 않습니다.');
+      if (changes.has(filePath)) throw badRequest(`같은 경로가 두 번 들어 있습니다: ${filePath}`);
+      if (item.blobHash !== null && (typeof item.blobHash !== 'string' || !/^[0-9a-f]{64}$/.test(item.blobHash))) {
+        throw badRequest(`파일 내용이 올바르지 않습니다: ${filePath}`);
+      }
+      changes.set(filePath, item.blobHash);
+    }
+
+    const result = db.transaction(() => {
+      const head = getRepoRow(db, repoId)!.head_snapshot_id;
+      const manifest = readManifest(db, head);
+      const now = Date.now();
+      const counts = { added: 0, updated: 0, deleted: 0 };
+      const added: string[] = [];
+      const blobSize = db.prepare<[string], { size: number }>(`SELECT size FROM blobs WHERE hash = ?`);
+
+      for (const [filePath, hash] of changes) {
+        const existing = manifest.get(filePath);
+        if (hash === null) {
+          if (!existing) throw badRequest(`없는 파일은 지울 수 없습니다: ${filePath}`);
+          manifest.delete(filePath);
+          counts.deleted += 1;
+          continue;
+        }
+        const blob = blobSize.get(hash);
+        // 이 저장소에 올렸거나 이 저장소 이력에 있던 blob 만 — 해시만 알아내 남의 파일을 가져오지 못하게.
+        if (!blob || !blobBelongsToRepo(db, repoId, hash)) {
+          throw badRequest(`이 저장소에 올리지 않은 파일입니다: ${filePath}`);
+        }
+        if (existing?.blob_hash === hash) continue;
+        manifest.set(filePath, {
+          path: filePath,
+          blob_hash: hash,
+          size: blob.size,
+          mime_type: mimeForPath(filePath),
+          updated_at: now,
+        });
+        if (existing) counts.updated += 1;
+        else {
+          counts.added += 1;
+          added.push(filePath);
+        }
+      }
+
+      // 새 파일끼리도, 기존 파일·폴더와도 이름이 겹치면 안 된다 (manifest 에 새 파일이 이미 들어 있다).
+      for (const filePath of added) assertNoPathConflict(manifest, filePath);
+      if (manifest.size > MAX_FILES_PER_REPO) throw conflict(`저장소당 파일은 최대 ${MAX_FILES_PER_REPO}개입니다.`);
+      assertRepoBytes(config, manifestBytes(manifest));
+
+      const total = counts.added + counts.updated + counts.deleted;
+      if (total === 0) return { snapshotId: head, unchanged: true, ...counts };
+
+      const summary = [
+        counts.added ? `추가 ${counts.added}` : '',
+        counts.updated ? `수정 ${counts.updated}` : '',
+        counts.deleted ? `삭제 ${counts.deleted}` : '',
+      ]
+        .filter(Boolean)
+        .join(' · ');
+      const snapshotId = writeSnapshot(db, {
+        repoId,
+        parentId: head,
+        authorId: user.id,
+        message: message || (total === 1 ? `${summary}: ${[...changes.keys()][0]}` : `여러 파일 — ${summary}`),
+        manifest,
+        now,
+      });
+      return { snapshotId, unchanged: false, ...counts };
+    })();
+
+    return reply.code(result.unchanged ? 200 : 201).send(result);
+  });
+
+  /**
    * 파일 또는 폴더 삭제. 폴더면 아래 전체가 지워진다.
    * blob 자체는 다른 스냅샷/저장소가 참조할 수 있으므로 남겨둔다.
    */
   app.delete('/repos/:repoId/files', async (req) => {
     const user = requireUser(req);
     const { repoId } = req.params as { repoId: string };
-    const { repo } = requireAccess(db, repoId, user.id, 'editor');
+    requireAccess(db, repoId, user.id, 'editor');
     const target = requirePathParam(req);
 
     const result = db.transaction(() => {
-      const manifest = readManifest(db, repo.head_snapshot_id);
+      // 권한 검사 뒤에 다른 커밋이 끼어들 수 있으므로 head 는 트랜잭션 안에서 다시 읽는다.
+      const head = getRepoRow(db, repoId)!.head_snapshot_id;
+      const manifest = readManifest(db, head);
       const removed: string[] = [];
       const prefix = `${target}/`;
       for (const path of [...manifest.keys()]) {
@@ -202,7 +299,7 @@ export async function registerFileRoutes(app: FastifyInstance, ctx: AppContext):
         removed.length === 1 ? `삭제: ${removed[0]}` : `삭제: ${target}/ (${removed.length}개)`;
       const snapshotId = writeSnapshot(db, {
         repoId,
-        parentId: repo.head_snapshot_id,
+        parentId: head,
         authorId: user.id,
         message,
         manifest,
@@ -217,7 +314,7 @@ export async function registerFileRoutes(app: FastifyInstance, ctx: AppContext):
   app.post('/repos/:repoId/files/move', async (req) => {
     const user = requireUser(req);
     const { repoId } = req.params as { repoId: string };
-    const { repo } = requireAccess(db, repoId, user.id, 'editor');
+    requireAccess(db, repoId, user.id, 'editor');
     const input = body(req);
 
     const fromRaw = requiredString(input, 'from', { max: 512, label: '원본 경로' });
@@ -229,7 +326,8 @@ export async function registerFileRoutes(app: FastifyInstance, ctx: AppContext):
     if (to.startsWith(`${from}/`)) throw badRequest('폴더를 자기 자신 아래로 옮길 수 없습니다.');
 
     const result = db.transaction(() => {
-      const manifest = readManifest(db, repo.head_snapshot_id);
+      const head = getRepoRow(db, repoId)!.head_snapshot_id;
+      const manifest = readManifest(db, head);
       const now = Date.now();
       const prefix = `${from}/`;
       const moves: { from: string; to: string }[] = [];
@@ -261,7 +359,7 @@ export async function registerFileRoutes(app: FastifyInstance, ctx: AppContext):
 
       const snapshotId = writeSnapshot(db, {
         repoId,
-        parentId: repo.head_snapshot_id,
+        parentId: head,
         authorId: user.id,
         message: `이동: ${from} → ${to}`,
         manifest,
@@ -288,12 +386,7 @@ export async function registerFileRoutes(app: FastifyInstance, ctx: AppContext):
     }
     if (!snapshotId) throw notFound('파일을 찾을 수 없습니다.');
 
-    const entry = db
-      .prepare<[string, string], EntryRow>(
-        `SELECT path, blob_hash, size, mime_type, updated_at
-           FROM snapshot_entries WHERE snapshot_id = ? AND path = ?`,
-      )
-      .get(snapshotId, filePath);
+    const entry = readEntry(db, snapshotId, filePath);
     if (!entry) throw notFound('파일을 찾을 수 없습니다.');
 
     return sendBlob(reply, ctx, entry.blob_hash, {

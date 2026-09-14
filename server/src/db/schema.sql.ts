@@ -10,6 +10,8 @@ export const MIGRATIONS: {
   version: number;
   up?: string;
   run?: (db: Database.Database) => void;
+  /** 큰 표를 지워 파일에 빈 공간이 많이 남는 마이그레이션. 적용 뒤 한 번 VACUUM 한다. */
+  vacuum?: boolean;
 }[] = [
   {
     version: 1,
@@ -184,5 +186,110 @@ export const MIGRATIONS: {
     // 비밀번호를 바꾸면 세대를 올려 이전 세대 토큰을 한 번에 끊는다.
     version: 4,
     up: `ALTER TABLE users ADD COLUMN token_epoch INTEGER NOT NULL DEFAULT 0;`,
+  },
+  {
+    // 커밋마다 저장소의 **모든** 파일 행을 snapshot_entries 에 복사했다. 파일 F 개 저장소에
+    // 커밋 C 번이면 F×C 행이고, 폴더를 파일마다 올리면 F² 에 가깝다(음악 541 커밋에 14만 행).
+    // 지금 상태는 repo_files 에 두고, 스냅샷에는 바뀐 경로만 앞뒤 값과 함께 적는다.
+    // 과거 시점은 head 에서 그 뒤의 변경을 최근 것부터 되돌려 만든다(services/snapshots.ts).
+    version: 5,
+    // snapshot_entries 를 지우면 그만큼 빈 페이지가 파일에 남는다(음악 저장소 사본: 48MB → 0.9MB).
+    vacuum: true,
+    up: `
+      -- 저장소의 지금 파일 목록(head).
+      CREATE TABLE repo_files (
+        repo_id    TEXT NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+        path       TEXT NOT NULL,
+        blob_hash  TEXT NOT NULL REFERENCES blobs(hash),
+        size       INTEGER NOT NULL,
+        mime_type  TEXT NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (repo_id, path)
+      );
+      CREATE INDEX idx_repo_files_blob ON repo_files(blob_hash);
+
+      -- 스냅샷이 바꾼 경로. blob_hash 쪽이 이 스냅샷 뒤의 값(삭제면 NULL),
+      -- prev_ 쪽이 앞의 값(추가면 NULL). 앞의 값이 있어야 과거로 되돌릴 수 있다.
+      CREATE TABLE snapshot_changes (
+        snapshot_id     TEXT NOT NULL REFERENCES snapshots(id) ON DELETE CASCADE,
+        path            TEXT NOT NULL,
+        blob_hash       TEXT REFERENCES blobs(hash),
+        size            INTEGER,
+        mime_type       TEXT,
+        updated_at      INTEGER,
+        prev_blob_hash  TEXT REFERENCES blobs(hash),
+        prev_size       INTEGER,
+        prev_mime_type  TEXT,
+        prev_updated_at INTEGER,
+        PRIMARY KEY (snapshot_id, path)
+      );
+      CREATE INDEX idx_snapchanges_blob ON snapshot_changes(blob_hash);
+      CREATE INDEX idx_snapchanges_prev_blob ON snapshot_changes(prev_blob_hash);
+
+      -- 이력 목록이 스냅샷마다 파일 수·총량을 세지 않게 적어 둔다.
+      ALTER TABLE snapshots ADD COLUMN file_count INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE snapshots ADD COLUMN total_size INTEGER NOT NULL DEFAULT 0;
+    `,
+    run(db) {
+      type Row = { path: string; blob_hash: string; size: number; mime_type: string; updated_at: number };
+      const entriesOf = db.prepare<[string], Row>(
+        `SELECT path, blob_hash, size, mime_type, updated_at FROM snapshot_entries WHERE snapshot_id = ?`,
+      );
+      const read = (snapshotId: string | null) => {
+        const map = new Map<string, Row>();
+        if (snapshotId) for (const row of entriesOf.all(snapshotId)) map.set(row.path, row);
+        return map;
+      };
+      const same = (a: Row, b: Row) =>
+        a.blob_hash === b.blob_hash &&
+        a.size === b.size &&
+        a.mime_type === b.mime_type &&
+        a.updated_at === b.updated_at;
+
+      const insertChange = db.prepare(
+        `INSERT INTO snapshot_changes
+           (snapshot_id, path, blob_hash, size, mime_type, updated_at,
+            prev_blob_hash, prev_size, prev_mime_type, prev_updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      );
+      const setStats = db.prepare(`UPDATE snapshots SET file_count = ?, total_size = ? WHERE id = ?`);
+
+      // 스냅샷마다 부모의 목록과 비교해 바뀐 것만 적는다. 오래된 것부터라 부모 행은 아직 남아 있다.
+      const snapshots = db
+        .prepare<[], { id: string; parent_id: string | null }>(
+          `SELECT id, parent_id FROM snapshots ORDER BY created_at, id`,
+        )
+        .all();
+      for (const snapshot of snapshots) {
+        const before = read(snapshot.parent_id);
+        const after = read(snapshot.id);
+        let total = 0;
+        for (const [path, row] of after) {
+          total += row.size;
+          const prev = before.get(path);
+          if (prev && same(prev, row)) continue;
+          insertChange.run(
+            snapshot.id, path, row.blob_hash, row.size, row.mime_type, row.updated_at,
+            prev?.blob_hash ?? null, prev?.size ?? null, prev?.mime_type ?? null, prev?.updated_at ?? null,
+          );
+        }
+        for (const [path, prev] of before) {
+          if (after.has(path)) continue;
+          insertChange.run(
+            snapshot.id, path, null, null, null, null,
+            prev.blob_hash, prev.size, prev.mime_type, prev.updated_at,
+          );
+        }
+        setStats.run(after.size, total, snapshot.id);
+      }
+
+      // 지금 상태는 저장소마다 head 의 목록 그대로.
+      db.exec(`
+        INSERT INTO repo_files (repo_id, path, blob_hash, size, mime_type, updated_at)
+        SELECT r.id, e.path, e.blob_hash, e.size, e.mime_type, e.updated_at
+          FROM repos r JOIN snapshot_entries e ON e.snapshot_id = r.head_snapshot_id;
+        DROP TABLE snapshot_entries;
+      `);
+    },
   },
 ];

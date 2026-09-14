@@ -11,18 +11,110 @@ export interface EntryRow {
   updated_at: number;
 }
 
-/** 스냅샷의 전체 파일 목록을 경로 기준 Map 으로. */
-export function readManifest(db: Db, snapshotId: string | null): Map<string, EntryRow> {
+/**
+ * 저장 구조 (마이그레이션 v5)
+ *
+ * - repo_files: 저장소의 지금 파일 목록(head).
+ * - snapshot_changes: 스냅샷이 바꾼 경로만, 앞뒤 값과 함께.
+ *
+ * 커밋은 바뀐 경로만 적으므로 파일 수와 무관하다. 과거 시점은 head 에서 시작해 그 뒤의 스냅샷들이
+ * 바꾼 것을 최근 것부터 앞의 값으로 되돌려 만든다 — 과거 보기는 드물고, 되돌리는 양은 그 시점
+ * 이후의 변경 수만큼이다. 스냅샷은 늘 그때의 head 위에 쌓이므로 이력은 갈라지지 않는다.
+ */
+
+interface ChangeRow {
+  path: string;
+  blob_hash: string | null;
+  size: number | null;
+  mime_type: string | null;
+  updated_at: number | null;
+  prev_blob_hash: string | null;
+  prev_size: number | null;
+  prev_mime_type: string | null;
+  prev_updated_at: number | null;
+}
+
+/** 저장소의 지금 파일 목록. */
+function readHead(db: Db, repoId: string): Map<string, EntryRow> {
   const manifest = new Map<string, EntryRow>();
-  if (!snapshotId) return manifest;
   const rows = db
     .prepare<[string], EntryRow>(
-      `SELECT path, blob_hash, size, mime_type, updated_at
-         FROM snapshot_entries WHERE snapshot_id = ?`,
+      `SELECT path, blob_hash, size, mime_type, updated_at FROM repo_files WHERE repo_id = ?`,
     )
-    .all(snapshotId);
+    .all(repoId);
   for (const row of rows) manifest.set(row.path, row);
   return manifest;
+}
+
+/** 스냅샷의 전체 파일 목록을 경로 기준 Map 으로. head 가 아니면 head 에서 되돌려 만든다. */
+export function readManifest(db: Db, snapshotId: string | null): Map<string, EntryRow> {
+  if (!snapshotId) return new Map();
+  const target = db
+    .prepare<[string], { repo_id: string; head: string | null }>(
+      `SELECT s.repo_id, r.head_snapshot_id AS head
+         FROM snapshots s JOIN repos r ON r.id = s.repo_id WHERE s.id = ?`,
+    )
+    .get(snapshotId);
+  if (!target) return new Map();
+
+  const manifest = readHead(db, target.repo_id);
+  if (target.head === snapshotId) return manifest;
+
+  // head 부터 부모를 따라 내려가며, 목표 스냅샷에 닿기 전까지의 스냅샷을 최근 것부터 모은다.
+  const newer = db
+    .prepare<[string | null, string], { id: string; depth: number }>(
+      `WITH RECURSIVE chain(id, parent_id, depth) AS (
+         SELECT id, parent_id, 0 FROM snapshots WHERE id = ?
+         UNION ALL
+         SELECT s.id, s.parent_id, c.depth + 1
+           FROM snapshots s JOIN chain c ON s.id = c.parent_id
+          WHERE c.id <> ?
+       )
+       SELECT id, depth FROM chain ORDER BY depth`,
+    )
+    .all(target.head, snapshotId);
+  if (newer.at(-1)?.id !== snapshotId) {
+    throw new Error(`스냅샷 ${snapshotId} 이 저장소 이력(head 에서 부모를 따라간 줄)에 없습니다.`);
+  }
+
+  const changesOf = db.prepare<[string], ChangeRow>(`SELECT * FROM snapshot_changes WHERE snapshot_id = ?`);
+  for (const { id } of newer.slice(0, -1)) {
+    for (const change of changesOf.all(id)) {
+      if (change.prev_blob_hash === null) {
+        manifest.delete(change.path);
+      } else {
+        manifest.set(change.path, {
+          path: change.path,
+          blob_hash: change.prev_blob_hash,
+          size: change.prev_size!,
+          mime_type: change.prev_mime_type!,
+          updated_at: change.prev_updated_at!,
+        });
+      }
+    }
+  }
+  return manifest;
+}
+
+/** 스냅샷 시점의 한 파일. head 면 목록 전체를 만들지 않고 바로 찾는다. */
+export function readEntry(db: Db, snapshotId: string, path: string): EntryRow | undefined {
+  const head = db
+    .prepare<[string, string], EntryRow>(
+      `SELECT f.path, f.blob_hash, f.size, f.mime_type, f.updated_at
+         FROM snapshots s
+         JOIN repos r ON r.id = s.repo_id AND r.head_snapshot_id = s.id
+         JOIN repo_files f ON f.repo_id = s.repo_id AND f.path = ?
+        WHERE s.id = ?`,
+    )
+    .get(path, snapshotId);
+  if (head) return head;
+  const isHead = db
+    .prepare<[string], { ok: number }>(
+      `SELECT 1 AS ok FROM snapshots s JOIN repos r ON r.head_snapshot_id = s.id WHERE s.id = ?`,
+    )
+    .get(snapshotId);
+  if (isHead) return undefined;
+  return readManifest(db, snapshotId).get(path);
 }
 
 /**
@@ -54,24 +146,62 @@ export interface CreateSnapshotInput {
 }
 
 /**
- * 새 스냅샷을 기록하고 저장소 head 를 옮긴다.
- * 호출자가 트랜잭션을 열어둔 상태에서 부르는 것을 전제로 한다.
+ * 새 스냅샷을 기록하고 저장소 head 를 옮긴다. manifest 는 커밋 뒤의 **전체** 목록이다 —
+ * 지금 목록(repo_files)과 견줘 바뀐 경로만 적는다.
+ * 호출자가 트랜잭션을 열어둔 상태에서, 트랜잭션 안에서 읽은 head 를 parentId 로 부르는 것을 전제로 한다.
  */
 export function writeSnapshot(db: Db, input: CreateSnapshotInput): string {
   const now = input.now ?? Date.now();
   const id = newId('snap');
+  const current = readHead(db, input.repoId);
+
+  let totalSize = 0;
+  for (const entry of input.manifest.values()) totalSize += entry.size;
 
   db.prepare(
-    `INSERT INTO snapshots (id, repo_id, parent_id, message, author_id, created_at)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-  ).run(id, input.repoId, input.parentId, input.message, input.authorId, now);
+    `INSERT INTO snapshots (id, repo_id, parent_id, message, author_id, created_at, file_count, total_size)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(id, input.repoId, input.parentId, input.message, input.authorId, now, input.manifest.size, totalSize);
 
-  const insertEntry = db.prepare(
-    `INSERT INTO snapshot_entries (snapshot_id, path, blob_hash, size, mime_type, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?)`,
+  const insertChange = db.prepare(
+    `INSERT INTO snapshot_changes
+       (snapshot_id, path, blob_hash, size, mime_type, updated_at,
+        prev_blob_hash, prev_size, prev_mime_type, prev_updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
+  const upsertFile = db.prepare(
+    `INSERT INTO repo_files (repo_id, path, blob_hash, size, mime_type, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(repo_id, path) DO UPDATE SET
+       blob_hash = excluded.blob_hash, size = excluded.size,
+       mime_type = excluded.mime_type, updated_at = excluded.updated_at`,
+  );
+  const deleteFile = db.prepare(`DELETE FROM repo_files WHERE repo_id = ? AND path = ?`);
+
   for (const entry of input.manifest.values()) {
-    insertEntry.run(id, entry.path, entry.blob_hash, entry.size, entry.mime_type, entry.updated_at);
+    const prev = current.get(entry.path);
+    if (
+      prev &&
+      prev.blob_hash === entry.blob_hash &&
+      prev.size === entry.size &&
+      prev.mime_type === entry.mime_type &&
+      prev.updated_at === entry.updated_at
+    ) {
+      continue;
+    }
+    insertChange.run(
+      id, entry.path, entry.blob_hash, entry.size, entry.mime_type, entry.updated_at,
+      prev?.blob_hash ?? null, prev?.size ?? null, prev?.mime_type ?? null, prev?.updated_at ?? null,
+    );
+    upsertFile.run(input.repoId, entry.path, entry.blob_hash, entry.size, entry.mime_type, entry.updated_at);
+  }
+  for (const prev of current.values()) {
+    if (input.manifest.has(prev.path)) continue;
+    insertChange.run(
+      id, prev.path, null, null, null, null,
+      prev.blob_hash, prev.size, prev.mime_type, prev.updated_at,
+    );
+    deleteFile.run(input.repoId, prev.path);
   }
 
   db.prepare(`UPDATE repos SET head_snapshot_id = ?, updated_at = ? WHERE id = ?`).run(
@@ -92,8 +222,7 @@ export function snapshotStats(db: Db, snapshotId: string | null): SnapshotStats 
   if (!snapshotId) return { fileCount: 0, totalSize: 0 };
   const row = db
     .prepare<[string], { file_count: number; total_size: number | null }>(
-      `SELECT COUNT(*) AS file_count, SUM(size) AS total_size
-         FROM snapshot_entries WHERE snapshot_id = ?`,
+      `SELECT file_count, total_size FROM snapshots WHERE id = ?`,
     )
     .get(snapshotId);
   return { fileCount: row?.file_count ?? 0, totalSize: row?.total_size ?? 0 };
@@ -173,9 +302,7 @@ export function listSnapshots(
   const beforeId = cursor?.beforeId ?? '';
   const rows = db
     .prepare<[string, number, number, string, number], SnapshotRow>(
-      `SELECT s.*, u.display_name,
-              (SELECT COUNT(*) FROM snapshot_entries e WHERE e.snapshot_id = s.id) AS file_count,
-              (SELECT SUM(size) FROM snapshot_entries e WHERE e.snapshot_id = s.id) AS total_size
+      `SELECT s.*, u.display_name
          FROM snapshots s
          JOIN users u ON u.id = s.author_id
         WHERE s.repo_id = ?

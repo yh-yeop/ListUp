@@ -19,6 +19,7 @@ export function openDb(dbPath: string): Db {
 
 function migrate(db: Db): void {
   const current = db.pragma('user_version', { simple: true }) as number;
+  let vacuum = false;
   for (const migration of MIGRATIONS) {
     if (migration.version <= current) continue;
     db.exec('BEGIN');
@@ -32,5 +33,8 @@ function migrate(db: Db): void {
       db.exec('ROLLBACK');
       throw err;
     }
+    vacuum ||= migration.vacuum === true;
   }
+  // VACUUM 은 트랜잭션 밖에서만 된다. 새 DB 에는 치울 것이 없으니 옛 DB 를 올릴 때만.
+  if (vacuum && current > 0) db.exec('VACUUM');
 }

@@ -4,7 +4,8 @@
  * blob 은 콘텐츠 주소라 여러 저장소·스냅샷이 같은 바이트를 공유한다. 그래서 파일을 지우거나
  * 저장소를 지워도 blob 자체는 그 자리에 남는다. 어디에서도 참조하지 않게 된 것만 골라 지운다.
  *
- * 참조하는 곳은 두 군데다 — `snapshot_entries`(저장소 이력)와 `proposal_changes`(제안).
+ * 참조하는 곳 — `repo_files`(지금 목록), `snapshot_changes`(저장소 이력, 앞뒤 값 모두),
+ * `proposal_changes`(제안).
  * `repo_blobs` 는 "어느 저장소로 올라왔는지"를 적어 둔 것이라 참조로 치지 않는다.
  *
  * **갓 올라온 것은 건드리지 않는다.** 제안용으로 올린 blob 은 제안을 만들기 전까지 아무 데서도
@@ -44,7 +45,9 @@ export async function collectGarbage(ctx: AppContext, minAgeMs: number): Promise
       `SELECT b.hash, b.size
          FROM blobs b
         WHERE b.created_at < ?
-          AND NOT EXISTS (SELECT 1 FROM snapshot_entries e WHERE e.blob_hash = b.hash)
+          AND NOT EXISTS (SELECT 1 FROM repo_files f WHERE f.blob_hash = b.hash)
+          AND NOT EXISTS (SELECT 1 FROM snapshot_changes s WHERE s.blob_hash = b.hash)
+          AND NOT EXISTS (SELECT 1 FROM snapshot_changes s WHERE s.prev_blob_hash = b.hash)
           AND NOT EXISTS (SELECT 1 FROM proposal_changes c WHERE c.blob_hash = b.hash)`,
     )
     .all(cutoff);
