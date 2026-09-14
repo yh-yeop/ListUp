@@ -6,6 +6,7 @@ import { MAX_FILES_PER_REPO } from '@listup/shared';
 import { Platform } from 'react-native';
 import { api, authHeaders, resolveApiUrl } from '../api/client';
 import type { UploadSource } from '../api/client';
+import { ensureSaveFolder, forgetSaveFolder, saveFolderLabel, saveFolderSupported, saveIntoFolder } from './save-folder';
 
 /**
  * 파일 선택. 웹에서는 File 객체를, 네이티브에서는 uri 를 돌려준다.
@@ -115,7 +116,8 @@ export interface DownloadResult {
 /**
  * 저장소의 파일이나 폴더(zip)를 받는다. 짧게 사는 다운로드 링크(서버 routes/downloads.ts)를 받아서 —
  * - 웹: 브라우저에 넘긴다. 브라우저가 디스크로 바로 받고 진행률을 보여 주며, 끊기면 이어받는다.
- * - 네이티브: 진행률이 나오는 다운로드 작업으로 캐시에 받고(끊기면 이어서 몇 번 더) 공유 시트를 띄운다.
+ * - 네이티브: 진행률이 나오는 다운로드 작업으로 캐시에 받고(끊기면 이어서 몇 번 더) 내보낸다
+ *   ({@link deliver} — 안드로이드는 고른 저장 폴더로, iOS 는 공유 시트).
  */
 export async function downloadFromRepo(
   repoId: string,
@@ -140,6 +142,10 @@ export async function downloadFromRepo(
     return { ok: true, message: '' };
   }
 
+  // 받기 전에 저장 폴더부터 — 다 받은 뒤에 고르다 취소하면 받은 것이 헛수고다.
+  const folder = saveFolderSupported ? await ensureSaveFolder() : null;
+  if (saveFolderSupported && !folder) return { ok: false, message: '' };
+
   const downloads = new Directory(Paths.cache, 'listup-downloads');
   if (!downloads.exists) downloads.create({ intermediates: true });
   const target_ = new File(downloads, target.fileName);
@@ -161,18 +167,35 @@ export async function downloadFromRepo(
     }
   }
   if (!result || result.status >= 400) return { ok: false, message: '파일을 받지 못했습니다.' };
+  return deliver(new File(result.uri), folder);
+}
 
+/**
+ * 캐시에 받은 파일을 사용자에게 내보낸다.
+ * - 안드로이드: 고른 저장 폴더에 넣는다(설정에서 바꿈). 공유 시트는 "받기"가 아니라 "보내기"라 쓰지 않는다.
+ * - iOS: 공유 시트("파일에 저장").
+ */
+async function deliver(cached: File, folder: Directory | null): Promise<DownloadResult> {
+  if (folder) {
+    try {
+      const name = await saveIntoFolder(cached, folder);
+      return { ok: true, message: `${saveFolderLabel(folder)} 폴더에 ${name} 을(를) 저장했습니다.` };
+    } catch {
+      await forgetSaveFolder();
+      return { ok: false, message: '저장 폴더에 쓰지 못했습니다. 다시 받으면 폴더를 새로 고릅니다.' };
+    }
+  }
   if (await Sharing.isAvailableAsync()) {
-    await Sharing.shareAsync(result.uri);
+    await Sharing.shareAsync(cached.uri);
     return { ok: true, message: '' };
   }
-  return { ok: true, message: `${result.uri} 에 저장했습니다.` };
+  return { ok: true, message: `${cached.uri} 에 저장했습니다.` };
 }
 
 /**
  * 로그인 헤더를 붙여 받는다 — 다운로드 링크가 없는 곳(제안에 담긴 파일)에 쓴다.
  * - 웹: Blob 을 만들어 브라우저 다운로드를 띄운다.
- * - 네이티브: 캐시에 받은 뒤 공유 시트를 띄운다 (사진/파일 앱 등으로 저장).
+ * - 네이티브: 캐시에 받은 뒤 내보낸다 (안드로이드는 저장 폴더, iOS 는 공유 시트).
  */
 export async function downloadFile(url: string, fileName: string): Promise<DownloadResult> {
   if (Platform.OS === 'web') {
@@ -192,6 +215,9 @@ export async function downloadFile(url: string, fileName: string): Promise<Downl
     return { ok: true, message: `${fileName} 을(를) 내려받았습니다.` };
   }
 
+  const folder = saveFolderSupported ? await ensureSaveFolder() : null;
+  if (saveFolderSupported && !folder) return { ok: false, message: '' };
+
   const downloads = new Directory(Paths.cache, 'listup-downloads');
   if (!downloads.exists) downloads.create({ intermediates: true });
 
@@ -201,10 +227,5 @@ export async function downloadFile(url: string, fileName: string): Promise<Downl
     headers: authHeaders(),
     idempotent: true,
   });
-
-  if (await Sharing.isAvailableAsync()) {
-    await Sharing.shareAsync(saved.uri);
-    return { ok: true, message: '' };
-  }
-  return { ok: true, message: `${saved.uri} 에 저장했습니다.` };
+  return deliver(saved, folder);
 }

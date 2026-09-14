@@ -201,6 +201,7 @@ app/
    ├─ state/servers.ts        서버 목록 저장(AsyncStorage)과 예전 키 이전
    ├─ lib/server-list.ts      서버 목록을 스택 맨 아래로 열기
    ├─ lib/files.ts            플랫폼별 파일·폴더 선택, 링크로 내려받기
+   ├─ lib/save-folder.ts      안드로이드에서 받은 파일을 둘 폴더(한 번 고르고 기억)
    ├─ lib/transfer.ts         나눠 올리기(진행률·이어 보내기)와 여러 파일 커밋
    ├─ lib/invite-link.ts      초대 링크 만들기, 로그인 뒤까지 들고 가는 초대 코드
    ├─ lib/dialogs.ts          웹/네이티브 확인 대화상자
@@ -216,7 +217,7 @@ app/
 | --- | --- | --- |
 | 조각 읽기 | `File.slice` | `FileHandle.readBytes` |
 | 폴더 선택 | `webkitdirectory` (상대 경로 유지) | Android `Directory.pickDirectoryAsync` 를 훑기 |
-| 저장 | 다운로드 링크를 `<a>` 로 — 브라우저가 디스크로 받음 | 다운로드 링크를 다운로드 작업으로 받은 뒤 공유 시트 |
+| 저장 | 다운로드 링크를 `<a>` 로 — 브라우저가 디스크로 받음 | 다운로드 작업으로 받은 뒤 안드로이드는 처음 고른 저장 폴더(SAF)에, iOS 는 공유 시트 |
 
 로그인 토큰은 헤더로만 보내므로, 브라우저·OS 에 넘기는 주소는 짧게 사는 다운로드 링크입니다.
 

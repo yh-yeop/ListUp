@@ -25,6 +25,7 @@ import {
   type LatestRelease,
 } from '../src/lib/updates';
 import { confirmAction, notify } from '../src/lib/dialogs';
+import { chooseSaveFolder, getSaveFolder, saveFolderLabel, saveFolderSupported } from '../src/lib/save-folder';
 import { useAuth } from '../src/state/auth';
 import { openServerList } from '../src/lib/server-list';
 import { serverTitle } from '../src/state/servers';
@@ -42,6 +43,24 @@ export default function SettingsScreen() {
   const [savingPassword, setSavingPassword] = useState(false);
   const [hasSavedLogin, setHasSavedLogin] = useState(false);
   const [update, setUpdate] = useState<LatestRelease | null>(null);
+  const [saveFolder, setSaveFolder] = useState<string | null>(null);
+
+  // 안드로이드: 받은 파일을 두는 폴더.
+  useEffect(() => {
+    if (!saveFolderSupported) return;
+    let cancelled = false;
+    void getSaveFolder().then((dir) => {
+      if (!cancelled) setSaveFolder(dir ? saveFolderLabel(dir) : null);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const changeSaveFolder = async () => {
+    const dir = await chooseSaveFolder();
+    if (dir) setSaveFolder(saveFolderLabel(dir));
+  };
 
   // 새 버전이 있으면 받을 수 있게 보여 준다(설치형 클라이언트만 확인한다).
   useEffect(() => {
@@ -190,6 +209,25 @@ export default function SettingsScreen() {
             </Row>
           </Row>
         </Pressable>
+
+        {saveFolderSupported ? (
+          <Pressable
+            onPress={() => void changeSaveFolder()}
+            accessibilityRole="button"
+            accessibilityLabel="받은 파일 저장 폴더 바꾸기"
+            style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
+          >
+            <Row style={{ justifyContent: 'space-between' }}>
+              <Caption>받은 파일 저장 폴더</Caption>
+              <Row gap={spacing.xs} style={{ flexShrink: 1 }}>
+                <Caption numberOfLines={1} style={{ flexShrink: 1 }}>
+                  {saveFolder ?? '처음 받을 때 고름'}
+                </Caption>
+                <Ionicons name="chevron-forward" size={14} color={colors.textFaint} />
+              </Row>
+            </Row>
+          </Pressable>
+        ) : null}
 
         {/*
           AGPL-3.0 §13 — 네트워크로 이 프로그램을 쓰는 사람에게 소스를 받을 길을 알려야 한다.
