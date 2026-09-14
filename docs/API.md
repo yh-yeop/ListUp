@@ -25,9 +25,9 @@ Authorization: Bearer <token>
 | `unauthorized` | 401 | 토큰 없음/만료 |
 | `forbidden` | 403 | 멤버지만 권한이 모자람 |
 | `not_found` | 404 | 없거나, **멤버가 아니라 숨긴 경우** |
-| `conflict` | 409 | 병합 충돌, 초대 소진, 중복 가입, 파일/폴더 이름 충돌 등 |
+| `conflict` | 409 | 병합 충돌, 초대 소진, 중복 가입, 파일/폴더 이름 충돌, 나눠 올리기 위치 어긋남 등 |
 | `payload_too_large` | 413 | 파일 하나 크기·저장소 총량·하루 업로드 한도 초과 |
-| `too_many_requests` | 429 | 로그인 실패가 잦음. `details.retryAfterSeconds` 뒤에 다시 |
+| `too_many_requests` | 429 | 로그인·재설정 코드 실패가 잦음. `details.retryAfterSeconds` 뒤에 다시 |
 | `internal` | 500 | 서버 오류. `requestId` 가 함께 오므로 로그와 대조할 수 있습니다 |
 
 병합 충돌·경로 충돌일 때는 `details.conflicts` 에 문제가 된 경로 목록이 들어갑니다.
@@ -38,15 +38,19 @@ Authorization: Bearer <token>
 
 | 메서드 | 경로 | 설명 |
 | --- | --- | --- |
-| GET | `/health` | 로그인 없이. `{ok, time, maxUploadBytes, apiVersion, version}` |
+| GET | `/health` | 로그인 없이. `{ok, time, maxUploadBytes, apiVersion, apiLevel, version}` |
 
 ```json
-{ "ok": true, "time": 1789355589634, "maxUploadBytes": 104857600, "apiVersion": 1, "version": "1.0.0" }
+{ "ok": true, "time": 1789355589634, "maxUploadBytes": 2147483648, "apiVersion": 1, "apiLevel": 2, "version": "1.2.0" }
 ```
 
 - **`apiVersion`** — API 호환 버전(`shared` 의 `API_VERSION`). 서버와 앱이 서로 알아듣지 못하게
   바뀔 때만 올립니다. 설치형 클라이언트는 서버와 따로 업데이트되므로, 들어가기 전에 이 값을 자기
   값과 견주고 다르면 들어가지 않습니다. **이 필드가 없는 서버(1.0.0)는 `1` 로 봅니다.**
+- **`apiLevel`** — 기능 수준(`API_LEVEL`). 호환을 깨지 않고 기능을 더할 때 올립니다(옛 앱은 무시).
+  앱은 자기가 쓰는 기능이 있는 수준(`REQUIRED_SERVER_API_LEVEL`) 미만 서버에는 "서버가 오래됨"으로
+  들어가지 않습니다. 2 = 1.2.0 (나눠 올리기·여러 파일 커밋·다운로드 링크·zip·Range·재설정).
+  **필드가 없는 서버(1.1.0 까지)는 `1`** 입니다.
 - `version` — 서버 버전(`server/package.json`). 사람에게 보여주는 용도이고 호환 판단에는 쓰지 않습니다.
 - `maxUploadBytes` — 파일 하나의 업로드 한도. 앱이 올리기 전에 검사합니다.
 
@@ -61,6 +65,7 @@ Authorization: Bearer <token>
 | GET | `/auth/me` | 현재 사용자 |
 | PATCH | `/auth/me` | `{displayName}` |
 | POST | `/auth/password` | `{currentPassword, newPassword}` |
+| POST | `/auth/reset` | `{email, code, newPassword}` → `{token, user}` — 로그인 없이 |
 
 비밀번호는 8자 이상. 로그인 실패 메시지는 이메일 존재 여부와 무관하게 동일하고, 응답 시간도
 같게 맞춥니다. `/auth/password` 에서 현재 비밀번호가 틀리면 `401` 이 아니라 **`400`** 입니다 —
@@ -71,6 +76,21 @@ Authorization: Bearer <token>
 - **`/auth/password` 는 성공 시 새 `token` 을 함께 줍니다.** 비밀번호를 바꾸면 그 사용자의
   기존 토큰이 **모두** 무효가 되므로(다른 기기 로그아웃), 요청을 보낸 기기는 이 새 토큰으로
   갈아 끼워야 합니다.
+
+### 비밀번호 재설정 (`/auth/reset`)
+
+재설정 코드는 **서버를 돌리는 사람이** 발급합니다 — 저장소 소유자가 남의 계정을 풀 수 있으면 안 되고,
+이메일을 보낼 수단이 없는 자가호스팅 도구라서입니다.
+
+```bash
+npm run reset-password -- me@example.com     # 서버가 켜져 있어도 됩니다
+```
+
+- 코드는 초대 코드와 같은 모양(`ABCDE-12345`)이고 **30분 동안 한 번** 씁니다. 새로 발급하면 그 사람의
+  이전 코드는 못 씁니다. DB(`password_resets`)에는 해시만 둡니다.
+- 성공하면 비밀번호를 바꾸고 토큰 세대를 올려 **다른 기기의 로그인을 모두 끊고**, 이 요청에는 새
+  `token` 을 줍니다(바로 로그인).
+- 틀린 코드·없는 계정·만료는 모두 같은 `400` 입니다. 실패는 로그인과 **같은 제한**으로 세어 `429` 로 막습니다.
 
 ---
 
@@ -99,9 +119,12 @@ Authorization: Bearer <token>
 | --- | --- | --- | --- |
 | GET | `/repos/:repoId/files?path=&snapshot=` | viewer | 폴더 목록. `snapshot` 을 주면 과거 시점 |
 | POST | `/repos/:repoId/files?path=` | editor | multipart 업로드 = 직접 커밋 |
+| POST | `/repos/:repoId/files/commit` | editor | `{changes:[{path, blobHash\|null}], message?}` — 여러 파일을 스냅샷 하나로 |
 | DELETE | `/repos/:repoId/files?path=` | editor | 파일 또는 폴더 삭제 |
 | POST | `/repos/:repoId/files/move` | editor | `{from, to}` — 파일·폴더 이동/이름 변경 |
-| GET | `/repos/:repoId/raw?path=&snapshot=&inline=1` | viewer | 파일 내려받기 |
+| GET | `/repos/:repoId/raw?path=&snapshot=&inline=1` | viewer | 파일 내려받기 (`Range` 지원) |
+| POST | `/repos/:repoId/download-link` | viewer | `{path, snapshot?, archive?}` → `{url, expiresAt}` — 로그인 헤더 없이 받는 짧은 링크 |
+| GET | `/dl?t=` | (링크) | 링크로 파일 또는 폴더 zip 받기 |
 | POST | `/repos/:repoId/blobs` | viewer | 제안용 파일 업로드 → `{blob: {hash, size, mimeType, name}}` |
 
 ### 경로 규칙
@@ -139,6 +162,37 @@ curl -X POST "http://localhost:4000/api/repos/$REPO/files?path=문서/계획.txt
 - 저장소 총량이 `LISTUP_MAX_REPO_MB` 를 넘게 되면 `413` 입니다.
 - 업로드가 진행되는 동안 다른 커밋이 생겨도 그 커밋 위에 올라갑니다 (덮어쓰지 않음).
 
+### 나눠 올리기 (큰 파일, 끊겨도 이어서)
+
+한 요청 본문이 프록시 한도(Cloudflare 100MB)를 넘지 않게 **8MB 조각**으로 보냅니다. 앱과 `npm run sync` 는 늘 이 길을 씁니다.
+
+| 메서드 | 경로 | 설명 |
+| --- | --- | --- |
+| POST | `/repos/:repoId/uploads` | `{name, size}` → `{upload: {id, size, received, chunkSize}}` (201). 최소 viewer |
+| PUT | `/uploads/:uploadId?offset=N` | `Content-Type: application/octet-stream` 조각 → `{upload}` |
+| GET | `/uploads/:uploadId` | 어디까지 받았는지 (`received`) |
+| POST | `/uploads/:uploadId/complete` | `{blob: {hash, size, mimeType, name}}` (201) |
+| DELETE | `/uploads/:uploadId` | 취소 |
+
+- `offset` 이 서버가 받은 길이와 다르면 `409` 에 `details.received` — 그 위치부터 다시 보내면 됩니다.
+  끊긴 조각은 받은 데까지만 남습니다.
+- 세션은 만든 사람만 쓰고, 그 저장소 멤버가 아니게 되면 `404` 입니다. 서버를 다시 켜도 이어지고,
+  오래 멈춘 세션은 정리 작업(GC)이 지웁니다.
+- 크기 한도는 세션을 만들 때 `size` 로 먼저 봅니다. **편집 권한이 없는 사람**(제안용)은 하루 업로드
+  한도도 만들 때와 완료할 때 봅니다.
+- 완료한 blob 은 아직 저장소에 들어간 것이 아닙니다. `files/commit` 이나 변경 제안에 `blobHash` 로 담습니다.
+
+### 여러 파일 커밋 (`files/commit`)
+
+```json
+POST /api/repos/:repoId/files/commit
+{ "changes": [ { "path": "사진/1.jpg", "blobHash": "a1b2…" }, { "path": "옛날.txt", "blobHash": null } ], "message": "폴더 올리기" }
+```
+
+- 한 번에 반영하고 **스냅샷 하나**를 만듭니다. `blobHash: null` 은 삭제(없는 파일이면 무시).
+- 이 저장소에 올렸거나 이력에 있는 blob 만 담을 수 있습니다. 이름 충돌 `409`, 한도 `413`/`409`.
+- 응답 `{snapshotId, unchanged, added, updated, deleted}`. 바뀐 것이 없으면 `200` 에 `unchanged: true`.
+
 ### 폴더 삭제
 
 `path` 가 폴더면 그 아래 전부가 지워지고, 지워진 경로 목록이 응답에 들어옵니다.
@@ -154,6 +208,20 @@ curl -X POST "http://localhost:4000/api/repos/$REPO/files?path=문서/계획.txt
 `Cache-Control: private, no-cache` 라 브라우저가 매번 `If-None-Match` 로 확인하고(내용이 같으면
 `304`), `snapshot` 을 지정하면 그 시점의 내용은 바뀌지 않으므로 `immutable` 로 오래 캐시합니다.
 제안 파일(`/proposals/:id/raw`)도 `immutable` 입니다.
+
+**이어받기.** `Accept-Ranges: bytes` 이고 단일 구간 `Range` 를 주면 `206`, 범위를 벗어나면 `416` 입니다.
+`If-Range` 에 ETag 를 주면 그 사이 파일이 바뀐 경우 전체(`200`)를 줍니다.
+
+### 다운로드 링크와 폴더 zip
+
+`POST /repos/:repoId/download-link` 가 주는 `url`(`/api/dl?t=…`)은 **로그인 헤더 없이** 받을 수 있어,
+브라우저·OS 의 다운로드 기능이 디스크로 바로 받고 이어받습니다.
+
+- 링크는 **그 사용자·그 저장소·그 경로(·시점) 하나**에 묶이고 **10분** 뒤 만료됩니다. 받을 때 멤버인지
+  다시 확인하고, 비밀번호를 바꿔 토큰 세대가 오르면 쓸 수 없습니다. 만료·위조는 `404`.
+- `archive: true` 면 `path` 는 폴더(`""` 는 저장소 전체)이고 링크는 **zip** 을 흘려보냅니다. 압축하지 않고
+  담으며(대부분 이미 압축된 파일이라), 크기를 미리 계산해 `Content-Length` 를 주고, 4GB 가 넘으면 ZIP64 입니다.
+
 
 ### 제안용 업로드 (`/blobs`)
 
@@ -253,7 +321,11 @@ POST /api/proposals/:proposalId/merge
 
 | 항목 | 값 |
 | --- | --- |
-| 파일 하나 최대 크기 | 100MB (`LISTUP_MAX_UPLOAD_MB`) |
+| 파일 하나 최대 크기 | 2GB (`LISTUP_MAX_UPLOAD_MB`). multipart 업로드는 프록시 한도(Cloudflare 100MB)에도 걸립니다 |
+| 나눠 올리기 조각 | 8MB (서버는 16MB 까지 받음) |
+| 한 번의 여러 파일 커밋 | 5,000 |
+| 다운로드 링크 수명 | 10분 |
+| 재설정 코드 수명 | 30분, 한 번 |
 | 저장소 총량 | 4GB (`LISTUP_MAX_REPO_MB`) |
 | 사용자별 하루 제안용 업로드 | 1GB (`LISTUP_MAX_STAGING_MB_PER_DAY`) |
 | 저장소당 파일 수 | 5,000 |

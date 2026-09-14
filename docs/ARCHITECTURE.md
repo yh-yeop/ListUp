@@ -18,27 +18,33 @@
 ## 데이터 모델
 
 ```
-users ──┬─< repo_members >─┬── repos ──< snapshots ──< snapshot_entries >── blobs
+users ──┬─< repo_members >─┬── repos ──┬─< repo_files >──────────────────── blobs   (지금 상태)
+        │                  │           └─< snapshots ──< snapshot_changes >─┘      (바뀐 것만)
         │                  ├── repo_blobs (어느 저장소에 올렸는지) ────────────┘
-        │                  │              (head)              │
-        │                  ├── invites                        │
-        │                  └── proposals ──< proposal_changes ┘
-        └─────────────────────< proposal_comments
+        │                  ├── invites
+        │                  ├── upload_sessions (나눠 올리기 중)
+        │                  └── proposals ──< proposal_changes
+        ├─────────────────────< proposal_comments
+        └─< password_resets (운영자가 발급한 재설정 코드, 해시만)
 ```
 
-### 스냅샷 = 그 시점의 전체 파일 목록
+### 스냅샷 = 바뀐 것만 기록
 
-파일이 바뀔 때마다 새 `snapshots` 행과, 그 시점의 **모든** 파일에 대한 `snapshot_entries`
-행을 만듭니다. `repos.head_snapshot_id` 가 현재 상태를 가리킵니다.
+`repo_files` 가 **지금 상태**(경로 → blob)를 들고, 커밋마다 `snapshots` 행 하나와 **바뀐 경로만**
+`snapshot_changes` 에 씁니다. 한 행은 그 경로의 새 값과 이전 값(추가면 이전 값 없음, 삭제면 새 값
+없음)을 함께 가집니다. `repos.head_snapshot_id` 가 마지막 스냅샷이고, `snapshots.file_count`·
+`total_size` 가 그 시점의 요약입니다.
 
-델타가 아니라 전체 목록을 매번 쓰는 이유:
+- **지금 상태 읽기**(목록·내려받기·업로드·제안·병합)는 `repo_files` 한 번입니다.
+- **과거 시점 읽기**는 지금 상태에서 시작해 그 시점 **이후의** 변경을 최근 것부터 이전 값으로
+  되돌립니다. 과거 보기는 드물고, 되돌리는 양은 그 뒤의 변경 수만큼입니다(`services/snapshots.ts`).
+- **커밋 비용은 파일 수와 무관**합니다. 예전에는 커밋마다 저장소 전체 목록을 복사해 행 수가
+  파일 수 × 커밋 수였습니다(음악 539곡에 14만 행).
+- 폴더 올리기·동기화는 조각 업로드 뒤 `files/commit` 으로 **스냅샷 하나**를 만듭니다.
 
-- 어떤 시점의 파일 목록을 읽는 것이 인덱스 조회 한 번으로 끝납니다. 히스토리를 거슬러 올라가며
-  델타를 적용할 필요가 없습니다.
-- 실제 파일 바이트는 `blobs` 에 콘텐츠 주소로 한 번만 저장되므로, 목록이 반복돼도 저장 공간은
-  경로 문자열만큼만 늘어납니다.
-- 파일 수천 개 규모(`MAX_FILES_PER_REPO = 5000`)에서는 이 단순함이 이깁니다. 그 이상으로
-  커지면 델타 저장으로 바꿔야 합니다.
+마이그레이션 v5 가 예전 표(`snapshot_entries`)를 이웃 스냅샷끼리 비교해 변경분으로 옮기고, 한 번
+`VACUUM` 합니다. 실제 음악 DB 사본으로 옮긴 뒤 **모든 스냅샷을 되돌려 만든 목록이 예전과 같은지**
+대조했습니다.
 
 ### 콘텐츠 주소 저장소
 
@@ -56,6 +62,17 @@ users ──┬─< repo_members >─┬── repos ──< snapshots ──< s
   파일을 제안 경유로 읽을 수 없습니다.
 
 빈 디렉터리는 저장하지 않습니다. 폴더 목록은 조회 시점에 경로 접두사로 만들어 냅니다.
+
+### 전송
+
+- **나눠 올리기** — 8MB 조각을 `tmp/session_<id>` 에 이어 붙이고(보낸 위치가 받은 길이와 다르면 409 로
+  받은 길이를 알려 줌), 완료 때 해시를 구해 콘텐츠 주소로 옮깁니다. 세션은 DB 에 있어 서버를 다시 켜도
+  이어집니다. 조각을 다시 보낼 때는 받은 길이로 파일을 자른 뒤 붙여, 끊긴 조각의 반쪽이 섞이지 않습니다.
+- **앱** — 조각을 `XMLHttpRequest` 로 보내 조각 안 진행률까지 합산하고, 실패하면 서버에 받은 길이를
+  물어 이어 보냅니다(`lib/transfer.ts`).
+- **내려받기** — 앱은 짧게 사는 다운로드 링크를 받아 브라우저(웹)·다운로드 작업(네이티브)에 넘깁니다.
+  파일 전체를 메모리에 올리지 않고, 이어받기(`Range`)도 됩니다. 폴더는 같은 링크로 zip 을 흘려보냅니다
+  (`yazl`, 압축 없이 담기, 미리 계산한 `Content-Length`, ZIP64).
 
 ---
 
@@ -161,6 +178,9 @@ UPDATE invites SET use_count = use_count + 1
 | 디스크 고갈 | 저장소 총량(`LISTUP_MAX_REPO_MB`)과 사용자별 하루 제안용 업로드(`LISTUP_MAX_STAGING_MB_PER_DAY`) 한도 |
 | 남의 저장소 blob 참조 | 제안에는 그 저장소에 올렸거나 이력에 있는 blob 만 (`repo_blobs`) |
 | 추방된 사람의 초대 | 발급자가 editor 이상 멤버가 아니면 초대 무효, 추방·강등 시 회수 |
+| 다운로드 링크 유출 | 사용자·저장소·경로 하나에 묶인 HMAC 서명(`dl:` 접두사로 로그인 토큰과 섞이지 않음), 10분 만료, 받을 때 멤버십·토큰 세대를 다시 확인 |
+| 비밀번호 재설정 남용 | 코드는 서버 운영자만 발급(CLI), 해시만 저장, 30분·한 번, 새 코드가 이전 코드를 끝냄, 실패는 로그인 제한과 같이 셈 |
+| 올리다 만 파일로 디스크 채우기 | 세션 크기를 먼저 한도로 보고, 오래 멈춘 세션은 GC 가 지움. 편집 권한 없는 사람은 하루 한도 |
 
 ---
 
@@ -172,7 +192,7 @@ app/
 │  ├─ _layout.tsx             AuthProvider + Stack, 서버를 바꾸면 스택을 비우고 index 로
 │  ├─ index.tsx               저장된 토큰 확인 후 분기
 │  ├─ servers / server        서버 목록 · 서버 추가/수정 폼
-│  ├─ login / signup / join / settings / repos
+│  ├─ login / signup / reset-password / join / settings / repos
 │  ├─ repo/[repoId]/          index(파일) · proposals · new-proposal · members · invites · history
 │  └─ proposal/[proposalId]   제안 상세 · 리뷰 · 병합
 └─ src/
@@ -180,7 +200,9 @@ app/
    ├─ state/auth.tsx          세션 복구·로그인·서버 전환
    ├─ state/servers.ts        서버 목록 저장(AsyncStorage)과 예전 키 이전
    ├─ lib/server-list.ts      서버 목록을 스택 맨 아래로 열기
-   ├─ lib/files.ts            플랫폼별 파일 선택/저장
+   ├─ lib/files.ts            플랫폼별 파일·폴더 선택, 링크로 내려받기
+   ├─ lib/transfer.ts         나눠 올리기(진행률·이어 보내기)와 여러 파일 커밋
+   ├─ lib/invite-link.ts      초대 링크 만들기, 로그인 뒤까지 들고 가는 초대 코드
    ├─ lib/dialogs.ts          웹/네이티브 확인 대화상자
    ├─ components/             공용 UI + 저장소 탭 네비게이션
    └─ theme.ts                라이트/다크 팔레트
@@ -192,10 +214,19 @@ app/
 
 | | 웹 | 네이티브 |
 | --- | --- | --- |
-| 선택 | `File` 객체를 그대로 FormData 에 | `{uri, name, type}` 를 FormData 에 |
-| 저장 | Blob → `URL.createObjectURL` → `<a download>` | 캐시에 내려받은 뒤 공유 시트 |
+| 조각 읽기 | `File.slice` | `FileHandle.readBytes` |
+| 폴더 선택 | `webkitdirectory` (상대 경로 유지) | Android `Directory.pickDirectoryAsync` 를 훑기 |
+| 저장 | 다운로드 링크를 `<a>` 로 — 브라우저가 디스크로 받음 | 다운로드 링크를 다운로드 작업으로 받은 뒤 공유 시트 |
 
-다운로드에 인증 토큰이 필요하므로 링크를 그냥 열 수 없고, 항상 헤더를 붙여 직접 받습니다.
+로그인 토큰은 헤더로만 보내므로, 브라우저·OS 에 넘기는 주소는 짧게 사는 다운로드 링크입니다.
+
+### 초대 링크
+
+`https://<서버>/join?code=…` 하나로 서버 주소와 코드를 함께 건넵니다(메신저가 `listup://` 는 링크로
+안 만드는 경우가 많아서). 참여 화면은 로그인 없이 열리고, 코드는 모듈 상태에 들고 있다가 로그인·가입
+뒤 참여 화면으로 돌아와 미리보기 → 참여를 이어 갑니다. 웹 화면의 "설치한 앱에서 열기"는
+`listup://join?server=&code=` 이고, 앱은 목록에 없는 서버면 묻고 연결을 확인한 뒤 더합니다.
+지금 서버 주소가 공유기 안 주소면 링크를 복사할 때 같은 네트워크에서만 열린다고 알립니다.
 
 ### 서버 주소 결정
 
@@ -232,7 +263,9 @@ app/
   (`lib/updates.ts`). 릴리즈는 `npm run release:publish` 로만 올려 태그·버전·파일이 어긋나지 않게 합니다.
 - **버전 확인** — 설치형 클라이언트는 서버와 따로 업데이트되므로, 서버에 들어가기 전(서버 추가의
   연결 확인, 서버 전환)에 `/api/health` 의 `apiVersion` 을 앱의 `API_VERSION` 과 견주고 다르면
-  들어가지 않습니다. 목록을 열면 서버마다 연결을 확인해 "연결됨 / 닿지 않음 / 서버가 오래됨 /
+  들어가지 않습니다. 호환을 깨지 않는 기능 추가는 `apiLevel` 로 알리고, 앱이 쓰는 기능이 없는 서버
+  (`REQUIRED_SERVER_API_LEVEL` 미만)도 "서버가 오래됨"입니다 — `apiVersion` 을 올리면 같은 값만 받는 옛
+  앱이 멀쩡한 새 서버에서 막히기 때문에 둘을 나눴습니다. 목록을 열면 서버마다 연결을 확인해 "연결됨 / 닿지 않음 / 서버가 오래됨 /
   앱 업데이트 필요" 로 보여줍니다 — 눌러 보기 전에 알 수 있게.
 - **주소와 토큰은 짝** — `client.ts` 의 `setApiTarget(url, token)` 하나로만 바꿉니다. 따로 바꾸면
   그 사이에 나간 요청이 한 서버의 토큰을 다른 서버로 보냅니다. 401 도 "그 요청에 쓴 서버와
@@ -254,5 +287,5 @@ app/
 - **스토리지 백엔드 교체** — `BlobStore` 는 `writeStream` / `createReadStream` / `has` /
   `remove` 만 노출합니다. S3 호환 저장소로 바꾸려면 이 클래스만 갈아 끼우면 되고,
   스냅샷·제안 쪽 코드는 손대지 않아도 됩니다.
-- **스냅샷 저장 방식** — 지금은 매번 전체 목록을 씁니다. 저장소 하나가 파일 수천 개를
-  넘어서면 델타 저장으로 바꿔야 하고, 그때 손댈 곳은 `services/snapshots.ts` 뿐입니다.
+- **과거 시점 읽기** — 지금 상태에서 되돌려 만듭니다. 이력이 아주 길어져 오래된 시점 보기가
+  느려지면 몇 커밋마다 전체 목록을 체크포인트로 두면 되고, 손댈 곳은 `services/snapshots.ts` 뿐입니다.
