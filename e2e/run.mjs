@@ -13,7 +13,7 @@
  * 브라우저: E2E_BROWSER_CHANNEL (Windows 기본 msedge — 설치돼 있다. 그 밖에는 `npx playwright-core
  * install chromium` 으로 받은 Chromium).
  */
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
@@ -119,6 +119,7 @@ async function startListUp({ webDir }) {
   }
   return {
     url,
+    dataDir,
     stop: () => {
       child.kill();
       fs.rmSync(dataDir, { recursive: true, force: true });
@@ -135,6 +136,17 @@ const MIME = {
   '.png': 'image/png',
   '.ico': 'image/x-icon',
 };
+
+/** 서버 운영자가 하듯 재설정 코드를 발급한다 (npm run reset-password 와 같은 명령). 출력 전체와 코드. */
+function issueResetCode(server, email) {
+  const out = spawnSync(process.execPath, ['--import', 'tsx', 'src/reset-password.ts', email], {
+    cwd: path.join(ROOT, 'server'),
+    encoding: 'utf8',
+    env: { ...process.env, LISTUP_DATA_DIR: server.dataDir, LISTUP_LOG_LEVEL: 'warn', NODE_ENV: 'test' },
+  });
+  const text = `${out.stdout}${out.stderr}`;
+  return { status: out.status, text, code: text.match(/재설정 코드: ([A-Z0-9]{5}-[A-Z0-9]{5})/)?.[1] ?? null };
+}
 
 /** 클라이언트 모드 웹을 ListUp 과 무관한 정적 서버로. /api 요청은 새어 나온 것이라 기록한다. */
 async function startStatic(root, leaks) {
@@ -267,6 +279,7 @@ try {
       DEAD,
       leaks,
       appVersion: APP_VERSION,
+      issueResetCode: (email) => issueResetCode(A, email),
       run: `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`,
       newContext,
     };

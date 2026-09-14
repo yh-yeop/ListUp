@@ -51,6 +51,16 @@ interface AuthState {
     displayName: string,
     options?: { remember?: boolean },
   ): Promise<void>;
+  /**
+   * 서버 운영자에게 받은 재설정 코드로 새 비밀번호를 정하고 그대로 로그인한다.
+   * 그 계정의 다른 기기 로그인은 서버가 끊는다.
+   */
+  resetPassword(
+    email: string,
+    code: string,
+    newPassword: string,
+    options?: { remember?: boolean },
+  ): Promise<void>;
   /** 지금 서버에서만 로그아웃한다. 다른 서버의 로그인은 그대로다. */
   logout(): Promise<void>;
   updateProfile(displayName: string): Promise<void>;
@@ -311,6 +321,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const result = await api.signup({ email, password, displayName });
         await acceptSession(entry.id, serverUrl(entry), result.token, result.user);
         await rememberLogin(entry.id, email, password, options?.remember);
+      },
+
+      async resetPassword(email, code, newPassword, options) {
+        const entry = activeServer(storeRef.current);
+        if (!entry) throw noServerError();
+        const result = await api.resetPassword({ email, code, newPassword });
+        await acceptSession(entry.id, serverUrl(entry), result.token, result.user);
+        // 저장을 끈 채 재설정해도, 예전 비밀번호가 남아 있으면 다음 자동 로그인이 실패하므로 지운다.
+        await rememberLogin(entry.id, email, newPassword, options?.remember ?? false);
       },
 
       async logout() {

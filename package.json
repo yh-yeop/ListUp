@@ -17,6 +17,7 @@
     "build:android": "node scripts/build-android.mjs",
     "backup": "npm run backup --workspace @listup/server --",
     "gc": "npm run gc --workspace @listup/server --",
+    "reset-password": "npm run reset-password --workspace @listup/server --",
     "sync": "node scripts/sync-folder.mjs",
     "serve": "node scripts/serve.mjs",
     "tunnel": "node scripts/tunnel.mjs",

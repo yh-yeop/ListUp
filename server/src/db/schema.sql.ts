@@ -312,4 +312,19 @@ export const MIGRATIONS: {
       CREATE INDEX idx_upload_sessions_user ON upload_sessions(user_id);
     `,
   },
+  {
+    // 비밀번호 재설정 코드. 서버 운영자가 발급한다(services/password-reset.ts). 코드는 해시만 둔다.
+    version: 7,
+    up: `
+      CREATE TABLE password_resets (
+        id         TEXT PRIMARY KEY,
+        user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        code_hash  TEXT NOT NULL,
+        expires_at INTEGER NOT NULL,
+        used_at    INTEGER,
+        created_at INTEGER NOT NULL
+      );
+      CREATE INDEX idx_password_resets_user ON password_resets(user_id, used_at);
+    `,
+  },
 ];

@@ -1,7 +1,7 @@
 import * as Clipboard from 'expo-clipboard';
 import { Stack, useLocalSearchParams } from 'expo-router';
 import { useState } from 'react';
-import { Pressable, RefreshControl, View } from 'react-native';
+import { Platform, Pressable, RefreshControl, Share, View } from 'react-native';
 import {
   ROLE_DESCRIPTION,
   ROLE_LABEL,
@@ -30,8 +30,10 @@ import {
 import { RepoNav } from '../../../src/components/RepoNav';
 import { ApiError, api } from '../../../src/api/client';
 import { confirmAction, notify } from '../../../src/lib/dialogs';
+import { inviteLinkFor, isLocalNetworkAddress } from '../../../src/lib/invite-link';
 import { useAsync } from '../../../src/lib/useAsync';
 import { useAuth } from '../../../src/state/auth';
+import { serverUrl } from '../../../src/state/servers';
 import { fontSize, monoFont, radius, spacing, useTheme } from '../../../src/theme';
 
 const EXPIRY_OPTIONS = [
@@ -51,7 +53,7 @@ const USE_OPTIONS = [
 export default function InvitesScreen() {
   const { repoId } = useLocalSearchParams<{ repoId: string }>();
   const { colors } = useTheme();
-  const { user } = useAuth();
+  const { user, activeServer } = useAuth();
   const [role, setRole] = useState<Role>('viewer');
   const [expiryDays, setExpiryDays] = useState<number | null>(7);
   const [maxUses, setMaxUses] = useState<number | null>(null);
@@ -83,9 +85,32 @@ export default function InvitesScreen() {
     }
   }
 
+  // 초대 링크는 지금 이 서버에 들어온 주소로 만든다.
+  const linkBase = activeServer ? serverUrl(activeServer) : '';
+  const linkFor = (invite: Invite) => inviteLinkFor(linkBase, invite.code);
+  const localOnly = isLocalNetworkAddress(inviteLinkFor(linkBase, 'code'));
+  const LOCAL_WARNING =
+    '이 링크의 주소는 같은 공유기(네트워크) 안에서만 열립니다. 밖에 있는 사람에게는 서버를 터널 주소나 고정 주소로 연 뒤 그 주소로 들어와 링크를 만드세요.';
+
   async function copy(invite: Invite) {
     await Clipboard.setStringAsync(formatInviteCode(invite.code));
-    notify('초대 코드를 복사했습니다.', '받는 분에게 코드를 전달해 주세요.');
+    notify('초대 코드를 복사했습니다.', '받는 분에게 코드와 서버 주소를 함께 전달해 주세요.');
+  }
+
+  /** 링크 하나에 서버 주소와 코드가 함께 — 받는 사람은 누르기만 하면 된다. */
+  async function copyLink(invite: Invite) {
+    const link = linkFor(invite);
+    await Clipboard.setStringAsync(link);
+    notify('초대 링크를 복사했습니다.', localOnly ? LOCAL_WARNING : '받는 분이 링크를 누르면 가입·로그인 뒤 바로 참여합니다.');
+  }
+
+  async function shareLink(invite: Invite) {
+    const link = linkFor(invite);
+    if (localOnly) {
+      const ok = await confirmAction({ title: '같은 네트워크에서만 열리는 링크입니다', message: LOCAL_WARNING, confirmLabel: '그래도 공유' });
+      if (!ok) return;
+    }
+    await Share.share({ message: `ListUp 저장소 초대: ${link}` });
   }
 
   async function revoke(invite: Invite) {
@@ -136,7 +161,8 @@ export default function InvitesScreen() {
             <View style={{ gap: spacing.xs }}>
               <Body style={{ fontWeight: '600' }}>새 초대 코드 만들기</Body>
               <Subtitle style={{ fontSize: fontSize.sm }}>
-                코드를 받은 사람은 앱에서 코드를 입력해 저장소에 참여합니다.
+                링크를 받은 사람은 누르기만 하면 가입·로그인 뒤 저장소에 참여합니다. 코드만 전할 때는 서버
+                주소도 함께 알려 주세요.
               </Subtitle>
             </View>
 
@@ -230,7 +256,30 @@ export default function InvitesScreen() {
                       <Caption>{formatRelativeTime(invite.createdAt)} 생성</Caption>
                     </Row>
 
+                    {invite.active ? (
+                      <Caption numberOfLines={1} style={{ fontFamily: monoFont }}>
+                        {linkFor(invite)}
+                      </Caption>
+                    ) : null}
+
                     <Row gap={spacing.sm} wrap>
+                      {invite.active ? (
+                        <Button
+                          label="링크 복사"
+                          icon="link-outline"
+                          compact
+                          onPress={() => void copyLink(invite)}
+                        />
+                      ) : null}
+                      {invite.active && Platform.OS !== 'web' ? (
+                        <Button
+                          label="공유"
+                          icon="share-social-outline"
+                          variant="secondary"
+                          compact
+                          onPress={() => void shareLink(invite)}
+                        />
+                      ) : null}
                       <Button
                         label="코드 복사"
                         icon="copy-outline"

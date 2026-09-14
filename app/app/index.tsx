@@ -1,6 +1,7 @@
 import { Redirect } from 'expo-router';
 import { View } from 'react-native';
 import { Loading } from '../src/components/ui';
+import { peekPendingInvite } from '../src/lib/invite-link';
 import { useAuth } from '../src/state/auth';
 import { useTheme } from '../src/theme';
 
@@ -21,6 +22,11 @@ export default function Index() {
     );
   }
 
-  if (user) return <Redirect href="/repos" />;
+  if (user) {
+    // 초대 링크로 들어와 로그인·가입했다면 참여 화면으로 돌아간다.
+    const pending = peekPendingInvite();
+    if (pending) return <Redirect href={`/join?code=${encodeURIComponent(pending)}`} />;
+    return <Redirect href="/repos" />;
+  }
   return <Redirect href={startAtServerList ? '/servers' : '/login'} />;
 }

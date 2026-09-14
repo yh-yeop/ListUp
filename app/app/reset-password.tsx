@@ -1,19 +1,23 @@
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { useState } from 'react';
 import { KeyboardAvoidingView, Platform, View } from 'react-native';
 import { Body, Button, Card, ErrorNotice, Field, Input, Screen, Subtitle, Title } from '../src/components/ui';
 import { ApiError } from '../src/api/client';
 import { RememberLogin } from '../src/components/RememberLogin';
 import { credentialsSupported } from '../src/lib/credentials';
-import { peekPendingInvite } from '../src/lib/invite-link';
-import { formatInviteCode } from '@listup/shared';
 import { useAuth } from '../src/state/auth';
+import { serverTitle } from '../src/state/servers';
 import { spacing } from '../src/theme';
 
-export default function SignupScreen() {
-  const { signup } = useAuth();
-  const [displayName, setDisplayName] = useState('');
-  const [email, setEmail] = useState('');
+/**
+ * 비밀번호를 잊었을 때 — 계정은 서버마다 따로라, 그 서버를 돌리는 사람에게 재설정 코드를 받는다
+ * (`npm run reset-password -- <이메일>`). 코드와 새 비밀번호를 넣으면 바로 로그인된다.
+ */
+export default function ResetPasswordScreen() {
+  const { resetPassword, activeServer } = useAuth();
+  const params = useLocalSearchParams<{ email?: string }>();
+  const [email, setEmail] = useState(typeof params.email === 'string' ? params.email : '');
+  const [code, setCode] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -22,19 +26,20 @@ export default function SignupScreen() {
   const submit = async () => {
     if (busy) return;
     setError(null);
-
+    if (!email.trim() || !code.trim()) {
+      setError('이메일과 재설정 코드를 넣어 주세요.');
+      return;
+    }
     if (password.length < 8) {
       setError('비밀번호는 8자 이상이어야 합니다.');
       return;
     }
-
     setBusy(true);
     try {
-      await signup(email.trim(), password, displayName.trim(), { remember });
-      // index 가 저장소 목록으로 보낸다. 로그인·가입 화면은 스택에 남지 않는다.
+      await resetPassword(email.trim(), code.trim(), password, { remember });
       router.replace('/');
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : '회원가입에 실패했습니다.');
+      setError(err instanceof ApiError ? err.message : '비밀번호를 바꾸지 못했습니다.');
     } finally {
       setBusy(false);
     }
@@ -44,22 +49,14 @@ export default function SignupScreen() {
     <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <Screen>
         <View style={{ gap: spacing.sm }}>
-          <Title>계정 만들기</Title>
-          <Subtitle>만든 계정으로 모바일과 PC 어디서든 같은 저장소를 볼 수 있습니다.</Subtitle>
+          <Title>비밀번호 재설정</Title>
+          <Subtitle>
+            계정은 서버마다 따로입니다. {activeServer ? `${serverTitle(activeServer)} ` : ''}서버를 돌리는 사람에게
+            재설정 코드를 받아 넣어 주세요. 코드는 30분 동안 한 번 쓸 수 있습니다.
+          </Subtitle>
         </View>
 
         <Card style={{ gap: spacing.lg }}>
-          {peekPendingInvite() ? (
-            <Body muted>가입하면 초대 코드 {formatInviteCode(peekPendingInvite()!)} 로 참여를 이어 갑니다.</Body>
-          ) : null}
-          <Field label="이름" hint="다른 참여자에게 보이는 이름입니다.">
-            <Input
-              value={displayName}
-              onChangeText={setDisplayName}
-              placeholder="홍길동"
-              autoComplete="name"
-            />
-          </Field>
           <Field label="이메일">
             <Input
               value={email}
@@ -71,7 +68,16 @@ export default function SignupScreen() {
               placeholder="you@example.com"
             />
           </Field>
-          <Field label="비밀번호" hint="8자 이상">
+          <Field label="재설정 코드">
+            <Input
+              value={code}
+              onChangeText={setCode}
+              autoCapitalize="characters"
+              autoCorrect={false}
+              placeholder="XXXXX-XXXXX"
+            />
+          </Field>
+          <Field label="새 비밀번호" hint="8자 이상. 바꾸면 다른 기기의 로그인은 모두 끊깁니다.">
             <Input
               value={password}
               onChangeText={setPassword}
@@ -85,8 +91,12 @@ export default function SignupScreen() {
 
           {error ? <ErrorNotice message={error} /> : null}
 
-          <Button label="가입하고 시작하기" onPress={submit} loading={busy} full />
+          <Button label="새 비밀번호로 로그인" onPress={submit} loading={busy} full />
         </Card>
+
+        <Body muted style={{ fontSize: 12 }}>
+          서버를 돌리는 사람이라면: 서버 폴더에서 npm run reset-password -- 이메일
+        </Body>
       </Screen>
     </KeyboardAvoidingView>
   );

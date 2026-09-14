@@ -10,6 +10,7 @@
     "start": "tsx src/index.ts",
     "backup": "tsx src/backup.ts",
     "gc": "tsx src/gc.ts",
+    "reset-password": "tsx src/reset-password.ts",
     "test": "tsx --test test/*.test.ts",
     "typecheck": "tsc --noEmit"
   },

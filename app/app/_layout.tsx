@@ -56,17 +56,19 @@ function RootNavigator() {
       <Stack.Screen name="index" options={{ headerShown: false }} />
       <Stack.Screen name="servers" options={{ title: '서버' }} />
       <Stack.Screen name="server" options={{ title: '서버 추가' }} />
+      {/* 초대 링크는 로그인 전에도 연다 — 코드를 들고 로그인·가입으로 보낸다. */}
+      <Stack.Screen name="join" options={{ title: '초대 코드로 참여' }} />
 
       {/* 로그인 전에만 */}
       <Stack.Protected guard={!user}>
         <Stack.Screen name="login" options={{ headerShown: false }} />
         <Stack.Screen name="signup" options={{ title: '회원가입' }} />
+        <Stack.Screen name="reset-password" options={{ title: '비밀번호 재설정' }} />
       </Stack.Protected>
 
       {/* 로그인 후에만 */}
       <Stack.Protected guard={!!user}>
         <Stack.Screen name="repos" options={{ title: 'ListUp' }} />
-        <Stack.Screen name="join" options={{ title: '초대 코드로 참여' }} />
         <Stack.Screen name="settings" options={{ title: '내 정보' }} />
         <Stack.Screen name="repo/[repoId]/index" />
         <Stack.Screen name="repo/[repoId]/proposals" />

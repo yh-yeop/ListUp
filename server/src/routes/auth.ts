@@ -15,6 +15,7 @@ import { badRequest, conflict, tooManyRequests, unauthorized } from '../lib/erro
 import { RateLimiter } from '../lib/rate-limit.ts';
 import { newId } from '../lib/ids.ts';
 import { body, requireUser, requiredString } from '../lib/request.ts';
+import { consumeResetCode } from '../services/password-reset.ts';
 
 interface UserRow {
   id: string;
@@ -124,6 +125,44 @@ export async function registerAuthRoutes(app: FastifyInstance, ctx: AppContext):
     return {
       token: issueToken(row.id, config.authSecret, config.tokenTtlMs, row.token_epoch),
       user: toUser(row),
+    };
+  });
+
+  /**
+   * 재설정 코드로 새 비밀번호 — 서버 운영자가 발급한 코드(npm run reset-password)를 쓴다.
+   * 성공하면 토큰 세대를 올려 다른 기기의 로그인을 끊고, 이 기기는 바로 로그인된다.
+   * 틀린 시도는 로그인과 같은 제한으로 센다(코드 대입 방지).
+   */
+  app.post('/auth/reset', async (req) => {
+    const input = body(req);
+    const email = normalizeEmail(input.email);
+    const code = typeof input.code === 'string' ? input.code : '';
+    const fail = () => badRequest('재설정 코드가 올바르지 않거나 만료됐습니다. 서버 운영자에게 다시 받아 주세요.');
+
+    const keys = [`ip:${clientIp(req)}`, ...(email ? [`email:${email}`] : [])];
+    assertLoginAllowed(keys);
+    const next = validatePassword(input.newPassword);
+    if (!next) throw badRequest(`비밀번호는 ${MIN_PASSWORD_LENGTH}자 이상이어야 합니다.`);
+
+    const row = email ? db.prepare<[string], UserRow>(`SELECT * FROM users WHERE email = ?`).get(email) : undefined;
+    const nextHash = await hashPassword(next);
+    const ok =
+      row !== undefined &&
+      db.transaction(() => {
+        if (!consumeResetCode(db, row.id, code)) return false;
+        db.prepare(`UPDATE users SET password_hash = ?, token_epoch = token_epoch + 1 WHERE id = ?`).run(nextHash, row.id);
+        return true;
+      })();
+    if (!ok) {
+      for (const key of keys) loginLimiter.fail(key);
+      throw fail();
+    }
+    for (const key of keys) loginLimiter.succeed(key);
+
+    const updated = db.prepare<[string], UserRow>(`SELECT * FROM users WHERE id = ?`).get(row.id)!;
+    return {
+      token: issueToken(updated.id, config.authSecret, config.tokenTtlMs, updated.token_epoch),
+      user: toUser(updated),
     };
   });
 

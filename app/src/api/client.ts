@@ -333,6 +333,10 @@ export const api = {
   login: (payload: { email: string; password: string }) =>
     request<{ token: string; user: User }>('/api/auth/login', { method: 'POST', body: payload }),
 
+  /** 서버 운영자가 발급한 재설정 코드로 새 비밀번호를 정한다. 성공하면 바로 로그인된다. */
+  resetPassword: (payload: { email: string; code: string; newPassword: string }) =>
+    request<{ token: string; user: User }>('/api/auth/reset', { method: 'POST', body: payload }),
+
   me: () => request<{ user: User }>('/api/auth/me'),
 
   updateProfile: (payload: { displayName: string }) =>

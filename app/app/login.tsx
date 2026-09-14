@@ -15,6 +15,8 @@ import {
 } from '../src/components/ui';
 import { RememberLogin } from '../src/components/RememberLogin';
 import { credentialsSupported, loadLogin } from '../src/lib/credentials';
+import { peekPendingInvite } from '../src/lib/invite-link';
+import { formatInviteCode } from '@listup/shared';
 import { useAuth } from '../src/state/auth';
 import { ApiError, IS_CLIENT_BUILD } from '../src/api/client';
 import { openServerList } from '../src/lib/server-list';
@@ -89,6 +91,11 @@ export default function LoginScreen() {
           </View>
 
           <Card style={{ gap: spacing.lg }}>
+            {peekPendingInvite() ? (
+              <Body muted>
+                로그인하면 초대 코드 {formatInviteCode(peekPendingInvite()!)} 로 참여를 이어 갑니다.
+              </Body>
+            ) : null}
             <Field label="이메일">
               <Input
                 value={email}
@@ -117,6 +124,19 @@ export default function LoginScreen() {
             {error ? <ErrorNotice message={error} /> : null}
 
             <Button label="로그인" onPress={submit} loading={busy} full />
+
+            <Pressable
+              onPress={() =>
+                router.push({ pathname: '/reset-password', params: email.trim() ? { email: email.trim() } : {} })
+              }
+              accessibilityRole="link"
+              hitSlop={8}
+              style={{ alignSelf: 'center' }}
+            >
+              <Body muted style={{ fontSize: 13 }}>
+                비밀번호를 잊었나요?
+              </Body>
+            </Pressable>
 
             <View style={{ flexDirection: 'row', justifyContent: 'center', gap: spacing.xs }}>
               <Body muted>계정이 없으신가요?</Body>
