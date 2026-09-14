@@ -4,6 +4,10 @@ import { MAX_FILE_SIZE } from '@listup/shared';
 import type {
   ApiErrorBody,
   ApiErrorCode,
+  CommitResult,
+  DownloadLink,
+  UploadSession,
+  UploadedBlob,
   Invite,
   InvitePreview,
   Member,
@@ -228,10 +232,83 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   }
 }
 
-/** 업로드용 파일 소스 — 웹에서는 File, 네이티브에서는 uri 기반. */
+/**
+ * 업로드용 파일 소스 — 웹에서는 File, 네이티브에서는 uri 기반.
+ * relativePath 는 폴더를 통째로 고른 경우 그 폴더 안에서의 경로(맨 위 폴더 이름 포함, 예: `사진/여름/a.jpg`).
+ */
 export type UploadSource =
-  | { kind: 'web'; file: File; name: string; size: number }
-  | { kind: 'native'; uri: string; name: string; size: number; mimeType: string };
+  | { kind: 'web'; file: File; name: string; size: number; relativePath?: string }
+  | { kind: 'native'; uri: string; name: string; size: number; mimeType: string; relativePath?: string };
+
+/** 조각 하나를 보내는 동안 기다리는 최대 시간. 느린 모바일 망에서 8MB 가 넉넉히 들어가게. */
+const CHUNK_TIMEOUT_MS = 120_000;
+
+/**
+ * 바이트를 그대로 보내고 JSON 응답을 받는다 — 나눠 올리기 조각용. 보낸 양을 onProgress 로 알려 준다.
+ * fetch 는 올리는 진행률을 주지 않아 XMLHttpRequest 를 쓴다(웹·네이티브 모두 있다).
+ * 401 처리는 request 와 같다 — 이 요청에 쓴 서버·토큰이 지금과 같을 때만 세션을 지운다.
+ */
+function sendBytes<T>(
+  method: 'PUT' | 'POST',
+  path: string,
+  bytes: Blob | Uint8Array,
+  onProgress?: (loaded: number) => void,
+): Promise<T> {
+  if (apiBaseUrl === null) return Promise.reject(new ApiError(0, 'internal', '들어갈 서버를 먼저 골라 주세요.'));
+  const usedBaseUrl = apiBaseUrl;
+  const usedToken = authToken;
+  return new Promise<T>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open(method, `${usedBaseUrl}${path}`);
+    xhr.timeout = CHUNK_TIMEOUT_MS;
+    xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+    if (usedToken) xhr.setRequestHeader('Authorization', `Bearer ${usedToken}`);
+    if (onProgress) xhr.upload.onprogress = (event) => onProgress(event.loaded);
+    const networkError = () =>
+      reject(new ApiError(0, 'internal', `서버에 연결할 수 없습니다. (${usedBaseUrl})\n연결을 확인해 주세요.`));
+    xhr.onerror = networkError;
+    xhr.ontimeout = networkError;
+    xhr.onload = () => {
+      if (xhr.status === 401 && usedToken && authToken === usedToken && apiBaseUrl === usedBaseUrl) {
+        authToken = null;
+        onUnauthorized?.(usedToken);
+      }
+      let parsed: unknown = null;
+      try {
+        parsed = xhr.responseText ? JSON.parse(xhr.responseText) : null;
+      } catch {
+        // 본문이 JSON 이 아닌 경우 (프록시 오류 등)
+      }
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(parsed as T);
+        return;
+      }
+      const error = (parsed as ApiErrorBody | null)?.error;
+      reject(
+        new ApiError(
+          xhr.status,
+          error?.code ?? 'internal',
+          error?.message ?? `요청이 실패했습니다. (HTTP ${xhr.status})`,
+          error?.details,
+        ),
+      );
+    };
+    // RN 의 XMLHttpRequest 는 Uint8Array 가 아니라 ArrayBuffer 를 받는다. 더 큰 버퍼의 일부를 가리키는
+    // 배열이면 그 구간만 떼어 보낸다.
+    if (bytes instanceof Uint8Array) {
+      const whole = bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength;
+      xhr.send((whole ? bytes.buffer : bytes.slice().buffer) as ArrayBuffer);
+    } else {
+      xhr.send(bytes);
+    }
+  });
+}
+
+/** 서버가 준 경로(/api/…)를 지금 서버 주소가 붙은 전체 주소로. 이미 전체 주소면 그대로. */
+export function resolveApiUrl(pathOrUrl: string): string {
+  if (/^https?:\/\//i.test(pathOrUrl)) return pathOrUrl;
+  return `${apiBaseUrl ?? ''}${pathOrUrl}`;
+}
 
 function toFormData(source: UploadSource): FormData {
   const form = new FormData();
@@ -337,6 +414,32 @@ export const api = {
       method: 'POST',
       body: { from, to },
     }),
+
+  // 나눠 올리기 (lib/transfer.ts 가 쓴다) ----------------------------------
+  startUpload: (repoId: string, payload: { name: string; size: number }) =>
+    request<{ upload: UploadSession }>(`/api/repos/${repoId}/uploads`, { method: 'POST', body: payload }),
+
+  getUpload: (uploadId: string) => request<{ upload: UploadSession }>(`/api/uploads/${uploadId}`),
+
+  putChunk: (uploadId: string, offset: number, bytes: Blob | Uint8Array, onProgress?: (loaded: number) => void) =>
+    sendBytes<{ upload: UploadSession }>('PUT', `/api/uploads/${uploadId}?offset=${offset}`, bytes, onProgress),
+
+  completeUpload: (uploadId: string) =>
+    request<{ blob: UploadedBlob }>(`/api/uploads/${uploadId}/complete`, { method: 'POST' }),
+
+  cancelUpload: (uploadId: string) =>
+    request<{ ok: true }>(`/api/uploads/${uploadId}`, { method: 'DELETE' }),
+
+  /** 올려 둔 파일 여러 개를 커밋 하나로 반영한다. blobHash 가 null 이면 삭제. */
+  commitFiles: (repoId: string, changes: { path: string; blobHash: string | null }[], message?: string) =>
+    request<CommitResult>(`/api/repos/${repoId}/files/commit`, {
+      method: 'POST',
+      body: { changes, ...(message ? { message } : {}) },
+    }),
+
+  /** 로그인 헤더 없이 받을 수 있는 짧게 사는 링크. archive 면 폴더를 zip 으로. */
+  downloadLink: (repoId: string, payload: { path: string; snapshot?: string; archive?: boolean }) =>
+    request<DownloadLink>(`/api/repos/${repoId}/download-link`, { method: 'POST', body: payload }),
 
   /** 제안에 담을 파일을 미리 올린다. 저장소 내용은 아직 바뀌지 않는다. */
   uploadBlob: (repoId: string, source: UploadSource) =>

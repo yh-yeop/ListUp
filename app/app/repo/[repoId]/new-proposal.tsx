@@ -21,8 +21,10 @@ import {
   Title,
 } from '../../../src/components/ui';
 import { ApiError, api, getMaxUploadBytes } from '../../../src/api/client';
+import { TransferProgress } from '../../../src/components/TransferProgress';
 import { confirmAction, notify } from '../../../src/lib/dialogs';
 import { pickFiles } from '../../../src/lib/files';
+import { uploadMany, type UploadProgress } from '../../../src/lib/transfer';
 import { useAsync } from '../../../src/lib/useAsync';
 import { fontSize, monoFont, spacing, useTheme } from '../../../src/theme';
 
@@ -44,7 +46,8 @@ export default function NewProposalScreen() {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [staged, setStaged] = useState<StagedChange[]>([]);
-  const [uploading, setUploading] = useState(false);
+  const [progress, setProgress] = useState<UploadProgress | null>(null);
+  const uploading = progress !== null;
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [browsePath, setBrowsePath] = useState(initialPath ?? '');
@@ -88,38 +91,39 @@ export default function NewProposalScreen() {
     }
     if (sources.length === 0) return;
 
-    setUploading(true);
     setError(null);
     // 새로 담는 파일은 지금 탐색 중인 폴더에 넣는다.
     const targetFolder = browsePath;
     // 한도는 서버 설정을 따르므로 서버에 물어본 값으로 거른다.
     const maxBytes = await getMaxUploadBytes();
+    const tooLarge = sources.filter((source) => source.size > maxBytes).map((source) => source.name);
+    const accepted = sources.filter((source) => source.size <= maxBytes);
     const added: StagedChange[] = [];
-    const tooLarge: string[] = [];
-    for (const source of sources) {
-      if (source.size > maxBytes) {
-        tooLarge.push(source.name);
-        continue;
-      }
-      try {
-        // 제안용 blob 은 미리 올려 둔다. 저장소 내용은 아직 그대로다.
-        const { blob } = await api.uploadBlob(repoId, source);
+    if (accepted.length > 0) {
+      setProgress({ sentBytes: 0, totalBytes: 0, doneFiles: 0, totalFiles: accepted.length, current: '' });
+      // 제안용 blob 은 미리 나눠 올려 둔다. 저장소 내용은 아직 그대로다.
+      const { uploaded, failures } = await uploadMany(
+        repoId,
+        accepted.map((source) => ({
+          source,
+          path: targetFolder ? `${targetFolder}/${source.name}` : source.name,
+        })),
+        setProgress,
+      );
+      for (const { item, blob } of uploaded) {
         keySeq.current += 1;
         added.push({
           key: `upload:${keySeq.current}`,
-          path: targetFolder ? `${targetFolder}/${source.name}` : source.name,
+          path: item.path,
           blobHash: blob.hash,
           size: blob.size,
-          originalName: source.name,
+          originalName: item.source.name,
         });
-      } catch (err) {
-        setError(
-          err instanceof ApiError ? err.message : `${source.name} 을(를) 올리지 못했습니다.`,
-        );
       }
+      if (failures.length > 0) setError(`${failures[0].item.source.name}: ${failures[0].message}`);
+      setProgress(null);
     }
     setStaged((prev) => [...prev, ...added]);
-    setUploading(false);
     if (tooLarge.length > 0) {
       notify(
         '너무 큰 파일은 건너뛰었습니다.',
@@ -246,6 +250,7 @@ export default function NewProposalScreen() {
           현재 폴더: {browsePath === '' ? '최상위 폴더' : browsePath} — 새로 담는 파일은 이
           폴더에 저장됩니다. 아래 목록에서 다른 폴더를 열면 바뀝니다.
         </Caption>
+        {progress ? <TransferProgress progress={progress} label="담는 중" /> : null}
 
         {staged.length === 0 ? (
           <Caption>

@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Stack, router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { useCallback, useRef, useState } from 'react';
-import { ActivityIndicator, Pressable, RefreshControl, Text, View } from 'react-native';
+import { ActivityIndicator, Platform, Pressable, RefreshControl, Text, View } from 'react-native';
 import {
   ROLE_LABEL,
   formatBytes,
@@ -28,9 +28,11 @@ import {
   Title,
 } from '../../../src/components/ui';
 import { Breadcrumb, RepoNav } from '../../../src/components/RepoNav';
+import { TransferProgress } from '../../../src/components/TransferProgress';
 import { ApiError, api, getMaxUploadBytes, type UploadSource } from '../../../src/api/client';
 import { confirmAction, notify } from '../../../src/lib/dialogs';
-import { downloadFile, pickFiles } from '../../../src/lib/files';
+import { downloadFromRepo, pickFiles, pickFolder } from '../../../src/lib/files';
+import { uploadAndCommit, type UploadItem, type UploadProgress } from '../../../src/lib/transfer';
 import { useAsync } from '../../../src/lib/useAsync';
 import { fontSize, monoFont, radius, spacing, useTheme } from '../../../src/theme';
 
@@ -49,6 +51,9 @@ interface Editing {
 /** 업로드 실패 안내에 나열할 최대 건수. 나머지는 'n건 더' 로 줄인다. */
 const MAX_FAILURES_SHOWN = 3;
 
+/** 폴더 올리기는 웹(폴더 선택)과 안드로이드(시스템 폴더 선택기)에서만 된다. */
+const CAN_PICK_FOLDER = Platform.OS === 'web' || Platform.OS === 'android';
+
 export default function RepoFilesScreen() {
   const {
     repoId,
@@ -58,7 +63,8 @@ export default function RepoFilesScreen() {
   } = useLocalSearchParams<{ repoId: string; snapshot?: string; message?: string; at?: string }>();
   const { colors } = useTheme();
   const [path, setPath] = useState('');
-  const [uploading, setUploading] = useState(false);
+  const [progress, setProgress] = useState<UploadProgress | null>(null);
+  const uploading = progress !== null;
   const [busyPath, setBusyPath] = useState<string | null>(null);
   const [editing, setEditing] = useState<Editing | null>(null);
   const [renaming, setRenaming] = useState(false);
@@ -105,6 +111,46 @@ export default function RepoFilesScreen() {
     router.setParams({ snapshot: undefined, message: undefined, at: undefined });
   }
 
+  /** 서버가 거부할 크기는 올리지 않고 바로 안내한다. 한도는 서버 설정을 따른다. */
+  async function withinLimit(sources: UploadSource[]): Promise<UploadSource[]> {
+    const maxBytes = await getMaxUploadBytes();
+    const tooLarge = sources.filter((source) => source.size > maxBytes);
+    if (tooLarge.length > 0) {
+      const names = tooLarge.slice(0, MAX_FAILURES_SHOWN).map((source) => source.name).join(', ');
+      const more = tooLarge.length > MAX_FAILURES_SHOWN ? ` 외 ${tooLarge.length - MAX_FAILURES_SHOWN}개` : '';
+      notify(`${names}${more} 은(는) ${formatBytes(maxBytes)} 를 넘어 올릴 수 없습니다.`);
+    }
+    return sources.filter((source) => source.size <= maxBytes);
+  }
+
+  /** 조각으로 나눠 올리고 커밋 하나로 반영한 뒤, 결과를 알려 준다. */
+  async function runUpload(items: UploadItem[]) {
+    setProgress({ sentBytes: 0, totalBytes: 0, doneFiles: 0, totalFiles: items.length, current: '' });
+    try {
+      const result = await uploadAndCommit(repoId, items, setProgress);
+      const { failures, commit } = result;
+      if (failures.length > 0) {
+        const shown = failures.slice(0, MAX_FAILURES_SHOWN).map((f) => `${f.item.source.name}: ${f.message}`);
+        const more = failures.length - shown.length;
+        notify(
+          `${result.uploaded.length}개 올렸습니다.`,
+          `${failures.length}개는 올리지 못했습니다.\n${shown.join('\n')}${more > 0 ? `\n외 ${more}건 더` : ''}`,
+        );
+      } else if (commit && items.length > 1) {
+        const parts = [
+          commit.added ? `추가 ${commit.added}` : '',
+          commit.updated ? `수정 ${commit.updated}` : '',
+        ].filter(Boolean);
+        notify(parts.length > 0 ? `${items.length}개 올렸습니다 — ${parts.join(' · ')}` : '바뀐 파일이 없습니다.');
+      }
+    } catch (err) {
+      notify('반영하지 못했습니다.', err instanceof ApiError ? err.message : undefined);
+    } finally {
+      setProgress(null);
+      state.refresh();
+    }
+  }
+
   async function upload() {
     if (uploading) return;
     let sources: UploadSource[];
@@ -115,18 +161,7 @@ export default function RepoFilesScreen() {
       return;
     }
     if (sources.length === 0) return;
-
-    // 서버가 거부할 크기는 올리지 않고 바로 안내한다. 한도는 서버 설정을 따른다.
-    const maxBytes = await getMaxUploadBytes();
-    const tooLarge = sources.filter((source) => source.size > maxBytes);
-    if (tooLarge.length > 0) {
-      notify(
-        `${tooLarge.map((source) => source.name).join(', ')} 은(는) ${formatBytes(
-          maxBytes,
-        )} 를 넘어 올릴 수 없습니다.`,
-      );
-    }
-    const accepted = sources.filter((source) => source.size <= maxBytes);
+    const accepted = await withinLimit(sources);
     if (accepted.length === 0) return;
 
     // 현재 폴더에 같은 이름이 있으면 올리기 전에 한 번에 묻는다. 취소하면 아무것도 올리지 않는다.
@@ -141,47 +176,51 @@ export default function RepoFilesScreen() {
       if (!ok) return;
     }
 
-    setUploading(true);
-    let done = 0;
-    const failures: string[] = [];
-    for (const [index, source] of accepted.entries()) {
-      const target = path ? `${path}/${source.name}` : source.name;
-      try {
-        await api.uploadFile(repoId, target, source);
-        done += 1;
-      } catch (err) {
-        failures.push(
-          `${source.name}: ${err instanceof ApiError ? err.message : '올리지 못했습니다.'}`,
-        );
-        // 권한이 없으면 나머지도 같은 이유로 실패하므로 여기서 멈춘다.
-        if (err instanceof ApiError && err.code === 'forbidden') {
-          for (const rest of accepted.slice(index + 1)) failures.push(`${rest.name}: 권한 없음`);
-          break;
-        }
-      }
-    }
-    setUploading(false);
-    state.refresh();
-
-    if (failures.length > 0) {
-      const shown = failures.slice(0, MAX_FAILURES_SHOWN);
-      const more = failures.length - shown.length;
-      notify(
-        `${done}개 올렸습니다.`,
-        `${failures.length}개는 올리지 못했습니다.\n${shown.join('\n')}${
-          more > 0 ? `\n외 ${more}건 더` : ''
-        }`,
-      );
-    }
+    await runUpload(
+      accepted.map((source) => ({ source, path: path ? `${path}/${source.name}` : source.name })),
+    );
   }
 
-  async function download(filePath: string, fileName: string) {
-    setBusyPath(filePath);
+  /** 폴더를 통째로 — 폴더 구조 그대로 지금 폴더 아래에 올리고 커밋 하나로 반영한다. */
+  async function uploadFolder() {
+    if (uploading) return;
+    let sources: UploadSource[];
     try {
-      const result = await downloadFile(api.fileUrl(repoId, filePath, { snapshotId }), fileName);
-      if (result.message) notify(result.message);
+      sources = await pickFolder();
     } catch {
-      notify('내려받지 못했습니다.');
+      notify('폴더를 선택하지 못했습니다.');
+      return;
+    }
+    if (sources.length === 0) return;
+    const accepted = await withinLimit(sources);
+    if (accepted.length === 0) return;
+
+    const folderName = (accepted[0].relativePath ?? accepted[0].name).split('/')[0];
+    const totalBytes = accepted.reduce((sum, source) => sum + source.size, 0);
+    const ok = await confirmAction({
+      title: `'${folderName}' 폴더를 올릴까요?`,
+      message: `파일 ${accepted.length}개 · ${formatBytes(totalBytes)}\n${
+        path ? `'${path}' 아래에` : '저장소 맨 위에'
+      } 폴더 구조 그대로 올립니다. 같은 경로의 파일은 새 내용으로 바뀌고, 이전 버전은 변경 이력에 남습니다.`,
+      confirmLabel: '올리기',
+    });
+    if (!ok) return;
+    await runUpload(
+      accepted.map((source) => {
+        const inner = source.relativePath ?? source.name;
+        return { source, path: path ? `${path}/${inner}` : inner };
+      }),
+    );
+  }
+
+  /** 파일 하나, 또는 폴더를 zip 으로 받는다. */
+  async function download(targetPath: string, fileName: string, archive = false) {
+    setBusyPath(targetPath);
+    try {
+      const result = await downloadFromRepo(repoId, { path: targetPath, snapshotId, archive, fileName });
+      if (result.message) notify(result.message);
+    } catch (err) {
+      notify('내려받지 못했습니다.', err instanceof ApiError ? err.message : undefined);
     } finally {
       setBusyPath(null);
     }
@@ -309,6 +348,15 @@ export default function RepoFilesScreen() {
                   loading={uploading}
                 />
               ) : null}
+              {canEdit && CAN_PICK_FOLDER ? (
+                <Button
+                  label="폴더 올리기"
+                  icon="folder-open-outline"
+                  variant="secondary"
+                  onPress={uploadFolder}
+                  disabled={uploading}
+                />
+              ) : null}
               <Button
                 label="변경 제안하기"
                 icon="git-pull-request-outline"
@@ -319,6 +367,8 @@ export default function RepoFilesScreen() {
               />
             </Row>
           )}
+
+          {progress ? <TransferProgress progress={progress} /> : null}
 
           {!isEditor && !snapshotId ? (
             <Caption>
@@ -394,6 +444,15 @@ export default function RepoFilesScreen() {
                               파일 {dir.fileCount}개 · {formatBytes(dir.totalSize)}
                             </Caption>
                           </View>
+                          {busyPath === dir.path ? (
+                            <ActivityIndicator size="small" color={colors.textMuted} />
+                          ) : (
+                            <IconButton
+                              icon="download-outline"
+                              label={`${dir.name} 폴더를 zip 으로 받기`}
+                              onPress={() => void download(dir.path, `${dir.name}.zip`, true)}
+                            />
+                          )}
                           {canEdit ? (
                             <>
                               <IconButton

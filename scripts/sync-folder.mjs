@@ -15,6 +15,9 @@
  *
  * **다시 돌려도 된다.** 서버에 있는 파일과 해시를 견주어 새 파일과 바뀐 파일만 올린다.
  * 서버에만 있는 파일은 건드리지 않는다 (지우려면 앱에서 직접).
+ *
+ * 파일은 조각으로 나눠 올리고(한 요청이 프록시 한도를 넘지 않게, 끊기면 이어서) 200개마다 커밋
+ * 하나로 반영한다 — 파일마다 스냅샷을 만들지 않는다.
  */
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
@@ -228,20 +231,80 @@ let sent = 0;
 let failed = 0;
 const started = Date.now();
 
-for (const file of todo) {
-  const form = new FormData();
-  const bytes = await fsp.readFile(file.full);
-  form.append('file', new Blob([bytes]), path.basename(file.rel));
+/**
+ * 파일 하나를 나눠 올려 blob 해시를 받는다 — 서버의 나눠 올리기 세션을 쓴다. 한 요청이 프록시 한도
+ * (Cloudflare 100MB)를 넘지 않고, 파일을 통째로 메모리에 읽지 않는다. 끊기면 받은 위치에서 다시.
+ */
+async function uploadInChunks(file, onSent) {
+  const { upload } = await api(`/api/repos/${targetRepo}/uploads`, {
+    method: 'POST',
+    body: { name: path.basename(file.rel), size: file.size },
+  });
+  const handle = await fsp.open(file.full, 'r');
   try {
-    await api(`/api/repos/${targetRepo}/files?path=${encodeURIComponent(file.rel)}`, {
-      method: 'POST',
-      body: form,
+    let offset = 0;
+    let retries = 0;
+    const buffer = Buffer.alloc(upload.chunkSize);
+    while (offset < file.size) {
+      const length = Math.min(upload.chunkSize, file.size - offset);
+      await handle.read(buffer, 0, length, offset);
+      try {
+        const res = await fetch(`${server}/api/uploads/${upload.id}?offset=${offset}`, {
+          method: 'PUT',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/octet-stream' },
+          body: buffer.subarray(0, length),
+        });
+        const json = await res.json().catch(() => null);
+        if (res.status === 409 && typeof json?.error?.details?.received === 'number') {
+          offset = json.error.details.received; // 서버가 받은 위치에서 다시
+          continue;
+        }
+        if (!res.ok) throw new Error(json?.error?.message ?? `${res.status}`);
+        offset = json.upload.received;
+        retries = 0;
+        onSent(length);
+      } catch (err) {
+        if (err instanceof TypeError && retries < 5) {
+          // 연결이 끊겼다 — 잠시 뒤 받은 위치를 물어 이어 간다.
+          retries += 1;
+          await new Promise((r) => setTimeout(r, 1000 * retries));
+          const status = await api(`/api/uploads/${upload.id}`).catch(() => null);
+          if (status) offset = status.upload.received;
+          continue;
+        }
+        throw err;
+      }
+    }
+    const { blob } = await api(`/api/uploads/${upload.id}/complete`, { method: 'POST' });
+    return blob.hash;
+  } finally {
+    await handle.close();
+  }
+}
+
+/** 이만큼 올릴 때마다 커밋한다 — 파일마다 스냅샷을 만들지 않되, 중간에 끊겨도 앞부분은 반영돼 있게. */
+const COMMIT_EVERY = 200;
+let pending = [];
+async function commitPending() {
+  if (pending.length === 0) return;
+  await api(`/api/repos/${targetRepo}/files/commit`, {
+    method: 'POST',
+    body: { changes: pending, message: `동기화: ${pending.length}개` },
+  });
+  pending = [];
+}
+
+for (const file of todo) {
+  try {
+    const hash = await uploadInChunks(file, (bytes) => {
+      sent += bytes;
     });
+    pending.push({ path: file.rel, blobHash: hash });
     done += 1;
-    sent += file.size;
+    if (pending.length >= COMMIT_EVERY) await commitPending();
   } catch (err) {
     failed += 1;
-    console.log(`  실패  ${file.rel} — ${err.message}`);
+    console.log(`\n  실패  ${file.rel} — ${err.message}`);
     // 용량 한도처럼 계속해도 소용없는 오류면 멈춘다.
     if (/한도|too large|payload/i.test(err.message)) {
       console.log('\n용량 한도에 걸렸습니다. LISTUP_MAX_REPO_MB 를 올리고 다시 돌려 주세요.');
@@ -259,6 +322,13 @@ for (const file of todo) {
     // 로그로 남길 때는 줄이 쌓이지 않게 가끔만.
     console.log(`  ${line}`);
   }
+}
+try {
+  await commitPending();
+} catch (err) {
+  console.log(`\n반영(커밋)하지 못했습니다 — ${err.message}`);
+  failed += pending.length;
+  done -= pending.length;
 }
 
 console.log('\n');
