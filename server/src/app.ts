@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
@@ -16,11 +16,13 @@ import { registerInviteRoutes } from './routes/invites.ts';
 import { registerProposalRoutes } from './routes/proposals.ts';
 import { registerUploadRoutes } from './routes/uploads.ts';
 import { registerDownloadRoutes } from './routes/downloads.ts';
+import serverPackage from '../package.json' with { type: 'json' };
 
-/** 서버 버전. health 로 알려준다 — 사람이 "어느 버전 서버인지" 볼 수 있게. */
-const SERVER_VERSION = (
-  JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string }
-).version;
+/**
+ * 서버 버전. health 로 알려준다 — 사람이 "어느 버전 서버인지" 볼 수 있게.
+ * 파일로 읽지 않고 import 한다 — PC 앱은 서버를 한 파일로 묶어 넣으므로 상대 경로가 달라진다.
+ */
+const SERVER_VERSION = serverPackage.version;
 
 export interface BuildOptions {
   logger?: boolean | FastifyServerOptions['logger'];
