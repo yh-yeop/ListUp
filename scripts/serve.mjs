@@ -160,8 +160,19 @@ if (has('tunnel')) {
     announce(`https://${state.hostname}`, '고정 주소입니다.');
   } else if (state.mode === 'tailscale') {
     say('Tailscale Funnel 을 엽니다…');
-    tunnel = spawn(state.tailscale, ['funnel', String(PORT)], { stdio: ['ignore', 'ignore', 'inherit'] });
-    announce(`https://${state.hostname}`, '고정 주소입니다.');
+    // --bg: tailscaled 가 설정을 기억해 이 창을 닫거나 PC 를 다시 켜도 Funnel 이 남는다(서버가 꺼져 있으면
+    // 그 주소는 502). 이미 켜져 있으면 그대로 끝난다. 처음 한 번은 Funnel 을 허용하라는 링크를 보여 주고 기다린다.
+    const code = await new Promise((resolve) => {
+      const child = spawn(state.tailscale, ['funnel', '--bg', String(PORT)], { stdio: 'inherit' });
+      child.on('exit', resolve);
+      child.on('error', () => resolve(1));
+    });
+    if (code !== 0) {
+      console.error('\nTailscale Funnel 을 켜지 못했습니다. 위 안내를 확인하세요.');
+      server.kill();
+      process.exit(1);
+    }
+    announce(`https://${state.hostname}`, '고정 주소입니다. 끄려면: tailscale funnel --https=443 off');
   }
 } else {
   announce(`http://localhost:${PORT}`, '이 PC 에서만 열립니다. 밖에서 쓰려면 --tunnel 을 붙이세요.');
