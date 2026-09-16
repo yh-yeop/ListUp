@@ -29,10 +29,9 @@
     "typecheck": "npm run typecheck --workspace @listup/server && npm run typecheck --workspace @listup/app"
   },
   "engines": {
-    "node": ">=20.11"
+    "node": ">=22"
   },
   "allowScripts": {
-    "better-sqlite3@12.11.1": true,
     "esbuild@0.28.2": true
   },
   "dependencies": {

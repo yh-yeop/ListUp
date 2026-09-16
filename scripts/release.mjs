@@ -97,7 +97,7 @@ fs.writeFileSync(
   [
     `ListUp ${VERSION}`,
     '',
-    '1. Node 20.11 이상이 필요합니다.  https://nodejs.org',
+    '1. Node 22 이상이 필요합니다.  https://nodejs.org',
     '',
     '2. 이 폴더에서 한 번만:',
     '     npm install',
