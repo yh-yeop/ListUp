@@ -77,6 +77,62 @@ describe('로그인 요청 제한', () => {
   });
 });
 
+describe('프록시 뒤의 로그인 제한', () => {
+  // 터널(cloudflared·Tailscale Funnel)은 같은 PC 에서 붙으므로 모든 요청의 소켓 주소가 127.0.0.1 이다.
+  const login = (email: string, password: string, forwardedFor: string, remoteAddress = '127.0.0.1') =>
+    h.app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      payload: { email, password },
+      remoteAddress,
+      headers: { 'x-forwarded-for': forwardedFor },
+    });
+
+  it('기본값은 루프백 프록시를 믿어, 한 사람이 막혀도 다른 사람은 들어온다', async () => {
+    h = await createHarness({ loginFailureLimit: 3 });
+    const other = await signup(h.app, '다른사람');
+
+    for (let i = 0; i < 3; i += 1) {
+      await login(`nobody${i}@example.com`, 'guessing', '203.0.113.99');
+    }
+    assert.equal((await login('nobody9@example.com', 'guessing', '203.0.113.99')).statusCode, 429);
+    assert.equal((await login(other.email, 'password1234', '198.51.100.20')).statusCode, 200);
+  });
+
+  it('접속자가 적어 보낸 X-Forwarded-For 앞부분으로는 IP 를 바꿀 수 없다', async () => {
+    h = await createHarness({ loginFailureLimit: 3 });
+    const target = await signup(h.app, '표적');
+
+    // cloudflared 는 받은 헤더 뒤에 실제 IP 를 덧붙인다 — 맨 뒤의 믿지 않는 주소가 클라이언트다.
+    for (let i = 0; i < 3; i += 1) {
+      await login(`nobody${i}@example.com`, 'guessing', `10.0.0.${i}, 203.0.113.99`);
+    }
+    assert.equal((await login(target.email, 'password1234', '192.0.2.1, 203.0.113.99')).statusCode, 429);
+  });
+
+  it('루프백이 아닌 곳에서 온 X-Forwarded-For 는 무시한다', async () => {
+    h = await createHarness({ loginFailureLimit: 3 });
+    const target = await signup(h.app, '표적');
+
+    for (let i = 0; i < 3; i += 1) {
+      await login(`nobody${i}@example.com`, 'guessing', `198.51.100.${i}`, '192.168.0.50');
+    }
+    assert.equal(
+      (await login(target.email, 'password1234', '198.51.100.77', '192.168.0.50')).statusCode,
+      429,
+    );
+  });
+
+  it('끄면(false) 소켓 주소만 본다', async () => {
+    h = await createHarness({ loginFailureLimit: 2, trustProxy: false });
+    const other = await signup(h.app, '다른사람');
+
+    await login('nobody1@example.com', 'guessing', '203.0.113.99');
+    await login('nobody2@example.com', 'guessing', '203.0.113.99');
+    assert.equal((await login(other.email, 'password1234', '198.51.100.20')).statusCode, 429);
+  });
+});
+
 describe('비밀번호를 바꾸면 이전 토큰이 끊긴다', () => {
   it('다른 기기의 토큰은 401, 바꾼 기기는 새 토큰으로 이어 간다', async () => {
     h = await createHarness();

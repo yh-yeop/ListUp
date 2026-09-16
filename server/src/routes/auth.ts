@@ -47,7 +47,7 @@ export async function registerAuthRoutes(app: FastifyInstance, ctx: AppContext):
     windowMs: config.loginFailureWindowMs,
     blockMs: config.loginBlockMs,
   });
-  /** 프록시 뒤에서는 trustProxy 설정이 켜져 있어야 실제 IP 가 들어온다. */
+  /** 터널 뒤에서는 믿을 프록시(`trustProxy`, 기본 루프백)가 준 X-Forwarded-For 의 IP 가 들어온다. */
   const clientIp = (req: { ip: string }) => req.ip || 'unknown';
 
   function assertLoginAllowed(keys: string[]): void {

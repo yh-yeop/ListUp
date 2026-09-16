@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { isIP } from 'node:net';
 import path from 'node:path';
 
 export interface Config {
@@ -24,8 +25,12 @@ export interface Config {
   maxStagingBytesPerDay: number;
   /** 웹 정적 빌드 디렉터리. index.html 이 있으면 API 와 같은 오리진으로 서빙한다. null 이면 끔. */
   webDir: string | null;
-  /** 프록시(터널·리버스 프록시) 뒤에 있을 때 X-Forwarded-* 헤더의 클라이언트 IP 를 신뢰할지. */
-  trustProxy: boolean;
+  /**
+   * X-Forwarded-For 의 클라이언트 IP 를 믿을 프록시. fastify `trustProxy` 에 그대로 간다.
+   * 기본은 이 PC(루프백)에서 붙은 프록시만 — 터널(cloudflared·Tailscale)은 같은 PC 에서 붙는다.
+   * `true` 는 누구의 헤더든 믿고(앞단 프록시만 서버에 닿을 때), `false` 는 소켓 주소만 쓴다.
+   */
+  trustProxy: boolean | string[];
   /** 로그 레벨 (pino). */
   logLevel: string;
   /** 이 횟수만큼 로그인에 실패하면 잠시 막는다 (IP 기준·이메일 기준을 따로 센다). */
@@ -88,14 +93,32 @@ function envInt(
   return value;
 }
 
-/** `1`/`true` 면 켬, `0`/`false`/없음이면 끔. 그 밖의 값은 오타로 본다. */
-function envBool(name: string): boolean {
-  const raw = process.env[name];
-  if (!raw) return false;
+/** fastify(proxy-addr)가 이름으로 아는 대역. */
+const PROXY_RANGES = new Set(['loopback', 'linklocal', 'uniquelocal']);
+
+/**
+ * `LISTUP_TRUST_PROXY` — 없으면 `loopback`. `0`/`false` 끔, `1`/`true` 전부,
+ * 그 밖에는 쉼표로 나눈 대역 이름(loopback·linklocal·uniquelocal)이나 IP·CIDR.
+ */
+function envTrustProxy(): boolean | string[] {
+  const raw = process.env.LISTUP_TRUST_PROXY;
+  if (!raw || !raw.trim()) return ['loopback'];
   const value = raw.trim().toLowerCase();
-  if (value === '1' || value === 'true') return true;
   if (value === '0' || value === 'false') return false;
-  throw new Error(`${name} 은(는) 1/true 또는 0/false 여야 합니다: "${raw}"`);
+  if (value === '1' || value === 'true') return true;
+  const entries = value.split(',').map((entry) => entry.trim()).filter((entry) => entry.length > 0);
+  for (const entry of entries) {
+    const [address, prefix, extra] = entry.split('/');
+    const family = isIP(address);
+    const validPrefix =
+      prefix === undefined || (/^\d+$/.test(prefix) && Number(prefix) <= (family === 6 ? 128 : 32));
+    if (!PROXY_RANGES.has(entry) && (family === 0 || !validPrefix || extra !== undefined)) {
+      throw new Error(
+        `LISTUP_TRUST_PROXY 은(는) 0, 1, 또는 loopback·IP·CIDR 을 쉼표로 나눈 목록이어야 합니다: "${raw}"`,
+      );
+    }
+  }
+  return entries;
 }
 
 const warnedUnknownEnv = new Set<string>();
@@ -139,7 +162,7 @@ export function loadConfig(overrides: Partial<Config> = {}): Config {
     maxStagingBytesPerDay:
       envInt('LISTUP_MAX_STAGING_MB_PER_DAY', 1024, { min: 1 }) * 1024 * 1024,
     webDir: process.env.LISTUP_WEB_DIR ?? path.resolve(process.cwd(), '../app/dist'),
-    trustProxy: envBool('LISTUP_TRUST_PROXY'),
+    trustProxy: envTrustProxy(),
     logLevel,
     loginFailureLimit: envInt('LISTUP_LOGIN_FAILURE_LIMIT', 10, { min: 1 }),
     loginFailureWindowMs: envInt('LISTUP_LOGIN_FAILURE_WINDOW_MIN', 15, { min: 1 }) * MINUTE,

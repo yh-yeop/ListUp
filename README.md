@@ -115,7 +115,7 @@ npm run server        # http://localhost:4000
 | `LISTUP_MAX_STAGING_MB_PER_DAY` | `1024` | 사용자별 하루 제안용 업로드 총량 |
 | `LISTUP_CORS_ORIGIN` | `*` | 허용 오리진 (쉼표로 여러 개) |
 | `LISTUP_WEB_DIR` | `app/dist` | 함께 서빙할 웹 빌드 위치 |
-| `LISTUP_TRUST_PROXY` | (없음) | `1` 이면 프록시(터널·리버스 프록시)가 준 클라이언트 IP 를 신뢰 |
+| `LISTUP_TRUST_PROXY` | `loopback` | 접속자 IP(`X-Forwarded-For`)를 믿을 프록시. 기본은 이 PC 에서 붙는 터널만. `0` 끔, `1` 전부, 또는 IP·CIDR 목록 |
 | `LISTUP_LOG_LEVEL` | `info` | 로그 레벨 (`debug`, `warn`, `error` …) |
 | `LISTUP_LOGIN_FAILURE_LIMIT` | `10` | 이만큼 로그인에 실패하면 잠시 막습니다 |
 | `LISTUP_LOGIN_FAILURE_WINDOW_MIN` | `15` | 이 시간 동안 조용하면 실패 횟수를 잊습니다(분) |
