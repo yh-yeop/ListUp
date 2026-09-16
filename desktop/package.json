@@ -1,0 +1,22 @@
+{
+  "name": "@listup/desktop",
+  "version": "1.2.1",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "description": "ListUp PC 앱 — 서버 목록 클라이언트와 이 PC 에서 서버 열기",
+  "author": "yh-yeop",
+  "main": ".build/main.cjs",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@listup/server": "*",
+    "@listup/shared": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "electron": "^44.4.1",
+    "electron-builder": "^26.15.3",
+    "typescript": "^5.6.3"
+  }
+}

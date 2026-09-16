@@ -29,6 +29,10 @@
 >   - 서명은 `android/` 를 고치지 않고 gradle 에 주입(`-Pandroid.injected.signing.*`)한다.
 >     APK 서명 인증서가 새 키스토어와 일치함을 `apksigner` 로 확인했다.
 >   - 기본은 arm64-v8a 만 빌드한다(`LISTUP_ANDROID_ABIS` 로 바꿈) — 크기와 빌드 시간을 줄이려고.
+> - **4단계 구현, 실제 설치 확인 전** (2026-09-16). 계획보다 커졌다 — 클라이언트만이 아니라 **이 PC 에서 서버 열기**를
+>   같은 앱에 넣었다(서버를 여는 사람이 Node·터미널 없이). 스킴 가정(아래 표)은 시험으로 확인했다. 서버는 앱 안의
+>   utilityProcess 에서 돌고, 이를 위해 better-sqlite3 를 13(N-API)으로 올렸다. 설치 파일 이름은
+>   `listup-<버전>-windows-setup.exe`. 자세한 구조는 `docs/ARCHITECTURE.md` *PC 앱*, 남은 확인은 TODO *검증 대기 — PC 앱*.
 
 ## 왜 필요한가
 

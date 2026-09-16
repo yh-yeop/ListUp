@@ -14,3 +14,5 @@ android/
 ios/
 # 웹 흐름 테스트의 빌드·실패 캡처
 e2e/.cache/
+# PC 앱 묶음 (npm run desktop)
+desktop/.build/

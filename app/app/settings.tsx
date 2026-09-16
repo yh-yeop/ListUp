@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import { Link } from 'expo-router';
+import { Link, router } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { Pressable, View } from 'react-native';
 import {
@@ -17,6 +17,7 @@ import {
 } from '../src/components/ui';
 import { ApiError } from '../src/api/client';
 import { credentialsSupported, loadLogin, removeLogin } from '../src/lib/credentials';
+import { hostSupported } from '../src/lib/desktop';
 import {
   APP_VERSION,
   SOURCE_URL,
@@ -209,6 +210,20 @@ export default function SettingsScreen() {
             </Row>
           </Row>
         </Pressable>
+
+        {hostSupported() ? (
+          <Pressable
+            onPress={() => router.push('/host')}
+            accessibilityRole="button"
+            accessibilityLabel="이 PC 서버 관리"
+            style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
+          >
+            <Row style={{ justifyContent: 'space-between' }}>
+              <Caption>이 PC 에서 서버 열기</Caption>
+              <Ionicons name="chevron-forward" size={14} color={colors.textFaint} />
+            </Row>
+          </Pressable>
+        ) : null}
 
         {saveFolderSupported ? (
           <Pressable

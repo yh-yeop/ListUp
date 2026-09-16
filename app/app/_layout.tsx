@@ -56,6 +56,8 @@ function RootNavigator() {
       <Stack.Screen name="index" options={{ headerShown: false }} />
       <Stack.Screen name="servers" options={{ title: '서버' }} />
       <Stack.Screen name="server" options={{ title: '서버 추가' }} />
+      {/* PC 앱 — 이 PC 에서 연 서버 */}
+      <Stack.Screen name="host" options={{ title: '이 PC 서버' }} />
       {/* 초대 링크는 로그인 전에도 연다 — 코드를 들고 로그인·가입으로 보낸다. */}
       <Stack.Screen name="join" options={{ title: '초대 코드로 참여' }} />
 

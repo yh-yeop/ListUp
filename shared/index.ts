@@ -453,3 +453,89 @@ export interface DownloadLink {
   url: string;
   expiresAt: number;
 }
+
+// ---------------------------------------------------------------------------
+// PC 앱 — Electron 이 창에 넣어 주는 `window.listupDesktop`
+// ---------------------------------------------------------------------------
+
+/** 로그인 정보 저장소. OS 암호화(Windows DPAPI)를 거쳐 저장한다. */
+export interface DesktopCredentials {
+  get(key: string): Promise<string | null>;
+  set(key: string, value: string): Promise<void>;
+  remove(key: string): Promise<void>;
+}
+
+export type HostState = 'stopped' | 'starting' | 'running' | 'stopping' | 'error';
+
+/** 공개 주소를 내는 방식. off 면 이 PC·같은 공유기에서만 들어온다. */
+export type HostTunnelMode = 'off' | 'tailscale' | 'quick';
+
+export interface HostTunnelStatus {
+  /** 고른 방식. 서버가 꺼져 있어도 고른 값이다(켜면 이 방식으로 연다). */
+  mode: HostTunnelMode;
+  state: 'off' | 'starting' | 'on' | 'error';
+  /** 밖에서 들어오는 주소. 켜져 있을 때만. */
+  url: string | null;
+  /** 사람이 할 일(Funnel 허용 등)이나 실패 이유. */
+  message: string | null;
+  /** 할 일을 하러 갈 링크 — Tailscale 이 Funnel 허용을 요구할 때. */
+  actionUrl: string | null;
+}
+
+/** 이 PC 에서 연 서버의 상태. */
+export interface HostStatus {
+  state: HostState;
+  /** state 가 error 일 때의 이유. */
+  error: string | null;
+  port: number;
+  /** 이 PC 에서 들어가는 주소 (http://localhost:<port>). */
+  localUrl: string;
+  /** 같은 공유기에서 들어오는 주소들. */
+  lanUrls: string[];
+  tunnel: HostTunnelStatus;
+  /** DB·파일이 쌓이는 폴더. */
+  dataDir: string;
+  /** 앱을 열 때 서버도 켤지. */
+  autoStart: boolean;
+  /** Windows 에 로그인하면 앱을 (창 없이) 켤지. */
+  openAtLogin: boolean;
+}
+
+export interface HostSettingsPatch {
+  port?: number;
+  tunnel?: HostTunnelMode;
+  autoStart?: boolean;
+  openAtLogin?: boolean;
+}
+
+/** 공개 방식에 필요한 프로그램이 준비됐는지. */
+export interface HostTools {
+  tailscale: { installed: boolean; hostname: string | null };
+  cloudflared: { installed: boolean };
+}
+
+export interface DesktopHost {
+  getStatus(): Promise<HostStatus>;
+  /** 상태가 바뀔 때마다 부른다. 돌려준 함수로 그만 듣는다. */
+  subscribe(listener: (status: HostStatus) => void): () => void;
+  start(): Promise<HostStatus>;
+  stop(): Promise<HostStatus>;
+  update(patch: HostSettingsPatch): Promise<HostStatus>;
+  inspectTools(): Promise<HostTools>;
+  /** 서버가 켜져 있을 때만. 계정이 없으면 null. */
+  issueResetCode(email: string): Promise<{ code: string; expiresAt: number } | null>;
+  /** 폴더를 골라 DB 사본과 파일을 담는다. 고르지 않으면 null, 담았으면 그 폴더. */
+  backup(): Promise<string | null>;
+  /** 서버가 꺼져 있을 때만. 고르지 않으면 그대로. */
+  chooseDataFolder(): Promise<HostStatus>;
+  openDataFolder(): Promise<void>;
+  /** 최근 서버 로그 (오래된 것부터). */
+  logs(): Promise<string[]>;
+}
+
+export interface DesktopBridge {
+  /** PC 앱 버전. */
+  version: string;
+  credentials: DesktopCredentials;
+  host: DesktopHost;
+}

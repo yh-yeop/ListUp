@@ -30,6 +30,7 @@ import {
 import { RepoNav } from '../../../src/components/RepoNav';
 import { ApiError, api } from '../../../src/api/client';
 import { confirmAction, notify } from '../../../src/lib/dialogs';
+import { isOwnHostUrl, shareableHostUrl, useHostStatus } from '../../../src/lib/desktop';
 import { inviteLinkFor, isLocalNetworkAddress } from '../../../src/lib/invite-link';
 import { useAsync } from '../../../src/lib/useAsync';
 import { useAuth } from '../../../src/state/auth';
@@ -85,8 +86,14 @@ export default function InvitesScreen() {
     }
   }
 
-  // 초대 링크는 지금 이 서버에 들어온 주소로 만든다.
-  const linkBase = activeServer ? serverUrl(activeServer) : '';
+  // 초대 링크는 지금 이 서버에 들어온 주소로 만든다. PC 앱에서 자기 PC 서버(localhost)에 들어와 있으면
+  // 받는 사람에게는 localhost 가 그 사람 기기라, 공개 주소(없으면 공유기 안 주소)로 만든다.
+  const hostStatus = useHostStatus();
+  const activeUrl = activeServer ? serverUrl(activeServer) : '';
+  const linkBase =
+    hostStatus && activeUrl && isOwnHostUrl(activeUrl, hostStatus)
+      ? (shareableHostUrl(hostStatus) ?? activeUrl)
+      : activeUrl;
   const linkFor = (invite: Invite) => inviteLinkFor(linkBase, invite.code);
   const localOnly = isLocalNetworkAddress(inviteLinkFor(linkBase, 'code'));
   const LOCAL_WARNING =

@@ -192,6 +192,7 @@ app/
 │  ├─ _layout.tsx             AuthProvider + Stack, 서버를 바꾸면 스택을 비우고 index 로
 │  ├─ index.tsx               저장된 토큰 확인 후 분기
 │  ├─ servers / server        서버 목록 · 서버 추가/수정 폼
+│  ├─ host                    PC 앱: 이 PC 에서 연 서버 관리
 │  ├─ login / signup / reset-password / join / settings / repos
 │  ├─ repo/[repoId]/          index(파일) · proposals · new-proposal · members · invites · history
 │  └─ proposal/[proposalId]   제안 상세 · 리뷰 · 병합
@@ -205,6 +206,7 @@ app/
    ├─ lib/transfer.ts         나눠 올리기(진행률·이어 보내기)와 여러 파일 커밋
    ├─ lib/invite-link.ts      초대 링크 만들기, 로그인 뒤까지 들고 가는 초대 코드
    ├─ lib/dialogs.ts          웹/네이티브 확인 대화상자
+   ├─ lib/desktop.ts          PC 앱이 창에 넣어 준 window.listupDesktop 읽기
    ├─ components/             공용 UI + 저장소 탭 네비게이션
    └─ theme.ts                라이트/다크 팔레트
 ```
@@ -278,6 +280,34 @@ app/
   뒤에 이전 서버의 화면(그 서버의 저장소 id 를 든 화면)을 걷어내려 하면, 로그인 상태가 바뀌며
   보호 라우트가 화면을 걷어내는 것과 타이밍에 따라 엇갈렸기 때문입니다.
 
+
+### PC 앱
+
+`desktop/` (Electron). 창은 클라이언트 모드 웹 빌드를, 서버는 같은 서버 코드를 앱 안에서 돌립니다.
+
+```
+desktop/src/
+├─ main.ts          창·트레이·app:// 스킴·IPC. 서버가 돌면 창을 닫아도 트레이에 남는다
+├─ preload.ts       window.listupDesktop (계약: shared 의 DesktopBridge)
+├─ host.ts          이 PC 서버 — utilityProcess 관리, 상태·로그, 재설정 코드·백업 요청
+├─ server-entry.ts  utilityProcess 안에서 startServer (server/src/start.ts) + main 의 요청 처리
+├─ tunnel.ts        공개 주소 — Tailscale Funnel(--bg) / Cloudflare 빠른 터널
+├─ settings.ts      포트·공개 방식·자동 켜기·데이터 폴더 (앱 데이터 폴더의 settings.json)
+└─ credentials.ts   로그인 정보 — safeStorage(DPAPI)로 암호화
+```
+
+- **`app://listup`** — 창의 주소가 늘 같아 서버 목록(localStorage)이 남습니다. 보안 컨텍스트가 아니게
+  등록해(`secure: false`) 공유기 안의 http 서버에도 요청이 갑니다(https 페이지면 mixed content 로 막힘).
+  서버는 요청 origin 을 그대로 돌려주므로(CORS `origin: true`) `LISTUP_CORS_ORIGIN` 을 좁혔다면 이 주소를 넣어야 합니다.
+- **서버는 utilityProcess** — Electron 안의 Node 로 돌아 Node 를 따로 설치하지 않아도 됩니다. better-sqlite3 13 이
+  N-API 라 같은 바이너리가 Node·Electron 양쪽에서 돕니다. 설정은 명령줄 서버와 같은 `LISTUP_*` 환경변수로 넘깁니다.
+- **묶기** (`scripts/desktop.mjs`) — main·preload 는 esbuild 로 CJS 하나씩, 서버는 우리 코드(server·shared)만 ESM
+  하나로 묶고 npm 의존성은 밖에 둡니다. 설치본에서는 창 쪽이 app.asar, 서버와 그 의존성·서버 모드 웹은 resources 에
+  들어갑니다(electron-builder 가 extraResources 에서도 node_modules 를 걸러 afterPack 에서 넣습니다).
+- **"이 PC" 항목** — 들어가기는 서버 목록에 `http://localhost:<포트>` 를 `이 PC` 로 더해 곧장 붙습니다. 초대 링크는
+  localhost 대신 공개 주소(없으면 공유기 안 주소)로 만듭니다 — localhost 는 받는 사람의 기기를 가리키므로.
+- **터널 뒤 IP** — 터널은 같은 PC 에서 붙어 모든 요청이 127.0.0.1 로 보입니다. 서버는 기본으로 루프백 프록시의
+  `X-Forwarded-For` 를 믿어(`LISTUP_TRUST_PROXY=loopback`) 로그인 실패 제한이 사람마다 따로 셉니다.
 ---
 
 ## 남은 일

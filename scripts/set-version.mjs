@@ -4,7 +4,7 @@
  *   npm run version:set -- 1.1.0
  *
  * 버전은 여러 곳에 흩어져 있어 하나만 바꾸면 어긋난다.
- *   - package.json (루트·app·server·shared) 와 package-lock.json
+ *   - package.json (루트·app·server·shared·desktop) 와 package-lock.json
  *   - server/package.json 은 /api/health 가 알려주는 서버 버전이다
  *   - app/app.json 의 version — 앱이 보여주고, 업데이트 확인에서 GitHub 릴리즈와 견주는 값
  *   - app/app.json 의 android.versionCode — 안드로이드는 이 숫자가 올라가야 업데이트 설치를 허락한다
@@ -41,14 +41,14 @@ function updateJson(relative, change) {
 const code = versionCodeOf(version);
 console.log(`버전을 ${version} (versionCode ${code}) 으로 바꿉니다.`);
 
-for (const pkg of ['package.json', 'app/package.json', 'server/package.json', 'shared/package.json']) {
+for (const pkg of ['package.json', 'app/package.json', 'server/package.json', 'shared/package.json', 'desktop/package.json']) {
   updateJson(pkg, (data) => {
     data.version = version;
   });
 }
 updateJson('package-lock.json', (lock) => {
   lock.version = version;
-  for (const key of ['', 'app', 'server', 'shared']) {
+  for (const key of ['', 'app', 'server', 'shared', 'desktop']) {
     if (lock.packages?.[key]) lock.packages[key].version = version;
   }
 });

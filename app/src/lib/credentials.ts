@@ -1,5 +1,7 @@
 import * as SecureStore from 'expo-secure-store';
 import { Platform } from 'react-native';
+import type { DesktopCredentials } from '@listup/shared';
+import { desktopBridge as desktopApp } from './desktop';
 
 /**
  * 서버마다 로그인 정보(이메일·비밀번호)를 기기에 저장한다 — 클라이언트의 비밀번호 관리자.
@@ -18,16 +20,8 @@ export interface SavedLogin {
 }
 
 /** PC 앱이 창에 넣어 주는 저장소. OS 암호화를 거쳐 저장한다. */
-interface DesktopCredentials {
-  get(key: string): Promise<string | null>;
-  set(key: string, value: string): Promise<void>;
-  remove(key: string): Promise<void>;
-}
-
 function desktopBridge(): DesktopCredentials | null {
-  if (Platform.OS !== 'web') return null;
-  const bridge = (globalThis as { listupDesktop?: { credentials?: DesktopCredentials } }).listupDesktop;
-  return bridge?.credentials ?? null;
+  return desktopApp()?.credentials ?? null;
 }
 
 /** 이 클라이언트에서 로그인 정보를 저장할 수 있는지. */

@@ -1,5 +1,5 @@
 /**
- * GitHub 릴리즈를 올린다 — 서버 묶음과 안드로이드 APK 를 함께.
+ * GitHub 릴리즈를 올린다 — 서버 묶음, 안드로이드 APK, PC 설치 파일을 함께.
  *
  *   npm run release:publish
  *
@@ -9,7 +9,7 @@
  * 하는 일
  *   1. 확인 — gh 로그인, 작업 트리 깨끗함, main 이 원격과 같음(푸시됨), 태그 v<버전> 이 아직 없음,
  *      릴리즈 노트 docs/releases/v<버전>.md 가 있음, 버전이 모든 곳에서 같음
- *   2. 서버 묶음(npm run release) 과 APK(npm run build:android) 빌드
+ *   2. 서버 묶음(npm run release), APK(npm run build:android), PC 설치 파일(npm run build:desktop) 빌드
  *   3. 태그를 달아 푸시하고 gh release create 로 파일을 올린다
  *
  * 먼저 버전을 올린다: npm run version:set -- <버전> → 릴리즈 노트 작성 → 커밋·푸시.
@@ -28,6 +28,7 @@ const NOTES = path.join(ROOT, 'docs', 'releases', `${TAG}.md`);
 const isWindows = process.platform === 'win32';
 const ARCHIVE = path.join(ROOT, 'release', `listup-${VERSION}.${isWindows ? 'zip' : 'tar.gz'}`);
 const APK = path.join(ROOT, 'release', `listup-${VERSION}-android.apk`);
+const SETUP = path.join(ROOT, 'release', `listup-${VERSION}-windows-setup.exe`);
 
 const say = (m) => console.log(m);
 const fail = (m) => {
@@ -68,11 +69,14 @@ git('fetch', 'origin', 'main', '--tags');
 if (git('rev-parse', 'HEAD') !== git('rev-parse', 'origin/main')) fail('main 이 원격과 다릅니다. 먼저 푸시하세요.');
 if (git('tag', '--list', TAG)) fail(`태그 ${TAG} 가 이미 있습니다. 버전을 올리세요 (npm run version:set -- <버전>).`);
 if (!fs.existsSync(NOTES)) fail(`릴리즈 노트가 없습니다: ${path.relative(ROOT, NOTES)}`);
+// PC 설치 파일은 Windows 에서만 만든다(electron-builder NSIS).
+if (!isWindows) fail('PC 설치 파일(Windows)을 만들 수 없는 OS 입니다. Windows 에서 올려 주세요.');
 
 const versions = {
   'app/package.json': readJson('app/package.json').version,
   'server/package.json': readJson('server/package.json').version,
   'shared/package.json': readJson('shared/package.json').version,
+  'desktop/package.json': readJson('desktop/package.json').version,
   'app/app.json': readJson('app/app.json').expo.version,
 };
 const mismatched = Object.entries(versions).filter(([, v]) => v !== VERSION);
@@ -87,6 +91,8 @@ await runNpm(['run', 'release']);
 if (!fs.existsSync(ARCHIVE)) fail(`서버 묶음이 없습니다: ${ARCHIVE}`);
 await runNpm(['run', 'build:android']);
 if (!fs.existsSync(APK)) fail(`APK 가 없습니다: ${APK}`);
+await runNpm(['run', 'build:desktop']);
+if (!fs.existsSync(SETUP)) fail(`PC 설치 파일이 없습니다: ${SETUP}`);
 // 빌드가 추적 중인 파일을 바꿨다면(되돌리지 못한 prebuild 변경 등) 태그와 코드가 어긋난다.
 if (git('status', '--porcelain')) fail('빌드가 추적 중인 파일을 바꿨습니다. git status 를 확인하세요.');
 
@@ -96,6 +102,6 @@ if (git('status', '--porcelain')) fail('빌드가 추적 중인 파일을 바꿨
 say(`\n태그 ${TAG} 를 달고 올립니다…`);
 git('tag', '-a', TAG, '-m', `ListUp ${VERSION}`);
 git('push', 'origin', TAG);
-await run('gh', ['release', 'create', TAG, ARCHIVE, APK, '--title', `ListUp ${VERSION}`, '--notes-file', NOTES]);
+await run('gh', ['release', 'create', TAG, ARCHIVE, APK, SETUP, '--title', `ListUp ${VERSION}`, '--notes-file', NOTES]);
 
 say(`\n완료: https://github.com/${git('remote', 'get-url', 'origin').replace(/^.*github\.com[:/]/, '').replace(/\.git$/, '')}/releases/tag/${TAG}`);

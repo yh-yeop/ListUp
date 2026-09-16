@@ -16,7 +16,9 @@ import {
   Subtitle,
   Title,
 } from '../src/components/ui';
+import { HostCard } from '../src/components/HostCard';
 import { credentialsSupported, loadLogin } from '../src/lib/credentials';
+import { useHostStatus } from '../src/lib/desktop';
 import { openReleasePage, updateChecksEnabled } from '../src/lib/updates';
 import { useAuth } from '../src/state/auth';
 import {
@@ -38,6 +40,8 @@ export default function ServersScreen() {
   const [error, setError] = useState<string | null>(null);
   const checks = useServerChecks(servers);
   const savedLogins = useSavedLogins(servers);
+  // PC 앱이면 이 PC 에서 서버를 여는 카드를 맨 위에.
+  const hostStatus = useHostStatus();
 
   const choose = async (entry: ServerEntry) => {
     if (switchingId) return;
@@ -67,6 +71,8 @@ export default function ServersScreen() {
       </View>
 
       {error ? <ErrorNotice message={error} /> : null}
+
+      {hostStatus ? <HostCard status={hostStatus} /> : null}
 
       {servers.length === 0 ? (
         <EmptyState

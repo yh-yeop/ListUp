@@ -39,7 +39,8 @@
 listup/
 ├─ shared/    타입·권한 규칙·경로 정규화 (서버와 앱이 함께 씀)
 ├─ server/    Fastify + SQLite + 콘텐츠 주소 파일 저장소
-└─ app/       Expo (React Native) — iOS / Android / 웹
+├─ app/       Expo (React Native) — iOS / Android / 웹
+└─ desktop/   Electron PC 앱 — app 의 웹 빌드 + 앱 안에서 도는 server
 ```
 
 - **서버**: Fastify 5, better-sqlite3, 로컬 파일 스토리지. 외부 서비스 없이 단독 실행됩니다.
@@ -72,13 +73,27 @@ Copyright (C) 2026 yh-yeop
 
 | 파일 | 누구에게 |
 | --- | --- |
+| `listup-<버전>-windows-setup.exe` | **PC 앱 (Windows).** 서버 목록에서 들어갈 서버를 고르고, **이 PC 에서 서버를 열 수도** 있습니다 |
 | `listup-<버전>-android.apk` | **폰 앱.** 설치해 두면 서버가 꺼져 있어도 켜지고, 서버 목록에서 들어갈 서버를 고릅니다 |
-| `listup-<버전>.zip` | **서버를 여는 사람.** 아래처럼 켭니다 |
+| `listup-<버전>.zip` | **명령줄로 서버를 여는 사람** (리눅스·맥, 또는 터미널이 편한 사람). 아래처럼 켭니다 |
 
-폰 앱은 "출처를 알 수 없는 앱" 설치를 허용해야 설치됩니다. 켠 뒤 **서버 추가**로 서버 주소를 넣으세요.
+폰 앱은 "출처를 알 수 없는 앱" 설치를 허용해야 설치됩니다. PC 앱은 코드 서명을 하지 않아 Windows 가
+"PC 보호" 경고를 띄웁니다 — **추가 정보 → 실행**. 켠 뒤 **서버 추가**로 서버 주소를 넣으세요.
 새 버전이 나오면 앱이 알려 주고, 앱이 서버보다 오래돼 들어갈 수 없으면 릴리즈 페이지를 엽니다.
 
-서버는 `listup-<버전>.zip` 을 받아 압축을 풀고:
+**서버를 열려면 PC 앱이 가장 쉽습니다.** 서버 목록 맨 위의 **이 PC 에서 서버 열기 → 서버 켜기** 면 끝이고,
+Node 를 따로 설치하지 않아도 됩니다. **관리** 화면에서:
+
+- **밖에서 들어오기** — 공개하지 않음 / Tailscale Funnel(고정 주소, 아래 6번) / Cloudflare 빠른 터널
+- **비밀번호를 잊은 사람** — 재설정 코드 발급 (명령줄의 `npm run reset-password`)
+- **실행** — 앱을 열 때 서버도 켜기, Windows 에 로그인하면 창 없이 켜기, 포트
+- **데이터** — 폴더 열기·바꾸기, 백업(DB 사본 + 파일). 기본 위치는 `%APPDATA%\ListUp\server-data`
+
+창을 닫아도 서버가 켜져 있으면 트레이에 남아 계속 돕니다(트레이의 ListUp → 끝내기). 명령줄 서버로 쓰던
+데이터(`server/data`)는 서버를 끈 채 **다른 폴더 쓰기**로 고르면 계정·로그인이 그대로 이어집니다 — 두 서버를
+같은 폴더로 동시에 켜지는 마세요.
+
+명령줄 서버는 `listup-<버전>.zip` 을 받아 압축을 풀고:
 
 ```bash
 npm install
@@ -280,7 +295,11 @@ Tailscale 을 쓴다면 `tailscale up` 으로 로그인만 해두고
 npm test          # 서버 테스트 (HTTP 수준)
 npm run typecheck # 서버 + 앱 타입 검사
 npm run test:e2e  # 웹 흐름 테스트 (웹을 두 모드로 빌드하고 브라우저로)
+npm run test:desktop  # PC 앱 흐름 테스트 (Electron 으로 이 PC 서버 켜기·들어가기·재설정 코드·백업)
 ```
+
+PC 앱을 고칠 때는 `npm run desktop` 으로 띄우고(앱 화면을 고쳤으면 `-- --web`), 설치 파일은
+`npm run build:desktop` → `release/listup-<버전>-windows-setup.exe` 입니다.
 
 서버 테스트는 인증·권한·경로 탈출 방어·초대 소진·병합 충돌·나눠 올리기·이어받기 같은 규칙을 실제
 HTTP 요청 수준에서 확인합니다. 웹 흐름 테스트는 빈 포트에 임시 서버를 띄워(쓰고 있는 서버와 데이터를
