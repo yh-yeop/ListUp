@@ -32,6 +32,7 @@ import { TransferProgress } from '../../../src/components/TransferProgress';
 import { ApiError, api, getMaxUploadBytes, type UploadSource } from '../../../src/api/client';
 import { confirmAction, notify } from '../../../src/lib/dialogs';
 import { downloadFromRepo, pickFiles, pickFolder } from '../../../src/lib/files';
+import { localFolderSupported } from '../../../src/lib/local-folder';
 import { uploadAndCommit, type UploadItem, type UploadProgress } from '../../../src/lib/transfer';
 import { useAsync } from '../../../src/lib/useAsync';
 import { fontSize, monoFont, radius, spacing, useTheme } from '../../../src/theme';
@@ -365,6 +366,15 @@ export default function RepoFilesScreen() {
                   router.push(`/repo/${repoId}/new-proposal?path=${encodeURIComponent(path)}`)
                 }
               />
+              {localFolderSupported ? (
+                <Button
+                  label="내 폴더와 비교"
+                  icon="git-compare-outline"
+                  variant="secondary"
+                  onPress={() => router.push(`/repo/${repoId}/compare?path=${encodeURIComponent(path)}`)}
+                  disabled={uploading}
+                />
+              ) : null}
             </Row>
           )}
 

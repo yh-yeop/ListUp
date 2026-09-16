@@ -27,6 +27,10 @@ export const IPC = {
   hostChooseData: 'host:choose-data',
   hostOpenData: 'host:open-data',
   hostLogs: 'host:logs',
+  foldersPick: 'folders:pick',
+  foldersScan: 'folders:scan',
+  foldersRead: 'folders:read',
+  foldersSave: 'folders:save',
   /** main → 창: 상태가 바뀌었다. */
   hostChanged: 'host:changed',
 } as const;

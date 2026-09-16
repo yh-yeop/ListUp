@@ -68,7 +68,7 @@ function requirePathParam(req: FastifyRequest, key = 'path'): string {
 export async function registerFileRoutes(app: FastifyInstance, ctx: AppContext): Promise<void> {
   const { db, blobs, config } = ctx;
 
-  /** 디렉터리 목록. `snapshot` 을 주면 과거 시점을 본다. */
+  /** 디렉터리 목록. `snapshot` 을 주면 과거 시점을, `recursive=1` 이면 하위 폴더의 파일까지 모두. */
   app.get('/repos/:repoId/files', async (req) => {
     const user = requireUser(req);
     const { repoId } = req.params as { repoId: string };
@@ -84,7 +84,7 @@ export async function registerFileRoutes(app: FastifyInstance, ctx: AppContext):
       snapshotId = requested;
     }
 
-    return { tree: listTree(db, snapshotId, dirPath) };
+    return { tree: listTree(db, snapshotId, dirPath, { recursive: queryString(req, 'recursive') === '1' }) };
   });
 
   /**

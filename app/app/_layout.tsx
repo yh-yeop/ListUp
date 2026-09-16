@@ -78,6 +78,7 @@ function RootNavigator() {
         <Stack.Screen name="repo/[repoId]/invites" />
         <Stack.Screen name="repo/[repoId]/history" />
         <Stack.Screen name="repo/[repoId]/new-proposal" />
+        <Stack.Screen name="repo/[repoId]/compare" />
         <Stack.Screen name="proposal/[proposalId]" />
       </Stack.Protected>
     </Stack>

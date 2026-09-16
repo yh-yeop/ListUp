@@ -243,8 +243,18 @@ function toFileEntry(row: EntryRow): FileEntry {
  * 스냅샷은 평평한 경로 목록이므로, 디렉터리는 조회 시점에 접두사로 만들어 낸다.
  * (빈 디렉터리는 존재하지 않는다 — git 과 같은 방식)
  */
-export function listTree(db: Db, snapshotId: string | null, dirPath: string): TreeListing {
+/**
+ * 폴더 목록. `recursive` 면 하위 폴더까지의 파일을 모두 files 에 담고 dirs 는 비운다 — 내 폴더와
+ * 견주기처럼 폴더 전체가 필요할 때 폴더마다 요청하지 않게.
+ */
+export function listTree(
+  db: Db,
+  snapshotId: string | null,
+  dirPath: string,
+  { recursive = false }: { recursive?: boolean } = {},
+): TreeListing {
   const listing: TreeListing = { path: dirPath, snapshotId, dirs: [], files: [] };
+  if (recursive) listing.recursive = true;
   if (!snapshotId) return listing;
 
   const prefix = dirPath === '' ? '' : `${dirPath}/`;
@@ -254,7 +264,7 @@ export function listTree(db: Db, snapshotId: string | null, dirPath: string): Tr
   for (const row of manifest.values()) {
     if (prefix && !row.path.startsWith(prefix)) continue;
     const rest = row.path.slice(prefix.length);
-    const slash = rest.indexOf('/');
+    const slash = recursive ? -1 : rest.indexOf('/');
     if (slash === -1) {
       listing.files.push(toFileEntry(row));
       continue;
@@ -270,7 +280,8 @@ export function listTree(db: Db, snapshotId: string | null, dirPath: string): Tr
   const byName = (a: { name: string }, b: { name: string }) =>
     a.name.localeCompare(b.name, 'ko', { numeric: true });
   listing.dirs = [...dirs.values()].sort(byName);
-  listing.files.sort(byName);
+  if (recursive) listing.files.sort((a, b) => a.path.localeCompare(b.path, 'ko', { numeric: true }));
+  else listing.files.sort(byName);
   return listing;
 }
 

@@ -29,6 +29,12 @@ const bridge: DesktopBridge = {
     openDataFolder: () => ipcRenderer.invoke(IPC.hostOpenData),
     logs: () => ipcRenderer.invoke(IPC.hostLogs),
   },
+  folders: {
+    pick: () => ipcRenderer.invoke(IPC.foldersPick),
+    scan: (root) => ipcRenderer.invoke(IPC.foldersScan, root),
+    read: (root, relativePath, offset, length) => ipcRenderer.invoke(IPC.foldersRead, root, relativePath, offset, length),
+    save: (root, relativePath, url) => ipcRenderer.invoke(IPC.foldersSave, root, relativePath, url),
+  },
 };
 
 contextBridge.exposeInMainWorld('listupDesktop', bridge);

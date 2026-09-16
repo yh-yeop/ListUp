@@ -238,7 +238,9 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
  */
 export type UploadSource =
   | { kind: 'web'; file: File; name: string; size: number; relativePath?: string }
-  | { kind: 'native'; uri: string; name: string; size: number; mimeType: string; relativePath?: string };
+  | { kind: 'native'; uri: string; name: string; size: number; mimeType: string; relativePath?: string }
+  /** PC 앱에서 고른 폴더 안의 파일 — 창은 직접 못 읽고 PC 앱(main)이 조각을 읽어 준다. 나눠 올리기로만. */
+  | { kind: 'desktop'; root: string; relativePath: string; name: string; size: number };
 
 /** 조각 하나를 보내는 동안 기다리는 최대 시간. 느린 모바일 망에서 8MB 가 넉넉히 들어가게. */
 const CHUNK_TIMEOUT_MS = 120_000;
@@ -314,6 +316,8 @@ function toFormData(source: UploadSource): FormData {
   const form = new FormData();
   if (source.kind === 'web') {
     form.append('file', source.file, source.name);
+  } else if (source.kind === 'desktop') {
+    throw new ApiError(0, 'internal', 'PC 앱 폴더의 파일은 나눠 올리기로만 올립니다.');
   } else {
     // RN 의 FormData 는 {uri, name, type} 형태를 파일로 인식한다.
     form.append('file', {
@@ -393,10 +397,11 @@ export const api = {
   },
 
   // 파일 ------------------------------------------------------------------
-  listFiles: (repoId: string, path = '', snapshotId?: string) => {
+  listFiles: (repoId: string, path = '', snapshotId?: string, options: { recursive?: boolean } = {}) => {
     const params = new URLSearchParams();
     if (path) params.set('path', path);
     if (snapshotId) params.set('snapshot', snapshotId);
+    if (options.recursive) params.set('recursive', '1');
     const qs = params.toString();
     return request<{ tree: TreeListing }>(`/api/repos/${repoId}/files${qs ? `?${qs}` : ''}`);
   },

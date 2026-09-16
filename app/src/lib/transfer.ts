@@ -1,5 +1,6 @@
 import { File } from 'expo-file-system';
 import { ApiError, api, type UploadSource } from '../api/client';
+import { desktopBridge } from './desktop';
 import type { CommitResult, UploadedBlob } from '@listup/shared';
 
 /**
@@ -41,6 +42,14 @@ function openReader(source: UploadSource): ChunkReader {
   if (source.kind === 'web') {
     return {
       read: async (offset, length) => source.file.slice(offset, offset + length),
+      close: () => {},
+    };
+  }
+  if (source.kind === 'desktop') {
+    const folders = desktopBridge()?.folders;
+    if (!folders) throw new ApiError(0, 'internal', 'PC 앱에서만 올릴 수 있는 파일입니다.');
+    return {
+      read: (offset, length) => folders.read(source.root, source.relativePath, offset, length),
       close: () => {},
     };
   }

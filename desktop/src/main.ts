@@ -22,6 +22,7 @@ import {
   Tray,
 } from 'electron';
 import type { HostSettingsPatch, HostStatus } from '@listup/shared';
+import { allowRoot, readChunk, saveUrl, scanFolder } from './folders.ts';
 import { credentialsAvailable, getCredential, removeCredential, setCredential } from './credentials.ts';
 import { Host } from './host.ts';
 import { IPC } from './protocol.ts';
@@ -241,6 +242,19 @@ function registerIpc(): void {
     await shell.openPath(dir);
   });
   ipcMain.handle(IPC.hostLogs, () => host.logs());
+
+  ipcMain.handle(IPC.foldersPick, async () => {
+    const picked = await pickFolder({ title: '저장소와 견줄 내 폴더' });
+    const root = picked.canceled ? undefined : picked.filePaths[0];
+    if (!root) return null;
+    allowRoot(root);
+    return { root, name: path.basename(root) || root };
+  });
+  ipcMain.handle(IPC.foldersScan, (_e, root: string) => scanFolder(root));
+  ipcMain.handle(IPC.foldersRead, (_e, root: string, relativePath: string, offset: number, length: number) =>
+    readChunk(root, relativePath, offset, length),
+  );
+  ipcMain.handle(IPC.foldersSave, (_e, root: string, relativePath: string, url: string) => saveUrl(root, relativePath, url));
 }
 
 app.on('second-instance', (_event, argv) => showWindow(appUrlFromDeepLink(argv)));

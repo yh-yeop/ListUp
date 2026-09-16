@@ -58,6 +58,7 @@ const electronDir = path.join(ROOT, 'node_modules', 'electron');
 const executablePath = path.join(electronDir, 'dist', fs.readFileSync(path.join(electronDir, 'path.txt'), 'utf8').trim());
 const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'listup-desktop-e2e-'));
 const backupDir = fs.mkdtempSync(path.join(os.tmpdir(), 'listup-desktop-backup-'));
+const compareDir = fs.mkdtempSync(path.join(os.tmpdir(), 'listup-desktop-compare-'));
 const PORT = await freePort();
 fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({ port: PORT, trayNoticeShown: true }));
 
@@ -133,6 +134,60 @@ try {
   const expectedBase = status.lanUrls[0];
   t.must(Boolean(expectedBase) && linkText.startsWith(`${expectedBase}/join?code=`), `초대 링크는 공유기 안 주소로 (${expectedBase})`);
 
+  // 4-1. 내 폴더와 비교 — PC 앱은 고른 폴더에 바로 받고, 다시 훑고, 그 폴더의 파일을 올린다
+  {
+    const base = `http://127.0.0.1:${PORT}`;
+    const put = async (filePath, content) => {
+      const form = new FormData();
+      form.append('file', new Blob([content]), path.basename(filePath));
+      await fetch(`${base}/api/repos/${repoRes.repo.id}/files?path=${encodeURIComponent(filePath)}`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${own.token}` },
+        body: form,
+      });
+    };
+    await put('앨범/노래1.txt', '하나');
+    await put('앨범/깊이/노래2.txt', '둘둘');
+    fs.mkdirSync(path.join(compareDir, '앨범'), { recursive: true });
+    fs.writeFileSync(path.join(compareDir, '앨범', '노래1.txt'), '하나');
+    fs.writeFileSync(path.join(compareDir, '내것.txt'), '내 파일');
+    await app.evaluate(({ dialog }, dir) => {
+      dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [dir] });
+    }, compareDir);
+
+    await page.goto(`app://listup/repo/${repoRes.repo.id}`);
+    await page.getByRole('button', { name: '내 폴더와 비교' }).click();
+    await page.getByRole('button', { name: '폴더 고르기' }).click();
+    await page.getByRole('tab', { name: /^저장소에만/ }).waitFor({ timeout: 15_000 });
+    t.must((await page.getByText(compareDir, { exact: true }).count()) > 0, '비교: 고른 폴더의 전체 경로를 보인다');
+    t.must((await page.getByRole('tab', { name: /^저장소에만 1/ }).count()) === 1, '비교: 저장소에만 1 (앨범/깊이/노래2)');
+    t.must((await page.getByRole('tab', { name: /^내 폴더에만 1/ }).count()) === 1, '비교: 내 폴더에만 1 (내것.txt)');
+
+    await page.getByRole('checkbox', { name: '모두 고르기' }).click();
+    await page.getByRole('button', { name: '고른 1개 내 폴더로 받기' }).click();
+    await page.getByRole('tab', { name: /^저장소에만 0/ }).waitFor({ timeout: 15_000 });
+    const received = path.join(compareDir, '앨범', '깊이', '노래2.txt');
+    t.must(fs.existsSync(received) && fs.readFileSync(received, 'utf8') === '둘둘', '비교: 고른 폴더 안에 폴더 구조대로 받고, 다시 훑어 저장소에만 0');
+    t.must(!fs.readdirSync(path.join(compareDir, '앨범', '깊이')).some((f) => f.endsWith('.listup-part')), '비교: 받는 중 임시 파일이 남지 않는다');
+
+    await page.getByRole('tab', { name: /^내 폴더에만/ }).click();
+    await page.getByRole('checkbox', { name: '모두 고르기' }).click();
+    await page.getByRole('button', { name: '고른 1개 저장소에 올리기' }).click();
+    await page.getByRole('tab', { name: /^내 폴더에만 0/ }).waitFor({ timeout: 20_000 });
+    const raw = await fetch(`${base}/api/repos/${repoRes.repo.id}/raw?path=${encodeURIComponent('내것.txt')}`, {
+      headers: { Authorization: `Bearer ${own.token}` },
+    });
+    t.must(raw.ok && (await raw.text()) === '내 파일', '비교: PC 앱 폴더의 파일을 main 이 읽어 저장소에 올린다');
+
+    const outside = await page.evaluate(
+      (root) => window.listupDesktop.folders.read(root, '../../escape.txt', 0, 10).then(() => 'read', (e) => String(e)),
+      compareDir,
+    );
+    t.must(outside.includes('폴더 밖'), '비교: 고른 폴더 밖 경로는 읽지 못한다');
+    const unpicked = await page.evaluate(() => window.listupDesktop.folders.scan('C:\Windows').then(() => 'scanned', (e) => String(e)));
+    t.must(unpicked.includes('고르지 않은 폴더'), '비교: 대화상자로 고르지 않은 폴더는 훑지 못한다');
+  }
+
   // 5. 관리 화면 — 설정에서 들어간다
   await page.goto('app://listup/repos');
   await s.openSettings();
@@ -206,7 +261,7 @@ try {
   await app.evaluate(({ app: electronApp }) => electronApp.exit(0)).catch(() => {});
   await app.close().catch(() => {});
   // Electron 이 막 끝나 파일을 잠시 붙들고 있을 수 있다.
-  for (const dir of [userData, backupDir]) {
+  for (const dir of [userData, backupDir, compareDir]) {
     try {
       fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });
     } catch {

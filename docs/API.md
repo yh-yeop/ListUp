@@ -117,7 +117,7 @@ npm run reset-password -- me@example.com     # 서버가 켜져 있어도 됩니
 
 | 메서드 | 경로 | 최소 권한 | 설명 |
 | --- | --- | --- | --- |
-| GET | `/repos/:repoId/files?path=&snapshot=` | viewer | 폴더 목록. `snapshot` 을 주면 과거 시점 |
+| GET | `/repos/:repoId/files?path=&snapshot=&recursive=` | viewer | 폴더 목록. `snapshot` 을 주면 과거 시점, `recursive=1` 이면 하위 폴더 파일까지 모두 `files` 에(`dirs` 는 비고 `recursive: true`) |
 | POST | `/repos/:repoId/files?path=` | editor | multipart 업로드 = 직접 커밋 |
 | POST | `/repos/:repoId/files/commit` | editor | `{changes:[{path, blobHash\|null}], message?}` — 여러 파일을 스냅샷 하나로 |
 | DELETE | `/repos/:repoId/files?path=` | editor | 파일 또는 폴더 삭제 |

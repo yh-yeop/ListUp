@@ -207,6 +207,8 @@ app/
    ├─ lib/invite-link.ts      초대 링크 만들기, 로그인 뒤까지 들고 가는 초대 코드
    ├─ lib/dialogs.ts          웹/네이티브 확인 대화상자
    ├─ lib/desktop.ts          PC 앱이 창에 넣어 준 window.listupDesktop 읽기
+   ├─ lib/local-folder.ts     내 폴더 고르기·훑기·그 폴더에 받기 (PC 앱 / 안드로이드 SAF / 브라우저)
+   ├─ lib/folder-compare.ts   저장소 폴더(recursive 목록)와 내 폴더를 이름으로 견주기
    ├─ components/             공용 UI + 저장소 탭 네비게이션
    └─ theme.ts                라이트/다크 팔레트
 ```
@@ -292,6 +294,7 @@ desktop/src/
 ├─ host.ts          이 PC 서버 — utilityProcess 관리, 상태·로그, 재설정 코드·백업 요청
 ├─ server-entry.ts  utilityProcess 안에서 startServer (server/src/start.ts) + main 의 요청 처리
 ├─ tunnel.ts        공개 주소 — Tailscale Funnel(--bg) / Cloudflare 빠른 터널
+├─ folders.ts       내 폴더와 비교 — 대화상자로 고른 폴더 안만 훑기·조각 읽기·받아 쓰기
 ├─ settings.ts      포트·공개 방식·자동 켜기·데이터 폴더 (앱 데이터 폴더의 settings.json)
 └─ credentials.ts   로그인 정보 — safeStorage(DPAPI)로 암호화
 ```
@@ -306,6 +309,9 @@ desktop/src/
   들어갑니다(electron-builder 가 extraResources 에서도 node_modules 를 걸러 afterPack 에서 넣습니다).
 - **"이 PC" 항목** — 들어가기는 서버 목록에 `http://localhost:<포트>` 를 `이 PC` 로 더해 곧장 붙습니다. 초대 링크는
   localhost 대신 공개 주소(없으면 공유기 안 주소)로 만듭니다 — localhost 는 받는 사람의 기기를 가리키므로.
+- **내 폴더** — 창은 절대 경로로 파일을 열 수 없어 main 이 훑고 읽고 씁니다(올리기는 `UploadSource` 의 `desktop`
+  종류로 조각을 main 에서 읽음). main 은 이번 실행에 대화상자로 고른 폴더 안만 다루고 그 밖의 경로는 거절합니다.
+  받는 파일은 `.listup-part` 로 쓴 뒤 이름을 바꿔, 끊겨도 반쯤 받은 파일이 진짜 이름으로 남지 않습니다.
 - **터널 뒤 IP** — 터널은 같은 PC 에서 붙어 모든 요청이 127.0.0.1 로 보입니다. 서버는 기본으로 루프백 프록시의
   `X-Forwarded-For` 를 믿어(`LISTUP_TRUST_PROXY=loopback`) 로그인 실패 제한이 사람마다 따로 셉니다.
 ---

@@ -158,6 +158,42 @@ describe('저장소와 파일', () => {
     );
   });
 
+  it('recursive=1 이면 하위 폴더의 파일까지 한 번에 준다', async () => {
+    await uploadFile(h.app, owner, repoId, '전체/a.txt', 'a');
+    await uploadFile(h.app, owner, repoId, '전체/하위/b.txt', 'bb');
+    await uploadFile(h.app, owner, repoId, '전체/하위/더깊이/c.txt', 'ccc');
+    await uploadFile(h.app, owner, repoId, '전체밖.txt', 'x');
+
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/repos/${repoId}/files?path=${encodeURIComponent('전체')}&recursive=1`,
+      headers: auth(owner),
+    });
+    assert.equal(res.statusCode, 200);
+    const tree = res.json().tree as TreeListing;
+    assert.equal(tree.recursive, true);
+    assert.deepEqual(tree.dirs, []);
+    assert.deepEqual(
+      tree.files.map((f) => [f.path, f.size]).sort(),
+      [
+        ['전체/a.txt', 1],
+        ['전체/하위/b.txt', 2],
+        ['전체/하위/더깊이/c.txt', 3],
+      ].sort(),
+    );
+
+    // 없으면 예전처럼 한 단계만
+    const flat = await h.app.inject({
+      method: 'GET',
+      url: `/api/repos/${repoId}/files?path=${encodeURIComponent('전체')}`,
+      headers: auth(owner),
+    });
+    const flatTree = flat.json().tree as TreeListing;
+    assert.equal(flatTree.recursive, undefined);
+    assert.deepEqual(flatTree.files.map((f) => f.name), ['a.txt']);
+    assert.deepEqual(flatTree.dirs.map((d) => [d.name, d.fileCount]), [['하위', 2]]);
+  });
+
   it('폴더를 통째로 옮길 수 있다', async () => {
     await uploadFile(h.app, owner, repoId, '옮길폴더/c.txt', 'c');
     const res = await h.app.inject({

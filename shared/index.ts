@@ -120,6 +120,8 @@ export interface TreeListing {
   snapshotId: string | null;
   dirs: DirEntry[];
   files: FileEntry[];
+  /** `recursive=1` 로 하위 폴더 파일까지 담았으면 true (dirs 는 비어 있다). 없으면 이 기능이 없는 서버(1.2 까지). */
+  recursive?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -533,9 +535,31 @@ export interface DesktopHost {
   logs(): Promise<string[]>;
 }
 
+/** 내 폴더에 있는 파일 하나. relativePath 는 고른 폴더 안의 경로(`/` 로 나눔). */
+export interface LocalFileEntry {
+  relativePath: string;
+  size: number;
+}
+
+/**
+ * PC 앱에서 내 폴더를 다룬다 — 고르기·훑기·읽기·쓰기. 창은 절대 경로로 파일을 열 수 없으므로 main 이 대신한다.
+ * main 은 이번 실행에서 대화상자로 고른 폴더 안만 다룬다.
+ */
+export interface DesktopFolders {
+  /** 폴더 고르기 대화상자. 취소하면 null. */
+  pick(): Promise<{ root: string; name: string } | null>;
+  /** 폴더 안의 파일을 모두 훑는다. 너무 많으면 거기서 멈추고 truncated. */
+  scan(root: string): Promise<{ entries: LocalFileEntry[]; truncated: boolean }>;
+  /** 파일의 offset 부터 length 바이트 (올리기 조각). */
+  read(root: string, relativePath: string, offset: number, length: number): Promise<Uint8Array>;
+  /** url 을 받아 폴더 안 relativePath 에 쓴다(하위 폴더를 만들고, 같은 이름이 있으면 "이름 (1)"). 쓴 경로를 돌려준다. */
+  save(root: string, relativePath: string, url: string): Promise<string>;
+}
+
 export interface DesktopBridge {
   /** PC 앱 버전. */
   version: string;
   credentials: DesktopCredentials;
   host: DesktopHost;
+  folders: DesktopFolders;
 }
