@@ -89,3 +89,79 @@ export function compareFolder(repoFiles: RepoFile[], localEntries: LocalEntry[],
   localOnly.sort(byPath);
   return { both, repoOnly, localOnly, groupedNames };
 }
+
+// ---------------------------------------------------------------------------
+// 내용으로 확인 — 이름 비교 위에 해시를 얹는다
+// ---------------------------------------------------------------------------
+
+/**
+ * 해시를 계산해 볼 내 폴더 파일 — 이름이 같고 크기도 같은 짝(내용이 같은지 아직 모름)과, 내 폴더에만 있지만
+ * 저장소 어딘가에 같은 크기가 있는 파일(옮겼거나 이름만 바꿨을 수 있음). 크기가 다르면 내용도 다르므로 계산하지 않는다.
+ */
+export function hashCandidates(comparison: Comparison, allRepoFiles: RepoFile[]): LocalEntry[] {
+  const sizes = new Set(allRepoFiles.map((file) => file.size));
+  const picked = new Map<string, LocalEntry>();
+  for (const match of comparison.both) {
+    if (match.sizeDiffers) continue;
+    for (const entry of match.local) picked.set(entry.relativePath, entry);
+  }
+  for (const entry of comparison.localOnly) {
+    if (sizes.has(entry.size)) picked.set(entry.relativePath, entry);
+  }
+  return [...picked.values()];
+}
+
+export interface ContentFindings {
+  /** "둘 다" 중 내용까지 같은 것 (Match.key). */
+  identical: Set<string>;
+  /** "둘 다" 중 이름은 같은데 내용이 다른 것 (크기가 다른 것 포함). */
+  differs: Set<string>;
+  /** 위치·이름만 다른 같은 파일 — 내 폴더에만 있는 것과 저장소에만 있는 것의 내용이 같다. */
+  moved: { local: LocalEntry; repo: RepoFile }[];
+  /** 내 폴더에만 있지만 저장소의 다른 곳(이미 짝이 있는 파일)에 같은 내용이 있다 — 올릴 필요가 없다. */
+  alreadyInRepo: { local: LocalEntry; repo: RepoFile }[];
+}
+
+/**
+ * 해시로 비교 결과를 다시 읽는다. localHashes 는 내 폴더 경로 → sha256 (hashCandidates 의 것만 있어도 된다).
+ * 저장소 파일의 해시는 서버가 준 blobHash.
+ */
+export function contentFindings(
+  comparison: Comparison,
+  localHashes: Map<string, string>,
+  allRepoFiles: RepoFile[],
+): ContentFindings {
+  const findings: ContentFindings = { identical: new Set(), differs: new Set(), moved: [], alreadyInRepo: [] };
+  for (const match of comparison.both) {
+    if (match.sizeDiffers) {
+      findings.differs.add(match.key);
+      continue;
+    }
+    const repoHashes = new Set(match.repo.map((file) => file.blobHash));
+    const hashes = match.local.map((entry) => localHashes.get(entry.relativePath));
+    if (hashes.some((hash) => hash === undefined)) continue; // 아직 모른다
+    if (hashes.some((hash) => repoHashes.has(hash!))) findings.identical.add(match.key);
+    else findings.differs.add(match.key);
+  }
+
+  // 저장소에만 있는 파일을 해시로 찾아, 내 폴더에만 있는 같은 내용과 짝짓는다(한 파일은 한 번만).
+  const repoOnlyByHash = new Map<string, RepoFile[]>();
+  for (const file of comparison.repoOnly) {
+    repoOnlyByHash.set(file.blobHash, [...(repoOnlyByHash.get(file.blobHash) ?? []), file]);
+  }
+  const anyRepoByHash = new Map<string, RepoFile>();
+  for (const file of allRepoFiles) if (!anyRepoByHash.has(file.blobHash)) anyRepoByHash.set(file.blobHash, file);
+
+  for (const entry of comparison.localOnly) {
+    const hash = localHashes.get(entry.relativePath);
+    if (!hash) continue;
+    const candidates = repoOnlyByHash.get(hash);
+    if (candidates && candidates.length > 0) {
+      findings.moved.push({ local: entry, repo: candidates.shift()! });
+      continue;
+    }
+    const elsewhere = anyRepoByHash.get(hash);
+    if (elsewhere) findings.alreadyInRepo.push({ local: entry, repo: elsewhere });
+  }
+  return findings;
+}

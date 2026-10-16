@@ -188,6 +188,71 @@ try {
     t.must(unpicked.includes('고르지 않은 폴더'), '비교: 대화상자로 고르지 않은 폴더는 훑지 못한다');
   }
 
+  // 4-2. 폴더 동기화 — 기준을 기억해 누가 바꿨는지 가린다
+  {
+    const syncDir = fs.mkdtempSync(path.join(os.tmpdir(), 'listup-desktop-sync-'));
+    const { json: syncRepo } = await api(`http://127.0.0.1:${PORT}`, '/api/repos', { name: 'sync' }, own.token);
+    const repoId = syncRepo.repo.id;
+    const base = `http://127.0.0.1:${PORT}`;
+    const put = async (filePath, content) => {
+      const form = new FormData();
+      form.append('file', new Blob([content]), path.basename(filePath));
+      await fetch(`${base}/api/repos/${repoId}/files?path=${encodeURIComponent(filePath)}`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${own.token}` },
+        body: form,
+      });
+    };
+    const remote = async (filePath) => {
+      const res = await fetch(`${base}/api/repos/${repoId}/raw?path=${encodeURIComponent(filePath)}`, { headers: { Authorization: `Bearer ${own.token}` } });
+      return res.ok ? res.text() : null;
+    };
+    const local = (filePath) => (fs.existsSync(path.join(syncDir, filePath)) ? fs.readFileSync(path.join(syncDir, filePath), 'utf8') : null);
+    await put('from-repo.txt', '저장소에서');
+    fs.writeFileSync(path.join(syncDir, 'from-pc.txt'), 'PC 에서');
+    await app.evaluate(({ dialog }, dir) => {
+      dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [dir] });
+    }, syncDir);
+
+    await page.goto(`app://listup/repo/${repoId}`);
+    await page.getByRole('button', { name: '폴더 동기화' }).click();
+    await page.getByRole('button', { name: '폴더 고르기' }).click();
+    await page.getByRole('button', { name: /^동기화 \(2개\)$/ }).waitFor({ timeout: 20_000 });
+    await page.getByRole('button', { name: /^동기화 \(2개\)$/ }).click();
+    await page.getByText('맞춰져 있습니다').waitFor({ timeout: 20_000 });
+    t.must(local('from-repo.txt') === '저장소에서' && (await remote('from-pc.txt')) === 'PC 에서', '동기화: 처음 맞추기 — 양쪽에 없는 것을 채운다');
+
+    // 저장소에서 바뀐 것은 받고, 내 쪽에서 바뀐 것은 올린다
+    await put('from-repo.txt', '저장소가 고침');
+    fs.writeFileSync(path.join(syncDir, 'from-pc.txt'), 'PC 가 고침');
+    await page.getByRole('button', { name: '지금 확인' }).click();
+    await page.getByRole('button', { name: /^동기화 \(2개\)$/ }).click();
+    await page.getByText('맞춰져 있습니다').waitFor({ timeout: 20_000 });
+    t.must(local('from-repo.txt') === '저장소가 고침' && (await remote('from-pc.txt')) === 'PC 가 고침', '동기화: 바뀐 쪽을 따라 받고 올린다');
+
+    // 양쪽에서 바꾸면 충돌 — 저장소 것을 고른다
+    await put('from-pc.txt', '저장소 버전');
+    fs.writeFileSync(path.join(syncDir, 'from-pc.txt'), 'PC 버전');
+    await page.getByRole('button', { name: '지금 확인' }).click();
+    await page.getByRole('radio', { name: 'from-pc.txt: 저장소 것으로' }).click();
+    await page.getByRole('button', { name: /^동기화 \(1개\)$/ }).click();
+    await page.getByText('맞춰져 있습니다').waitFor({ timeout: 20_000 });
+    t.must(local('from-pc.txt') === '저장소 버전', '동기화: 충돌은 고른 쪽을 따른다');
+
+    // 내 쪽에서 지우면 허락했을 때만 저장소에서도 지운다
+    fs.rmSync(path.join(syncDir, 'from-repo.txt'));
+    await page.getByRole('button', { name: '지금 확인' }).click();
+    await page.getByText('지울 것 1').waitFor({ timeout: 20_000 });
+    t.must(await page.getByRole('button', { name: '할 일을 고르세요' }).isDisabled(), '동기화: 지우기는 허락하기 전에는 하지 않는다');
+    await page.getByRole('checkbox', { name: '이번에 지우기도 하기' }).click();
+    await page.getByRole('button', { name: /^동기화 \(1개\)$/ }).click();
+    await page.getByText('맞춰져 있습니다').waitFor({ timeout: 20_000 });
+    t.must((await remote('from-repo.txt')) === null, '동기화: 내 쪽에서 지운 것을 저장소에서도 지운다');
+    const remembered = JSON.parse(fs.readFileSync(path.join(userData, 'settings.json'), 'utf8')).syncRoots ?? [];
+    t.must(remembered.includes(path.resolve(syncDir)), '동기화: 고른 폴더를 기억해 다시 켜도 열 수 있다');
+    fs.rmSync(syncDir, { recursive: true, force: true });
+  }
+
   // 5. 관리 화면 — 설정에서 들어간다
   await page.goto('app://listup/repos');
   await s.openSettings();
@@ -250,6 +315,23 @@ try {
   await page.getByRole('button', { name: '서버 끄기' }).waitFor({ timeout: 30_000 });
   const named = await (await fetch(`http://127.0.0.1:${PORT}/api/health`)).json();
   t.must(named.serverName === '가족 서버', `켜면 health 가 서버 이름을 알려준다 (${named.serverName})`);
+  await page.getByRole('button', { name: '서버 끄기' }).click();
+  await page.getByRole('button', { name: '서버 켜기' }).waitFor({ timeout: 20_000 });
+
+  // 11-3. 변경 이력 보존 — 권장값 30일, 서버를 끈 채로 바꾸면 다음에 켤 때 넘긴다
+  t.must((await page.getByRole('button', { name: '30일 (권장)' }).count()) === 1, '이력 보존: 권장값 30일을 보인다');
+  await page.getByRole('button', { name: '90일' }).click();
+  await page.getByRole('button', { name: '한 달에 하나' }).click();
+  await page.getByRole('button', { name: '이력 보존 저장' }).click();
+  await page.waitForFunction(async () => {
+    const status = await window.listupDesktop.host.getStatus();
+    return status.historyDays === 90 && status.historyKeepOlder === 'monthly';
+  });
+  t.must(true, '이력 보존: 기간과 오래된 시점 보존 방식을 저장한다');
+  await page.getByRole('button', { name: '서버 켜기' }).click();
+  await page.getByRole('button', { name: '서버 끄기' }).waitFor({ timeout: 30_000 });
+  const keptHealth = await (await fetch(`http://127.0.0.1:${PORT}/api/health`)).json();
+  t.must(keptHealth.history?.days === 90 && keptHealth.history?.keepOlder === 'monthly', '이력 보존: 켜면 서버가 그 설정을 쓴다');
   await page.getByRole('button', { name: '서버 끄기' }).click();
   await page.getByRole('button', { name: '서버 켜기' }).waitFor({ timeout: 20_000 });
 

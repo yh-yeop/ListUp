@@ -35,6 +35,7 @@ import { downloadFromRepo, pickFiles, pickFolder } from '../../../src/lib/files'
 import { localFolderSupported } from '../../../src/lib/local-folder';
 import { uploadAndCommit, type UploadItem, type UploadProgress } from '../../../src/lib/transfer';
 import { useAbortable } from '../../../src/lib/useAbortable';
+import { LEVEL_1_4, useServerLevel } from '../../../src/lib/useServerLevel';
 import { useAsync } from '../../../src/lib/useAsync';
 import { fontSize, monoFont, radius, spacing, useTheme } from '../../../src/theme';
 
@@ -51,6 +52,9 @@ interface Editing {
 }
 
 /** 업로드 실패 안내에 나열할 최대 건수. 나머지는 'n건 더' 로 줄인다. */
+/** 폴더 동기화는 폴더에 쓸 수 있는 곳에서만 — PC 앱과 안드로이드. */
+const syncSupported = Platform.OS === 'android' || (Platform.OS === 'web' && typeof window !== 'undefined' && 'listupDesktop' in window);
+
 const MAX_FAILURES_SHOWN = 3;
 
 /** 폴더 올리기는 웹(폴더 선택)과 안드로이드(시스템 폴더 선택기)에서만 된다. */
@@ -101,8 +105,81 @@ export default function RepoFilesScreen() {
   const repo = state.data?.repo;
   const tree = state.data?.tree;
   const isEditor = hasRole(repo?.role, 'editor');
-  // 과거 시점에서는 편집 권한이 있어도 바꿀 수 없다.
-  const canEdit = isEditor && !snapshotId;
+  const mirror = repo?.mirror ?? null;
+  const serverLevel = useServerLevel();
+  // 과거 시점에서는 편집 권한이 있어도 바꿀 수 없다. 다른 서버를 따라가는 저장소도 여기서는 바꾸지 않는다.
+  const canEdit = isEditor && !snapshotId && !mirror;
+  // 과거 시점으로 되돌리기 (1.4.0 서버부터).
+  const canRestore = isEditor && !!snapshotId && !mirror && serverLevel >= LEVEL_1_4;
+  // 계정 없는 사람에게 링크로 보내기 (1.4.0 서버부터).
+  const canShare = isEditor && !snapshotId && serverLevel >= LEVEL_1_4;
+  const [syncingMirror, setSyncingMirror] = useState(false);
+
+  /** 과거 시점의 내용으로 저장소 전체(''), 폴더, 파일 하나를 되돌린다. */
+  async function restoreTo(targetPath: string, isFolder: boolean) {
+    if (!snapshotId) return;
+    const what = targetPath === '' ? '저장소 전체' : isFolder ? `'${targetPath}' 폴더` : `'${targetPath}'`;
+    const ok = await confirmAction({
+      title: `${what}를 이 시점으로 되돌릴까요?`,
+      message:
+        (isFolder || targetPath === ''
+          ? '그 시점에 없던 파일은 지워지고, 바뀐 파일은 그때 내용으로 돌아갑니다. '
+          : '이 파일을 그때 내용으로 바꿉니다. ') +
+        '되돌린 것도 변경 이력에 남으므로 다시 되돌릴 수 있습니다.',
+      confirmLabel: '되돌리기',
+    });
+    if (!ok) return;
+    setBusyPath(targetPath || '/');
+    try {
+      const result = await api.restore(repoId, snapshotId, targetPath || undefined);
+      if (result.unchanged) notify('바뀐 것이 없습니다.', '지금과 그 시점의 내용이 같습니다.');
+      else {
+        const parts = [
+          result.added ? `되살림 ${result.added}` : '',
+          result.updated ? `되돌림 ${result.updated}` : '',
+          result.deleted ? `지움 ${result.deleted}` : '',
+        ].filter(Boolean);
+        notifySuccess('되돌렸습니다.', parts.join(' · '));
+      }
+      backToPresent();
+    } catch (err) {
+      notifyError('되돌리지 못했습니다.', err instanceof ApiError ? err.message : undefined);
+    } finally {
+      setBusyPath(null);
+    }
+  }
+
+  async function syncMirrorNow() {
+    setSyncingMirror(true);
+    try {
+      const { result } = await api.syncMirror(repoId);
+      if (result.changed) notifySuccess('원본에서 바뀐 것을 가져왔습니다.', result.fetched ? `새 내용 ${result.fetched}개 (${formatBytes(result.fetchedBytes)})` : undefined);
+      else notify('원본과 같습니다.');
+    } catch (err) {
+      notifyError('가져오지 못했습니다.', err instanceof ApiError ? err.message : undefined);
+    } finally {
+      setSyncingMirror(false);
+      state.refresh();
+    }
+  }
+
+  async function stopMirroring() {
+    const ok = await confirmAction({
+      title: '따라가기를 그만둘까요?',
+      message: '지금 가진 파일과 이력은 그대로 남고, 이 저장소는 보통 저장소가 됩니다. 원본의 변경은 더 따라오지 않습니다.',
+      confirmLabel: '그만두기',
+      destructive: true,
+    });
+    if (!ok) return;
+    try {
+      await api.stopMirror(repoId);
+      notifySuccess('따라가기를 그만뒀습니다.');
+    } catch (err) {
+      notifyError('그만두지 못했습니다.', err instanceof ApiError ? err.message : undefined);
+    } finally {
+      state.refresh();
+    }
+  }
 
   function openFolder(nextPath: string) {
     setEditing(null);
@@ -337,16 +414,56 @@ export default function RepoFilesScreen() {
                 <View style={{ flex: 1, gap: 2 }}>
                   <Body style={{ fontWeight: '600', color: colors.warning }}>과거 시점 보기</Body>
                   <Caption>{describeSnapshot(snapshotId, snapshotMessage, snapshotAt)}</Caption>
-                  <Caption>이 시점의 파일은 내려받기만 할 수 있습니다.</Caption>
+                  <Caption>
+                    {canRestore
+                      ? '이 시점의 파일을 내려받거나, 지금 저장소를 이 시점으로 되돌릴 수 있습니다.'
+                      : '이 시점의 파일은 내려받기만 할 수 있습니다.'}
+                  </Caption>
                 </View>
               </Row>
-              <Button
-                label="현재로 돌아가기"
-                icon="arrow-undo-outline"
-                variant="secondary"
-                compact
-                onPress={backToPresent}
-              />
+              <Row gap={spacing.sm} wrap>
+                <Button
+                  label="현재로 돌아가기"
+                  icon="arrow-forward-outline"
+                  variant="secondary"
+                  compact
+                  onPress={backToPresent}
+                />
+                {canRestore ? (
+                  <Button
+                    label={path ? `이 폴더를 이 시점으로` : '저장소 전체를 이 시점으로'}
+                    icon="arrow-undo-outline"
+                    compact
+                    loading={busyPath === (path || '/')}
+                    onPress={() => void restoreTo(path, true)}
+                  />
+                ) : null}
+              </Row>
+            </View>
+          ) : mirror ? (
+            <View style={{ backgroundColor: colors.accentSoft, borderRadius: radius.md, padding: spacing.md, gap: spacing.md }}>
+              <Row gap={spacing.sm} style={{ alignItems: 'flex-start' }}>
+                <Ionicons name="git-network-outline" size={18} color={colors.accent} style={{ marginTop: 1 }} />
+                <View style={{ flex: 1, gap: 2 }}>
+                  <Body style={{ fontWeight: '600', color: colors.accent }}>다른 서버를 따라가는 저장소</Body>
+                  <Caption>원본: {mirror.sourceUrl}</Caption>
+                  <Caption>
+                    {mirror.syncing || syncingMirror
+                      ? '지금 가져오는 중…'
+                      : mirror.lastSyncedAt
+                        ? `마지막으로 가져옴: ${formatRelativeTime(mirror.lastSyncedAt)}`
+                        : '아직 가져오지 않았습니다.'}
+                  </Caption>
+                  {mirror.lastError ? <Caption style={{ color: colors.danger }}>최근 실패: {mirror.lastError}</Caption> : null}
+                  <Caption>여기서는 파일을 바꿀 수 없습니다. 원본 서버에서 바꾸면 따라옵니다.</Caption>
+                </View>
+              </Row>
+              {repo?.role === 'owner' ? (
+                <Row gap={spacing.sm} wrap>
+                  <Button label="지금 가져오기" icon="refresh" compact loading={syncingMirror} onPress={() => void syncMirrorNow()} />
+                  <Button label="따라가기 그만두기" variant="secondary" compact onPress={() => void stopMirroring()} />
+                </Row>
+              ) : null}
             </View>
           ) : (
             <Row gap={spacing.sm} wrap>
@@ -384,6 +501,23 @@ export default function RepoFilesScreen() {
                   disabled={uploading}
                 />
               ) : null}
+              {syncSupported && serverLevel >= LEVEL_1_4 ? (
+                <Button
+                  label="폴더 동기화"
+                  icon="sync-outline"
+                  variant="secondary"
+                  onPress={() => router.push(`/repo/${repoId}/sync?path=${encodeURIComponent(path)}`)}
+                  disabled={uploading}
+                />
+              ) : null}
+              {canShare && canEdit ? (
+                <Button
+                  label="받기 함 만들기"
+                  icon="mail-unread-outline"
+                  variant="secondary"
+                  onPress={() => router.push(`/repo/${repoId}/shares?inbox=${encodeURIComponent(path)}`)}
+                />
+              ) : null}
             </Row>
           )}
 
@@ -391,7 +525,7 @@ export default function RepoFilesScreen() {
             <TransferProgress progress={progress} onCancel={uploadControl.cancel} cancelling={uploadControl.cancelling} />
           ) : null}
 
-          {!isEditor && !snapshotId ? (
+          {!isEditor && !snapshotId && !mirror ? (
             <Caption>
               열람 권한이라 파일을 직접 바꿀 수는 없지만, 변경 제안을 올리면 편집자가 검토 후
               반영합니다.
@@ -474,6 +608,20 @@ export default function RepoFilesScreen() {
                               onPress={() => void download(dir.path, `${dir.name}.zip`, true)}
                             />
                           )}
+                          {canRestore ? (
+                            <IconButton
+                              icon="arrow-undo-outline"
+                              label={`${dir.name} 폴더를 이 시점으로 되돌리기`}
+                              onPress={() => void restoreTo(dir.path, true)}
+                            />
+                          ) : null}
+                          {canShare ? (
+                            <IconButton
+                              icon="share-social-outline"
+                              label={`${dir.name} 폴더를 링크로 보내기`}
+                              onPress={() => router.push(`/repo/${repoId}/shares?path=${encodeURIComponent(dir.path)}`)}
+                            />
+                          ) : null}
                           {canEdit ? (
                             <>
                               <IconButton
@@ -547,6 +695,20 @@ export default function RepoFilesScreen() {
                                 label={`${file.name} 내려받기`}
                                 onPress={() => void download(file.path, file.name)}
                               />
+                              {canRestore ? (
+                                <IconButton
+                                  icon="arrow-undo-outline"
+                                  label={`${file.name} 을(를) 이 시점으로 되돌리기`}
+                                  onPress={() => void restoreTo(file.path, false)}
+                                />
+                              ) : null}
+                              {canShare ? (
+                                <IconButton
+                                  icon="share-social-outline"
+                                  label={`${file.name} 을(를) 링크로 보내기`}
+                                  onPress={() => router.push(`/repo/${repoId}/shares?path=${encodeURIComponent(file.path)}`)}
+                                />
+                              ) : null}
                               {canEdit ? (
                                 <>
                                   <IconButton

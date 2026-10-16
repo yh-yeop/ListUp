@@ -61,6 +61,8 @@ function RootNavigator() {
       <Stack.Screen name="host" options={{ title: '이 PC 서버' }} />
       {/* 초대 링크는 로그인 전에도 연다 — 코드를 들고 로그인·가입으로 보낸다. */}
       <Stack.Screen name="join" options={{ title: '초대 코드로 참여' }} />
+      {/* 공개 링크 — 계정 없는 사람이 연다(받기 링크·받기 함). */}
+      <Stack.Screen name="s/[token]" options={{ title: 'ListUp' }} />
 
       {/* 로그인 전에만 */}
       <Stack.Protected guard={!user}>
@@ -80,6 +82,9 @@ function RootNavigator() {
         <Stack.Screen name="repo/[repoId]/history" />
         <Stack.Screen name="repo/[repoId]/new-proposal" />
         <Stack.Screen name="repo/[repoId]/compare" />
+        <Stack.Screen name="repo/[repoId]/storage" />
+        <Stack.Screen name="repo/[repoId]/shares" />
+        <Stack.Screen name="repo/[repoId]/sync" />
         <Stack.Screen name="proposal/[proposalId]" />
       </Stack.Protected>
     </Stack>

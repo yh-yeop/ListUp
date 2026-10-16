@@ -1,8 +1,8 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Stack, router, useLocalSearchParams } from 'expo-router';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Pressable, RefreshControl, View } from 'react-native';
-import { formatBytes, formatRelativeTime, type RepoSummary, type Snapshot } from '@listup/shared';
+import { formatBytes, formatRelativeTime, type HealthResponse, type RepoSummary, type Snapshot } from '@listup/shared';
 import {
   Body,
   Button,
@@ -18,7 +18,8 @@ import {
   Title,
 } from '../../../src/components/ui';
 import { RepoNav } from '../../../src/components/RepoNav';
-import { ApiError, api } from '../../../src/api/client';
+import { ApiError, api, getServerInfo } from '../../../src/api/client';
+import { describeRetention } from '../../../src/lib/retention';
 import { notifyError } from '../../../src/lib/dialogs';
 import { useAsync } from '../../../src/lib/useAsync';
 import { spacing, useTheme } from '../../../src/theme';
@@ -44,6 +45,11 @@ export default function HistoryScreen() {
   const { colors } = useTheme();
   const [extra, setExtra] = useState<ExtraPages | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
+  // 서버의 이력 보존 설정. 1.4.0 서버부터(그 전 서버는 null — 안내도 용량 화면도 없다).
+  const [retention, setRetention] = useState<HealthResponse['history'] | null | undefined>(undefined);
+  useEffect(() => {
+    void getServerInfo().then((info) => setRetention(info.history ?? null));
+  }, []);
 
   const state = useAsync<{ repo: RepoSummary } & HistoryPage>(async () => {
     const [{ repo }, { snapshots, next }] = await Promise.all([
@@ -103,9 +109,15 @@ export default function HistoryScreen() {
       <View style={{ gap: spacing.sm }}>
         <Title>변경 이력</Title>
         <Subtitle>
-          파일이 바뀔 때마다 그 시점의 전체 목록이 남습니다. 시점을 누르면 그때의 파일을 볼 수
-          있고, 지운 파일도 이전 시점에서는 그대로 내려받을 수 있습니다.
+          파일이 바뀔 때마다 그 시점의 전체 목록이 남습니다. 시점을 누르면 그때의 파일을 보고 받을 수
+          있고, 편집 권한이 있으면 저장소를 그 시점으로 되돌릴 수 있습니다.
         </Subtitle>
+        {retention !== undefined ? (
+          <Row gap={spacing.sm} wrap style={{ justifyContent: 'space-between' }}>
+            <Caption style={{ flex: 1 }}>{describeRetention(retention ?? undefined)}</Caption>
+            <Button label="용량 보기" icon="pie-chart-outline" variant="secondary" compact onPress={() => router.push(`/repo/${repoId}/storage`)} />
+          </Row>
+        ) : null}
       </View>
       <RepoNav repoId={repoId} openProposals={state.data?.repo.openProposalCount} />
 

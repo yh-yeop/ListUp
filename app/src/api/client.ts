@@ -5,7 +5,13 @@ import type {
   ApiErrorBody,
   ApiErrorCode,
   CommitResult,
+  ConflictResolution,
   DownloadLink,
+  HealthResponse,
+  PublicShare,
+  RepoStorage,
+  Share,
+  ShareKind,
   UploadSession,
   UploadedBlob,
   Invite,
@@ -70,14 +76,38 @@ let authToken: string | null = null;
  */
 export function setApiTarget(url: string | null, token: string | null): void {
   const nextUrl = url === null ? null : url.replace(/\/+$/, '');
-  // 업로드 한도는 서버마다 다르므로 주소가 바뀌면 다시 받아온다.
-  if (nextUrl !== apiBaseUrl) maxUploadBytesCache = null;
+  // 한도·기능 수준은 서버마다 다르므로 주소가 바뀌면 다시 받아온다. 같은 공유기 지름길도 다시 찾는다.
+  if (nextUrl !== apiBaseUrl) {
+    healthCache = null;
+    transferBaseUrl = null;
+    lanProbedAt = 0;
+  }
+  if (token !== authToken) transferBaseUrl = null;
   apiBaseUrl = nextUrl;
   authToken = token;
 }
 
-/** 서버가 알려준 파일 하나의 업로드 한도(바이트). */
-let maxUploadBytesCache: number | null = null;
+/** 지금 서버의 /api/health. 한 번 받으면 서버를 바꿀 때까지 쓴다. */
+let healthCache: Partial<HealthResponse> | null = null;
+
+/** 지금 서버가 알려 준 것 — 받지 못하면 빈 값(옛 서버로 본다). */
+export async function getServerInfo(): Promise<Partial<HealthResponse>> {
+  if (healthCache) return healthCache;
+  try {
+    const health = await request<Partial<HealthResponse>>('/api/health');
+    healthCache = health;
+    return health;
+  } catch {
+    // 일시적 연결 실패 — 이번에는 모르는 것으로 하고 다음 기회에 다시 물어본다.
+    return {};
+  }
+}
+
+/** 지금 서버의 기능 수준(API_LEVEL)이 level 이상인지. 1.4.0 기능은 4. */
+export async function serverSupports(level: number): Promise<boolean> {
+  const info = await getServerInfo();
+  return (typeof info.apiLevel === 'number' ? info.apiLevel : 1) >= level;
+}
 
 /**
  * 파일 하나의 업로드 한도(바이트). 실제 한도는 서버 설정(LISTUP_MAX_UPLOAD_MB)이므로
@@ -85,17 +115,95 @@ let maxUploadBytesCache: number | null = null;
  * 최종 판정은 어차피 서버(413)가 한다.
  */
 export async function getMaxUploadBytes(): Promise<number> {
-  if (maxUploadBytesCache !== null) return maxUploadBytesCache;
-  try {
-    const health = await request<{ maxUploadBytes?: unknown }>('/api/health');
-    if (typeof health.maxUploadBytes === 'number' && health.maxUploadBytes > 0) {
-      maxUploadBytesCache = health.maxUploadBytes;
-      return health.maxUploadBytes;
-    }
-  } catch {
-    // 일시적 연결 실패 — 기본값으로 진행하고 다음 기회에 다시 물어본다.
+  const info = await getServerInfo();
+  return typeof info.maxUploadBytes === 'number' && info.maxUploadBytes > 0 ? info.maxUploadBytes : MAX_FILE_SIZE;
+}
+
+// ---------------------------------------------------------------------------
+// 같은 공유기 지름길 — 큰 파일은 터널 대신 공유기 안 주소로
+// ---------------------------------------------------------------------------
+
+/**
+ * 조각 올리기·내려받기를 보낼 주소. 같은 공유기 안에서 서버에 바로 닿으면 그 주소(http://192.168…),
+ * 아니면 null(= 늘 쓰는 주소). Funnel 같은 터널은 대역폭이 좁아 집 안에서 큰 파일을 옮길 때 몇 배 느리다.
+ * 브라우저(https 로 서빙되는 웹)는 http 주소로 요청할 수 없어 쓰지 않는다 — 폰 앱·PC 앱만.
+ */
+let transferBaseUrl: string | null = null;
+let lanProbedAt = 0;
+const LAN_PROBE_EVERY_MS = 2 * 60 * 1000;
+const LAN_PROBE_TIMEOUT_MS = 1500;
+
+/** 지름길을 쓰는 중인지 (진행률 카드에 보인다). */
+export function usingLanShortcut(): boolean {
+  return transferBaseUrl !== null;
+}
+
+/**
+ * 서버가 알려 준 공유기 안 주소마다 내 토큰으로 /api/auth/me 를 물어, 같은 사용자로 답하는 곳(= 같은 서버 —
+ * 토큰은 그 서버만 받는다)을 지름길로 쓴다. 이미 공유기 안 주소로 붙어 있거나 웹이면 하지 않는다.
+ * 몇 분에 한 번만 다시 찾는다.
+ */
+export async function refreshLanShortcut(force = false): Promise<void> {
+  if (Platform.OS === 'web' && !isDesktopShell()) return;
+  if (!apiBaseUrl || !authToken) return;
+  if (!force && Date.now() - lanProbedAt < LAN_PROBE_EVERY_MS) return;
+  lanProbedAt = Date.now();
+  if (isPrivateAddress(apiBaseUrl)) {
+    transferBaseUrl = null;
+    return;
   }
-  return MAX_FILE_SIZE;
+  const usedBase = apiBaseUrl;
+  const usedToken = authToken;
+  try {
+    if (!(await serverSupports(4))) return;
+    const [{ urls }, me] = await Promise.all([
+      request<{ urls: string[] }>('/api/server/lan'),
+      request<{ user: User }>('/api/auth/me'),
+    ]);
+    for (const url of urls) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), LAN_PROBE_TIMEOUT_MS);
+      try {
+        const response = await fetch(`${url}/api/auth/me`, {
+          headers: { Authorization: `Bearer ${usedToken}` },
+          signal: controller.signal,
+        });
+        const body = response.ok ? ((await response.json()) as { user?: User }) : null;
+        if (body?.user?.id === me.user.id && apiBaseUrl === usedBase && authToken === usedToken) {
+          transferBaseUrl = url;
+          return;
+        }
+      } catch {
+        // 닿지 않는다 — 다음 주소.
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+    if (apiBaseUrl === usedBase) transferBaseUrl = null;
+  } catch {
+    // 지름길은 덤이다 — 못 찾으면 늘 쓰는 주소로.
+  }
+}
+
+/** 지름길이 끊겼을 때(공유기를 벗어남) 늘 쓰는 주소로 돌아간다. */
+function dropLanShortcut(): void {
+  transferBaseUrl = null;
+  lanProbedAt = Date.now();
+}
+
+function isDesktopShell(): boolean {
+  return typeof window !== 'undefined' && (window as { listupDesktop?: unknown }).listupDesktop !== undefined;
+}
+
+function isPrivateAddress(url: string): boolean {
+  try {
+    const host = new URL(url).hostname;
+    if (host === 'localhost' || host.endsWith('.local')) return true;
+    const [a, b] = host.split('.').map(Number);
+    return a === 10 || a === 127 || (a === 192 && b === 168) || (a === 172 && b >= 16 && b <= 31);
+  } catch {
+    return false;
+  }
 }
 
 export class ApiError extends Error {
@@ -264,11 +372,16 @@ function sendBytes<T>(
   bytes: Blob | Uint8Array,
   onProgress?: (loaded: number) => void,
   signal?: AbortSignal,
+  /** 공개 링크(받기 함)로 보낼 때: 그 서버 주소, 로그인 토큰은 보내지 않는다. */
+  publicBase?: string,
 ): Promise<T> {
-  if (apiBaseUrl === null) return Promise.reject(new ApiError(0, 'internal', '들어갈 서버를 먼저 골라 주세요.'));
+  // 멤버의 조각은 같은 공유기 지름길이 있으면 그리로 보낸다.
+  const lan = publicBase ? null : transferBaseUrl;
+  const base = publicBase ?? lan ?? apiBaseUrl;
+  if (base === null) return Promise.reject(new ApiError(0, 'internal', '들어갈 서버를 먼저 골라 주세요.'));
   if (signal?.aborted) return Promise.reject(new UploadAbortedError());
-  const usedBaseUrl = apiBaseUrl;
-  const usedToken = authToken;
+  const usedBaseUrl = publicBase ?? apiBaseUrl;
+  const usedToken = publicBase ? null : authToken;
   return new Promise<T>((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     // 멈추면 보내던 조각도 바로 끊는다 — 조각 하나(8MB)가 다 갈 때까지 기다리지 않게.
@@ -280,17 +393,20 @@ function sendBytes<T>(
       // RN 의 XMLHttpRequest 는 abort 이벤트를 주지 않을 때가 있어 끝날 때 한 번 더 본다(이미 정해졌으면 무시된다).
       if (signal?.aborted) reject(new UploadAbortedError());
     };
-    xhr.open(method, `${usedBaseUrl}${path}`);
+    xhr.open(method, `${base}${path}`);
     xhr.timeout = CHUNK_TIMEOUT_MS;
     xhr.setRequestHeader('Content-Type', 'application/octet-stream');
     if (usedToken) xhr.setRequestHeader('Authorization', `Bearer ${usedToken}`);
     if (onProgress) xhr.upload.onprogress = (event) => onProgress(event.loaded);
-    const networkError = () =>
+    const networkError = () => {
+      // 지름길이 끊겼으면(공유기를 벗어남) 늘 쓰는 주소로 돌아간다 — 올리기 엔진이 다시 보낼 때 그리로 간다.
+      if (lan && transferBaseUrl === lan) dropLanShortcut();
       reject(
         signal?.aborted
           ? new UploadAbortedError()
           : new ApiError(0, 'internal', `서버에 연결할 수 없습니다. (${usedBaseUrl})\n연결을 확인해 주세요.`),
       );
+    };
     xhr.onerror = networkError;
     xhr.ontimeout = networkError;
     xhr.onload = () => {
@@ -327,6 +443,18 @@ function sendBytes<T>(
       xhr.send(bytes);
     }
   });
+}
+
+/**
+ * 같은 공유기 지름길로 받을 주소 — 지름길이 없으면 null. 받다가 실패하면 {@link forgetLanShortcut} 하고
+ * 늘 쓰는 주소({@link resolveApiUrl})로 다시 받는다.
+ */
+export function resolveTransferUrl(path: string): string | null {
+  return transferBaseUrl && path.startsWith('/') ? `${transferBaseUrl}${path}` : null;
+}
+
+export function forgetLanShortcut(): void {
+  dropLanShortcut();
 }
 
 /** 서버가 준 경로(/api/…)를 지금 서버 주소가 붙은 전체 주소로. 이미 전체 주소면 그대로. */
@@ -478,6 +606,46 @@ export const api = {
   cancelUpload: (uploadId: string) =>
     request<{ ok: true }>(`/api/uploads/${uploadId}`, { method: 'DELETE' }),
 
+  // 1.4.0 -------------------------------------------------------------------
+
+  /** 과거 시점으로 되돌리기 — path 를 주면 그 폴더·파일만. 새 스냅샷으로 남는다. */
+  restore: (repoId: string, snapshotId: string, path?: string) =>
+    request<{ snapshotId: string; unchanged: boolean; added: number; updated: number; deleted: number }>(
+      `/api/repos/${repoId}/restore`,
+      { method: 'POST', body: { snapshotId, ...(path ? { path } : {}) } },
+    ),
+
+  /** 충돌 정리 — 충돌 경로마다 mine/theirs/merge. */
+  resolveProposal: (proposalId: string, resolutions: Record<string, ConflictResolution>) =>
+    request<{ proposal: ProposalDetail }>(`/api/proposals/${proposalId}/resolve`, {
+      method: 'POST',
+      body: { resolutions },
+    }),
+
+  repoStorage: (repoId: string) => request<RepoStorage>(`/api/repos/${repoId}/storage`),
+
+  listShares: (repoId: string) => request<{ shares: Share[] }>(`/api/repos/${repoId}/shares`),
+
+  createShare: (
+    repoId: string,
+    payload: { kind: ShareKind; path?: string; label?: string; expiresInDays?: number | null; maxUses?: number | null; maxMb?: number },
+  ) => request<{ share: Share }>(`/api/repos/${repoId}/shares`, { method: 'POST', body: payload }),
+
+  revokeShare: (shareId: string) => request<{ share: Share }>(`/api/shares/${shareId}`, { method: 'DELETE' }),
+
+  /** 다른 서버의 따라가기 링크로 미러 저장소를 만든다. */
+  createMirror: (link: string) =>
+    request<{ repo: RepoSummary }>('/api/repos/mirror', { method: 'POST', body: { link } }),
+
+  syncMirror: (repoId: string) =>
+    request<{ repo: RepoSummary; result: { changed: boolean; fetched: number; fetchedBytes: number } }>(
+      `/api/repos/${repoId}/mirror/sync`,
+      { method: 'POST' },
+    ),
+
+  stopMirror: (repoId: string) =>
+    request<{ repo: RepoSummary }>(`/api/repos/${repoId}/mirror`, { method: 'DELETE' }),
+
   /** 올려 둔 파일 여러 개를 커밋 하나로 반영한다. blobHash 가 null 이면 삭제. */
   commitFiles: (repoId: string, changes: { path: string; blobHash: string | null }[], message?: string) =>
     request<CommitResult>(`/api/repos/${repoId}/files/commit`, {
@@ -578,3 +746,46 @@ export const api = {
   reopenProposal: (proposalId: string) =>
     request<{ proposal: ProposalDetail }>(`/api/proposals/${proposalId}/reopen`, { method: 'POST' }),
 };
+
+// ---------------------------------------------------------------------------
+// 공개 링크 — 로그인 없이 (링크를 연 사람의 화면 app/s/[token].tsx 가 쓴다)
+// ---------------------------------------------------------------------------
+
+async function publicRequest<T>(base: string, path: string, init: { method?: string; body?: unknown } = {}): Promise<T> {
+  let response: Response;
+  try {
+    response = await fetch(`${base}${path}`, {
+      method: init.method ?? 'GET',
+      headers: init.body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
+      body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
+    });
+  } catch {
+    throw new ApiError(0, 'internal', '서버에 연결할 수 없습니다.');
+  }
+  const parsed = (await response.json().catch(() => null)) as (T & Partial<ApiErrorBody>) | null;
+  if (!response.ok) {
+    const error = parsed?.error;
+    throw new ApiError(response.status, error?.code ?? 'internal', error?.message ?? `요청이 실패했습니다. (HTTP ${response.status})`, error?.details);
+  }
+  return parsed as T;
+}
+
+/** 공개 링크 하나에 대한 요청들. base 는 링크를 준 서버 주소(보통 지금 페이지의 주소). */
+export function publicShareApi(base: string, token: string) {
+  const root = `/api/s/${encodeURIComponent(token)}`;
+  return {
+    info: () => publicRequest<{ share: PublicShare }>(base, root),
+    fileUrl: (path: string) => `${base}${root}/raw${path ? `?path=${encodeURIComponent(path)}` : ''}`,
+    zipUrl: () => `${base}${root}/zip`,
+    startUpload: (payload: { name: string; size: number; hash?: string }) =>
+      publicRequest<{ upload: UploadSession | null; blob?: UploadedBlob }>(base, `${root}/uploads`, { method: 'POST', body: payload }),
+    getUpload: (uploadId: string) => publicRequest<{ upload: UploadSession }>(base, `${root}/uploads/${uploadId}`),
+    putChunk: (uploadId: string, offset: number, bytes: Blob | Uint8Array, onProgress?: (loaded: number) => void, signal?: AbortSignal) =>
+      sendBytes<{ upload: UploadSession }>('PUT', `${root}/uploads/${uploadId}?offset=${offset}`, bytes, onProgress, signal, base),
+    completeUpload: (uploadId: string) =>
+      publicRequest<{ blob: UploadedBlob }>(base, `${root}/uploads/${uploadId}/complete`, { method: 'POST' }),
+    cancelUpload: (uploadId: string) => publicRequest<{ ok: true }>(base, `${root}/uploads/${uploadId}`, { method: 'DELETE' }),
+    submit: (payload: { name: string; message?: string; files: { path: string; blobHash: string }[] }) =>
+      publicRequest<{ ok: true; number: number; files: string[] }>(base, `${root}/submit`, { method: 'POST', body: payload }),
+  };
+}

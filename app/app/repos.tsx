@@ -18,7 +18,9 @@ import {
   Title,
 } from '../src/components/ui';
 import { ApiError, api } from '../src/api/client';
+import { notifySuccess } from '../src/lib/dialogs';
 import { useAsync } from '../src/lib/useAsync';
+import { LEVEL_1_4, useServerLevel } from '../src/lib/useServerLevel';
 import { useAuth } from '../src/state/auth';
 import { fontSize, radius, spacing, useTheme } from '../src/theme';
 
@@ -30,6 +32,29 @@ export default function ReposScreen() {
   const [description, setDescription] = useState('');
   const [formError, setFormError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /** 다른 서버의 저장소 따라가기 (1.4.0 서버부터). */
+  const serverLevel = useServerLevel();
+  const [following, setFollowing] = useState(false);
+  const [mirrorLink, setMirrorLink] = useState('');
+  const [mirrorError, setMirrorError] = useState<string | null>(null);
+  const [mirrorBusy, setMirrorBusy] = useState(false);
+
+  const follow = async () => {
+    if (mirrorBusy) return;
+    setMirrorError(null);
+    setMirrorBusy(true);
+    try {
+      const { repo } = await api.createMirror(mirrorLink.trim());
+      setMirrorLink('');
+      setFollowing(false);
+      notifySuccess('따라가기 시작했습니다.', '원본의 파일을 가져오는 중입니다. 큰 저장소는 시간이 걸립니다.');
+      router.push(`/repo/${repo.id}`);
+    } catch (err) {
+      setMirrorError(err instanceof ApiError ? err.message : '따라가지 못했습니다.');
+    } finally {
+      setMirrorBusy(false);
+    }
+  };
 
   const state = useAsync(async () => (await api.listRepos()).repos, []);
 
@@ -114,7 +139,32 @@ export default function ReposScreen() {
           variant="secondary"
           onPress={() => router.push('/join')}
         />
+        {serverLevel >= LEVEL_1_4 ? (
+          <Button
+            label="다른 서버 저장소 따라가기"
+            icon="git-network-outline"
+            variant="secondary"
+            onPress={() => setFollowing((prev) => !prev)}
+          />
+        ) : null}
       </Row>
+
+      {following ? (
+        <Card style={{ gap: spacing.lg }}>
+          <Body muted>
+            다른 ListUp 서버의 소유자에게 받은 따라가기 링크를 넣으면, 그 저장소를 이 서버에 읽기 전용 사본으로 두고
+            바뀐 것만 주기적으로 가져옵니다. 원본 서버가 꺼져 있어도 사본은 볼 수 있습니다.
+          </Body>
+          <Field label="따라가기 링크" hint="예: https://원본서버/s/…">
+            <Input value={mirrorLink} onChangeText={setMirrorLink} autoCapitalize="none" autoCorrect={false} inputMode="url" placeholder="https://" />
+          </Field>
+          {mirrorError ? <ErrorNotice message={mirrorError} /> : null}
+          <Row gap={spacing.sm}>
+            <Button label="따라가기" onPress={() => void follow()} loading={mirrorBusy} disabled={!mirrorLink.trim()} />
+            <Button label="취소" variant="ghost" onPress={() => setFollowing(false)} />
+          </Row>
+        </Card>
+      ) : null}
 
       {creating ? (
         <Card style={{ gap: spacing.lg }}>
@@ -189,10 +239,13 @@ function RepoCard({ repo }: { repo: RepoSummary }) {
               {repo.name}
             </Body>
           </Row>
-          <Badge
-            label={ROLE_LABEL[repo.role]}
-            tone={repo.role === 'owner' ? 'accent' : 'neutral'}
-          />
+          <Row gap={spacing.xs}>
+            {repo.mirror ? <Badge label="따라가는 중" icon="git-network-outline" tone="neutral" /> : null}
+            <Badge
+              label={ROLE_LABEL[repo.role]}
+              tone={repo.role === 'owner' ? 'accent' : 'neutral'}
+            />
+          </Row>
         </Row>
 
         {repo.description ? (

@@ -215,7 +215,7 @@ function ProposalCard({ proposal }: { proposal: Proposal }) {
         </Row>
 
         <Row gap={spacing.md} wrap>
-          <Caption>{proposal.author.displayName}</Caption>
+          <Caption>{proposal.guestName ? `${proposal.guestName} (받기 함)` : proposal.author.displayName}</Caption>
           <Caption>{formatRelativeTime(proposal.createdAt)}</Caption>
           <Row gap={4}>
             <Ionicons name="document-outline" size={12} color={colors.textFaint} />

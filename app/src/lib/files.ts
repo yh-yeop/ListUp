@@ -4,7 +4,7 @@ import { Directory, File, Paths } from 'expo-file-system';
 import * as LegacyFileSystem from 'expo-file-system/legacy';
 import { MAX_FILES_PER_REPO } from '@listup/shared';
 import { Platform } from 'react-native';
-import { api, authHeaders, resolveApiUrl } from '../api/client';
+import { api, authHeaders, forgetLanShortcut, resolveApiUrl, resolveTransferUrl } from '../api/client';
 import type { UploadSource } from '../api/client';
 import { ensureSaveFolder, forgetSaveFolder, saveFolderLabel, saveFolderSupported, saveIntoFolder } from './save-folder';
 
@@ -151,10 +151,23 @@ export async function downloadFromRepo(
   const target_ = new File(downloads, target.fileName);
   if (target_.exists) target_.delete();
 
-  const task = LegacyFileSystem.createDownloadResumable(url, target_.uri, {}, (progress) => {
+  const report = (progress: LegacyFileSystem.DownloadProgressData) => {
     const total = progress.totalBytesExpectedToWrite;
     if (total > 0) onProgress?.(progress.totalBytesWritten / total);
-  });
+  };
+  // 같은 공유기에서 서버에 바로 닿으면 그 주소로 먼저 받는다(터널보다 빠르다). 실패하면 늘 쓰는 주소로.
+  const lanUrl = resolveTransferUrl(link.url);
+  if (lanUrl) {
+    try {
+      const fast = await LegacyFileSystem.createDownloadResumable(lanUrl, target_.uri, {}, report).downloadAsync();
+      if (fast && fast.status < 400) return deliver(new File(fast.uri), folder);
+    } catch {
+      // 지름길이 끊겼다.
+    }
+    forgetLanShortcut();
+    if (target_.exists) target_.delete();
+  }
+  const task = LegacyFileSystem.createDownloadResumable(url, target_.uri, {}, report);
   let result: LegacyFileSystem.FileSystemDownloadResult | undefined;
   for (let attempt = 0; ; attempt += 1) {
     try {

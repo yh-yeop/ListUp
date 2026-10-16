@@ -2,7 +2,15 @@ import * as Clipboard from 'expo-clipboard';
 import { useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import { Linking, Pressable, Switch, View } from 'react-native';
-import { MAX_SERVER_NAME_LENGTH, formatTime, type HostStatus, type HostTools, type HostTunnelMode } from '@listup/shared';
+import {
+  DEFAULT_HISTORY_DAYS,
+  MAX_SERVER_NAME_LENGTH,
+  formatTime,
+  type HistoryKeepOlder,
+  type HostStatus,
+  type HostTools,
+  type HostTunnelMode,
+} from '@listup/shared';
 import { HOST_STATE_BADGE, useEnterOwnServer } from '../src/components/HostCard';
 import {
   Badge,
@@ -22,6 +30,7 @@ import {
   Title,
 } from '../src/components/ui';
 import { notifySuccess } from '../src/lib/dialogs';
+import { describeRetention } from '../src/lib/retention';
 import { desktopBridge, desktopErrorMessage, useHostStatus } from '../src/lib/desktop';
 import { fontSize, monoFont, spacing, useTheme } from '../src/theme';
 
@@ -120,6 +129,7 @@ function HostPanel({ status }: { status: HostStatus }) {
       <ResetCodeCard running={running} />
       <StartupCard status={status} stopped={stopped} act={act} />
       <DataCard status={status} stopped={stopped} act={act} busy={busy} />
+      <HistoryCard status={status} stopped={stopped} act={act} />
       <LogCard running={running} />
     </Screen>
   );
@@ -439,6 +449,81 @@ function StartupCard({ status, stopped, act }: { status: HostStatus; stopped: bo
           />
         </Row>
       </Field>
+    </Card>
+  );
+}
+
+const HISTORY_DAY_PRESETS = [
+  { label: '7일', days: 7 },
+  { label: '30일 (권장)', days: DEFAULT_HISTORY_DAYS },
+  { label: '90일', days: 90 },
+  { label: '1년', days: 365 },
+  { label: '모두 남김', days: 0 },
+];
+const KEEP_OLDER_OPTIONS: { key: HistoryKeepOlder; label: string }[] = [
+  { key: 'none', label: '남기지 않음' },
+  { key: 'daily', label: '하루에 하나' },
+  { key: 'weekly', label: '한 주에 하나' },
+  { key: 'monthly', label: '한 달에 하나' },
+];
+
+/**
+ * 변경 이력 보존 — 서버를 돌리는 사람이 정한다. 기간 안의 시점은 모두 남기고, 그보다 오래된 것은 고른 단위마다
+ * 하나만 남기거나 모두 정리한다(지금 파일은 늘 남는다). 정리는 6시간마다 도는 정리 작업 때 한다.
+ */
+function HistoryCard({ status, stopped, act }: { status: HostStatus; stopped: boolean; act: Act }) {
+  const host = desktopBridge()!.host;
+  const [days, setDays] = useState(status.historyDays);
+  const [keepOlder, setKeepOlder] = useState<HistoryKeepOlder>(status.historyKeepOlder);
+  useEffect(() => setDays(status.historyDays), [status.historyDays]);
+  useEffect(() => setKeepOlder(status.historyKeepOlder), [status.historyKeepOlder]);
+  const changed = days !== status.historyDays || keepOlder !== status.historyKeepOlder;
+  return (
+    <Card style={{ gap: spacing.md }}>
+      <Body style={{ fontWeight: '600' }}>변경 이력 보존</Body>
+      <Caption>
+        지난 시점은 "되돌리기"와 "옛 파일 받기"에 쓰이지만 디스크를 차지합니다. 기간 안의 시점은 모두 남기고, 그보다
+        오래된 것은 정리합니다. 지금 파일과 검토 중인 제안이 기대는 시점은 늘 남습니다.
+      </Caption>
+      <Field label="모두 남기는 기간">
+        <Row gap={spacing.xs} wrap>
+          {HISTORY_DAY_PRESETS.map((preset) => (
+            <Button
+              key={preset.label}
+              label={preset.label}
+              compact
+              variant={days === preset.days ? 'primary' : 'secondary'}
+              disabled={!stopped}
+              onPress={() => setDays(preset.days)}
+            />
+          ))}
+        </Row>
+      </Field>
+      {days > 0 ? (
+        <Field label="그보다 오래된 시점">
+          <Row gap={spacing.xs} wrap>
+            {KEEP_OLDER_OPTIONS.map((option) => (
+              <Button
+                key={option.key}
+                label={option.label}
+                compact
+                variant={keepOlder === option.key ? 'primary' : 'secondary'}
+                disabled={!stopped}
+                onPress={() => setKeepOlder(option.key)}
+              />
+            ))}
+          </Row>
+        </Field>
+      ) : null}
+      <Caption>{stopped ? describeRetention({ days, keepOlder }) : '서버를 끈 뒤에 바꿀 수 있습니다.'}</Caption>
+      <Button
+        label="저장"
+        accessibilityLabel="이력 보존 저장"
+        variant="secondary"
+        compact
+        disabled={!stopped || !changed}
+        onPress={() => void act('history', () => host.update({ historyDays: days, historyKeepOlder: keepOlder }))}
+      />
     </Card>
   );
 }

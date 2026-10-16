@@ -30,6 +30,7 @@ export function RepoNav({ repoId, openProposals }: { repoId: string; openProposa
     },
     { key: 'members', label: '멤버', icon: 'people-outline', href: `/repo/${repoId}/members` },
     { key: 'invites', label: '초대', icon: 'key-outline', href: `/repo/${repoId}/invites` },
+    { key: 'shares', label: '공유 링크', icon: 'link-outline', href: `/repo/${repoId}/shares` },
     { key: 'history', label: '변경 이력', icon: 'time-outline', href: `/repo/${repoId}/history` },
   ];
 

@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Stack, router, useLocalSearchParams } from 'expo-router';
 import { useState } from 'react';
-import { ActivityIndicator, RefreshControl, View } from 'react-native';
+import { ActivityIndicator, Pressable, RefreshControl, View } from 'react-native';
 import {
   CHANGE_OP_LABEL,
   PROPOSAL_STATUS_LABEL,
@@ -9,6 +9,7 @@ import {
   formatBytes,
   formatRelativeTime,
   hasRole,
+  type ConflictResolution,
   type ProposalChange,
   type ProposalDetail,
   type ProposalStatus,
@@ -33,6 +34,7 @@ import { ApiError, api } from '../../src/api/client';
 import { confirmAction, notifyError, notifySuccess } from '../../src/lib/dialogs';
 import { downloadFile } from '../../src/lib/files';
 import { useAsync } from '../../src/lib/useAsync';
+import { LEVEL_1_4, useServerLevel } from '../../src/lib/useServerLevel';
 import { useAuth } from '../../src/state/auth';
 import { fontSize, monoFont, radius, spacing, useTheme } from '../../src/theme';
 
@@ -48,6 +50,9 @@ export default function ProposalDetailScreen() {
   const [comment, setComment] = useState('');
   const [action, setAction] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  /** 충돌마다 고른 정리 방법. 자동으로 합칠 수 있는 것은 처음부터 합치기로 골라 둔다. */
+  const [choices, setChoices] = useState<Record<string, ConflictResolution>>({});
+  const serverLevel = useServerLevel();
 
   const state = useAsync<ProposalView>(async () => {
     const { proposal } = await api.getProposal(proposalId);
@@ -105,6 +110,44 @@ export default function ProposalDetailScreen() {
     await run('close', () => api.closeProposal(proposal.id));
   }
 
+  const conflictDetails = proposal?.status === 'open' ? (proposal.conflictDetails ?? []) : [];
+  // 충돌 정리는 1.4.0 서버부터. 작성자 본인이나 편집자.
+  const canResolve = canManage && serverLevel >= LEVEL_1_4 && conflictDetails.length > 0;
+  const chosen = (path: string, reason: 'changed' | 'name', autoMerge?: boolean): ConflictResolution | undefined =>
+    choices[path] ?? (reason === 'name' ? 'theirs' : autoMerge ? 'merge' : undefined);
+  const allChosen = conflictDetails.every((c) => chosen(c.path, c.reason, c.autoMerge) !== undefined);
+
+  async function resolveConflicts(mergeAfter: boolean) {
+    if (!proposal) return;
+    const resolutions: Record<string, ConflictResolution> = {};
+    for (const c of conflictDetails) {
+      resolutions[c.path] = mergeAfter ? 'theirs' : chosen(c.path, c.reason, c.autoMerge)!;
+    }
+    const keeps = proposal.changes.length - (mergeAfter ? conflictDetails.length : Object.values(resolutions).filter((r) => r === 'theirs').length);
+    const ok = await confirmAction(
+      mergeAfter
+        ? {
+            title: '충돌 난 파일만 빼고 반영할까요?',
+            message: `${conflictDetails.length}개는 저장소 내용을 그대로 두고, 나머지 ${keeps}개를 반영합니다.`,
+            confirmLabel: '빼고 반영하기',
+          }
+        : {
+            title: '고른 대로 정리할까요?',
+            message:
+              '정리하면 이 제안의 기준이 지금 저장소로 바뀌고, 무엇을 골랐는지 의견에 남습니다.' +
+              (keeps === 0 ? '\n모두 저장소 내용을 고르면 이 제안에는 바꿀 파일이 남지 않습니다.' : ''),
+            confirmLabel: '정리하기',
+          },
+    );
+    if (!ok) return;
+    await run(mergeAfter ? 'resolve-merge' : 'resolve', async () => {
+      const { proposal: resolved } = await api.resolveProposal(proposal.id, resolutions);
+      setChoices({});
+      if (mergeAfter && resolved.changes.length > 0) await api.mergeProposal(proposal.id);
+      notifySuccess(mergeAfter ? '충돌 난 파일을 빼고 반영했습니다.' : '충돌을 정리했습니다.');
+    });
+  }
+
   async function submitComment() {
     if (!proposal || !comment.trim()) return;
     await run('comment', async () => {
@@ -147,7 +190,10 @@ export default function ProposalDetailScreen() {
             </Row>
             <Title>{proposal.title}</Title>
             <Caption>
-              {proposal.author.displayName} · {formatRelativeTime(proposal.createdAt)} ·{' '}
+              {proposal.guestName
+                ? `${proposal.guestName} (받기 함으로 보냄 · ${proposal.author.displayName} 님의 링크)`
+                : proposal.author.displayName}{' '}
+              · {formatRelativeTime(proposal.createdAt)} ·{' '}
               {repo.name}
             </Caption>
           </View>
@@ -166,16 +212,83 @@ export default function ProposalDetailScreen() {
                   지금은 반영할 수 없습니다
                 </Body>
               </Row>
-              {conflictGroups(proposal).map((group) => (
+              {conflictGroups(proposal, canResolve).map((group) => (
                 <View key={group.title} style={{ gap: spacing.xs }}>
                   <Caption style={{ color: colors.warning }}>{group.title}</Caption>
-                  {group.paths.map((path) => (
-                    <Body key={path} style={{ fontFamily: monoFont, fontSize: fontSize.sm }}>
-                      {path}
-                    </Body>
-                  ))}
+                  {group.paths.map((path) => {
+                    const detail = conflictDetails.find((c) => c.path === path);
+                    if (!canResolve || !detail) {
+                      return (
+                        <Body key={path} style={{ fontFamily: monoFont, fontSize: fontSize.sm }}>
+                          {path}
+                        </Body>
+                      );
+                    }
+                    const value = chosen(path, detail.reason, detail.autoMerge);
+                    const options: { key: ConflictResolution; label: string }[] =
+                      detail.reason === 'name'
+                        ? [{ key: 'theirs', label: '제안에서 빼기' }]
+                        : [
+                            ...(detail.autoMerge ? [{ key: 'merge' as const, label: '자동으로 합치기' }] : []),
+                            { key: 'mine', label: '제안 것으로' },
+                            { key: 'theirs', label: '저장소 것으로' },
+                          ];
+                    return (
+                      <View key={path} style={{ gap: spacing.xs, paddingVertical: spacing.xs }}>
+                        <Body style={{ fontFamily: monoFont, fontSize: fontSize.sm }}>{path}</Body>
+                        <Row gap={spacing.xs} wrap>
+                          {options.map((option) => {
+                            const active = value === option.key;
+                            return (
+                              <Pressable
+                                key={option.key}
+                                onPress={() => setChoices((prev) => ({ ...prev, [path]: option.key }))}
+                                accessibilityRole="radio"
+                                accessibilityState={{ selected: active }}
+                                accessibilityLabel={`${path}: ${option.label}`}
+                                style={{
+                                  paddingHorizontal: spacing.md,
+                                  paddingVertical: spacing.xs + 2,
+                                  borderRadius: radius.pill,
+                                  borderWidth: 1,
+                                  borderColor: active ? colors.accent : colors.border,
+                                  backgroundColor: active ? colors.accentSoft : colors.surface,
+                                }}
+                              >
+                                <Caption style={{ color: active ? colors.accent : colors.textMuted, fontWeight: active ? '600' : '400' }}>
+                                  {option.label}
+                                </Caption>
+                              </Pressable>
+                            );
+                          })}
+                        </Row>
+                      </View>
+                    );
+                  })}
                 </View>
               ))}
+              {canResolve ? (
+                <Row gap={spacing.sm} wrap>
+                  <Button
+                    label="고른 대로 정리"
+                    icon="checkmark-done-outline"
+                    compact
+                    onPress={() => void resolveConflicts(false)}
+                    loading={action === 'resolve'}
+                    disabled={!allChosen || action !== null}
+                  />
+                  {canMerge && proposal.changes.length > conflictDetails.length ? (
+                    <Button
+                      label="충돌 난 파일만 빼고 반영"
+                      variant="secondary"
+                      compact
+                      onPress={() => void resolveConflicts(true)}
+                      loading={action === 'resolve-merge'}
+                      disabled={action !== null}
+                    />
+                  ) : null}
+                </Row>
+              ) : null}
             </Card>
           ) : null}
 
@@ -397,7 +510,7 @@ function ChangeRow({
 /**
  * 병합을 막는 경로를 이유별로 묶어 설명을 붙인다. 이유를 알려주지 않는 서버(1.3.0 까지)는 한 묶음으로.
  */
-function conflictGroups(proposal: ProposalDetail): { title: string; paths: string[] }[] {
+function conflictGroups(proposal: ProposalDetail, resolvable = false): { title: string; paths: string[] }[] {
   const details = proposal.conflictDetails;
   if (!details) {
     return [
@@ -413,15 +526,17 @@ function conflictGroups(proposal: ProposalDetail): { title: string; paths: strin
   const groups: { title: string; paths: string[] }[] = [];
   if (changed.length > 0) {
     groups.push({
-      title:
-        '이 제안을 만든 뒤 저장소에서 바뀐 파일입니다. 그대로 반영하면 그 변경을 덮어쓰므로, 최신 파일을 받아 다시 고쳐 제안해 주세요.',
+      title: resolvable
+        ? '이 제안을 만든 뒤 저장소에서 바뀐 파일입니다. 파일마다 고르세요 — 텍스트는 자동으로 합칠 수 있고, 아니면 제안 것이나 저장소 것을 남깁니다.'
+        : '이 제안을 만든 뒤 저장소에서 바뀐 파일입니다. 그대로 반영하면 그 변경을 덮어쓰므로, 최신 파일을 받아 다시 고쳐 제안해 주세요.',
       paths: changed,
     });
   }
   if (named.length > 0) {
     groups.push({
-      title:
-        '저장소에 같은 이름의 파일이나 폴더가 생겨 이 경로에 더할 수 없습니다(파일 아래에 파일을 두거나 폴더와 이름이 같아짐). 다른 이름이나 위치로 다시 제안해 주세요.',
+      title: resolvable
+        ? '저장소에 같은 이름의 파일이나 폴더가 생겨 이 경로에 더할 수 없습니다. 제안에서 빼고 나머지를 반영하거나, 다른 이름으로 다시 제안해 주세요.'
+        : '저장소에 같은 이름의 파일이나 폴더가 생겨 이 경로에 더할 수 없습니다(파일 아래에 파일을 두거나 폴더와 이름이 같아짐). 다른 이름이나 위치로 다시 제안해 주세요.',
       paths: named,
     });
   }

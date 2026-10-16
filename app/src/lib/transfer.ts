@@ -1,8 +1,8 @@
 import { File } from 'expo-file-system';
-import { ApiError, UploadAbortedError, api, type UploadSource } from '../api/client';
+import { ApiError, UploadAbortedError, api, refreshLanShortcut, type UploadSource } from '../api/client';
 import { desktopBridge } from './desktop';
 import { HashAbortedError, hashSource, shouldHashBeforeUpload } from './hash';
-import type { CommitResult, UploadedBlob } from '@listup/shared';
+import type { CommitResult, UploadSession, UploadedBlob } from '@listup/shared';
 
 /**
  * 파일 올리기 — 나눠 올리기 세션으로 조각씩 보낸다(서버 routes/uploads.ts).
@@ -31,6 +31,36 @@ export interface UploadProgress {
   /** 지금 하는 일 — 내용 확인(해시 계산) 중이면 'hash'. 없으면 보내는 중. */
   phase?: 'hash' | 'send';
 }
+
+/**
+ * 조각을 보낼 곳 — 멤버가 저장소에 올릴 때와 받기 함 링크로 손님이 올릴 때가 같은 엔진을 쓴다.
+ */
+export interface UploadTarget {
+  start(payload: { name: string; size: number; hash?: string }): Promise<{ upload: UploadSession | null; blob?: UploadedBlob }>;
+  putChunk(
+    uploadId: string,
+    offset: number,
+    bytes: Blob | Uint8Array,
+    onProgress?: (loaded: number) => void,
+    signal?: AbortSignal,
+  ): Promise<{ upload: UploadSession }>;
+  getUpload(uploadId: string): Promise<{ upload: UploadSession }>;
+  complete(uploadId: string): Promise<{ blob: UploadedBlob }>;
+  cancel(uploadId: string): Promise<unknown>;
+}
+
+/** 로그인한 멤버가 저장소에 올린다. api 를 부를 때마다 찾으므로 테스트가 바꿔 끼울 수 있다. */
+export function repoTarget(repoId: string): UploadTarget {
+  return {
+    start: (payload) => api.startUpload(repoId, payload),
+    putChunk: (uploadId, offset, bytes, onProgress, signal) => api.putChunk(uploadId, offset, bytes, onProgress, signal),
+    getUpload: (uploadId) => api.getUpload(uploadId),
+    complete: (uploadId) => api.completeUpload(uploadId),
+    cancel: (uploadId) => api.cancelUpload(uploadId),
+  };
+}
+
+const targetOf = (repo: string | UploadTarget) => (typeof repo === 'string' ? repoTarget(repo) : repo);
 
 export interface UploadItem {
   source: UploadSource;
@@ -100,10 +130,10 @@ function throwIfAborted(signal?: AbortSignal): void {
  * 끝내지 못한 세션을 서버에서 지운다. 방금 끊은 조각을 서버가 아직 받는 중이면 409 라 잠시 뒤 다시 —
  * 그래도 안 되면 서버 GC 가 치운다.
  */
-async function discardSession(uploadId: string): Promise<void> {
+async function discardSession(target: UploadTarget, uploadId: string): Promise<void> {
   for (let attempt = 0; attempt < 4; attempt += 1) {
     try {
-      await api.cancelUpload(uploadId);
+      await target.cancel(uploadId);
       return;
     } catch (err) {
       if (!(err instanceof ApiError && err.status === 409)) return;
@@ -129,7 +159,7 @@ async function hashForUpload(source: UploadSource, signal: AbortSignal | undefin
  * onHashing 은 보내기 전 내용 확인(해시) 진행을 알려 준다. 이미 있는 내용이면 instant 가 참이다.
  */
 export async function uploadInChunks(
-  repoId: string,
+  repo: string | UploadTarget,
   source: UploadSource,
   onSent: (bytes: number) => void,
   signal?: AbortSignal,
@@ -138,7 +168,8 @@ export async function uploadInChunks(
   throwIfAborted(signal);
   const hash = await hashForUpload(source, signal, (bytes) => onHashing?.(bytes));
   throwIfAborted(signal);
-  const started = await api.startUpload(repoId, { name: source.name, size: source.size, ...(hash ? { hash } : {}) });
+  const target = targetOf(repo);
+  const started = await target.start({ name: source.name, size: source.size, ...(hash ? { hash } : {}) });
   if (!started.upload) {
     // 저장소에 이미 있는 내용 — 보낼 것이 없다.
     onSent(source.size);
@@ -156,7 +187,7 @@ export async function uploadInChunks(
         throwIfAborted(signal);
         const bytes = await reader.read(offset, length);
         const base = offset;
-        const { upload: next } = await api.putChunk(upload.id, offset, bytes, (loaded) => onSent(base + loaded), signal);
+        const { upload: next } = await target.putChunk(upload.id, offset, bytes, (loaded) => onSent(base + loaded), signal);
         offset = next.received;
         retries = 0;
         onSent(offset);
@@ -173,7 +204,7 @@ export async function uploadInChunks(
           retries += 1;
           await wait(Math.min(1000 * 2 ** (retries - 1), 15_000), signal);
           try {
-            offset = (await api.getUpload(upload.id)).upload.received;
+            offset = (await target.getUpload(upload.id)).upload.received;
           } catch {
             // 아직도 닿지 않으면 다음 번에 다시 묻는다.
           }
@@ -183,13 +214,13 @@ export async function uploadInChunks(
       }
     }
     throwIfAborted(signal);
-    const { blob } = await api.completeUpload(upload.id);
+    const { blob } = await target.complete(upload.id);
     finished = true;
     return blob;
   } finally {
     reader.close();
     // 실패하거나 멈췄다면 서버에 남은 세션을 치운다(못 치워도 서버 GC 가 치운다).
-    if (!finished) void discardSession(upload.id);
+    if (!finished) void discardSession(target, upload.id);
   }
 }
 
@@ -206,13 +237,16 @@ export interface UploadOutcome {
 
 /** 파일 여러 개를 차례로 올린다. 권한이 없으면 나머지도 같은 이유로 실패하므로 거기서 멈춘다. */
 export async function uploadMany(
-  repoId: string,
+  repo: string | UploadTarget,
   items: UploadItem[],
   onProgress: (progress: UploadProgress) => void,
   signal?: AbortSignal,
 ): Promise<UploadOutcome> {
   const totalBytes = items.reduce((sum, item) => sum + item.source.size, 0);
   const outcome: UploadOutcome = { uploaded: [], failures: [], cancelled: false, instant: 0 };
+  const target = targetOf(repo);
+  // 같은 공유기에 있으면 큰 조각은 터널 대신 공유기 안 주소로(폰·PC 앱, 몇 분에 한 번만 찾는다).
+  if (typeof repo === 'string') await refreshLanShortcut();
   let doneBytes = 0;
   for (const [index, item] of items.entries()) {
     const report = (sent: number, phase: 'hash' | 'send' = 'send') =>
@@ -226,7 +260,7 @@ export async function uploadMany(
       });
     report(0);
     try {
-      const { instant, ...blob } = await uploadInChunks(repoId, item.source, report, signal, () => report(0, 'hash'));
+      const { instant, ...blob } = await uploadInChunks(target, item.source, report, signal, () => report(0, 'hash'));
       if (instant) outcome.instant += 1;
       outcome.uploaded.push({ item, blob });
     } catch (err) {

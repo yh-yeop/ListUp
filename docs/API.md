@@ -41,10 +41,11 @@ Authorization: Bearer <token>
 
 | 메서드 | 경로 | 설명 |
 | --- | --- | --- |
-| GET | `/health` | 로그인 없이. `{ok, time, maxUploadBytes, apiVersion, apiLevel, version, serverName}` |
+| GET | `/health` | 로그인 없이. `{ok, time, maxUploadBytes, apiVersion, apiLevel, version, serverName, history}` |
+| GET | `/server/lan` | 로그인. 같은 공유기에서 이 서버에 닿는 주소 `{urls: ["http://192.168.0.10:4000"]}` |
 
 ```json
-{ "ok": true, "time": 1789355589634, "maxUploadBytes": 2147483648, "apiVersion": 1, "apiLevel": 3, "version": "1.4.0", "serverName": "우리집 음악서버" }
+{ "ok": true, "time": 1789355589634, "maxUploadBytes": 2147483648, "apiVersion": 1, "apiLevel": 4, "version": "1.4.0", "serverName": "우리집 음악서버", "history": { "days": 30, "keepOlder": "none" } }
 ```
 
 - **`apiVersion`** — API 호환 버전(`shared` 의 `API_VERSION`). 서버와 앱이 서로 알아듣지 못하게
@@ -53,12 +54,17 @@ Authorization: Bearer <token>
 - **`apiLevel`** — 기능 수준(`API_LEVEL`). 호환을 깨지 않고 기능을 더할 때 올립니다(옛 앱은 무시).
   앱은 자기가 쓰는 기능이 있는 수준(`REQUIRED_SERVER_API_LEVEL`) 미만 서버에는 "서버가 오래됨"으로
   들어가지 않습니다. 2 = 1.2.0 (나눠 올리기·여러 파일 커밋·다운로드 링크·zip·Range·재설정),
-  3 = 1.4.0 (`serverName`·제안 목록 페이지 — 앱은 없어도 쓰므로 들어가는 조건은 그대로 2).
+  3 = `serverName`·제안 목록 페이지, 4 = 1.4.0 (즉시 올리기·되돌리기·이력 보존·충돌 정리·용량·공개 링크·
+  따라가기·공유기 주소). 앱은 없는 기능을 감추고, 들어가는 조건은 그대로 2 입니다.
   **필드가 없는 서버(1.1.0 까지)는 `1`** 입니다.
 - `version` — 서버 버전(`server/package.json`). 사람에게 보여주는 용도이고 호환 판단에는 쓰지 않습니다.
 - `maxUploadBytes` — 파일 하나의 업로드 한도. 앱이 올리기 전에 검사합니다.
 - `serverName` — 서버 주인이 `LISTUP_SERVER_NAME` 으로 붙인 이름, 없으면 `null`. 앱은 서버를 목록에
   더할 때 이름 칸에 미리 채웁니다. **필드가 없는 서버(1.3.0 까지)는 `null`** 로 봅니다.
+- `history` — 변경 이력 보존 설정(`LISTUP_HISTORY_DAYS`·`LISTUP_HISTORY_KEEP_OLDER`). 앱의 변경 이력 화면이
+  안내합니다. 없으면 모두 남기는 옛 서버입니다.
+- `/server/lan` — 폰·PC 앱은 이 주소마다 내 토큰으로 `/auth/me` 를 물어, 같은 사용자로 답하는 곳(= 같은 서버)을
+  찾으면 조각 올리기·내려받기를 터널 대신 그리로 보냅니다. 내부 주소라 로그인한 사람에게만 줍니다.
 
 ---
 
@@ -113,6 +119,10 @@ npm run reset-password -- me@example.com     # 서버가 켜져 있어도 됩니
 | PATCH | `/repos/:repoId/members/:userId` | owner | `{role}` — `viewer` 또는 `editor`. owner 의 역할은 못 바꿈(400), 멤버가 아니면 404 |
 | DELETE | `/repos/:repoId/members/:userId` | 본인 또는 owner | 내보내기/나가기. owner 는 나갈 수 없음 |
 | POST | `/repos/:repoId/transfer` | owner | `{userId}` — 넘긴 사람은 editor 로 남음. 자기 자신은 400, 멤버가 아니면 404 |
+| GET | `/repos/:repoId/storage` | viewer | 용량 `{current, history: {snapshots, oldestAt, extraBytes}, duplicates, duplicateBytes, largest, retention}` — 이력이 붙잡은 크기는 지금 파일에 없고 지난 시점에만 있는 내용 |
+| POST | `/repos/mirror` | — | `{link}` — 다른 서버의 따라가기 링크로 미러 저장소를 만든다(아래 *서버 간 따라가기*) |
+| POST | `/repos/:repoId/mirror/sync` | owner | 지금 가져오기 → `{repo, result: {changed, fetched, fetchedBytes}}` |
+| DELETE | `/repos/:repoId/mirror` | owner | 따라가기를 그만둔다 — 보통 저장소가 된다 |
 | GET | `/repos/:repoId/history` | viewer | 스냅샷 목록. 응답 `{snapshots, next}` — `next` 가 있으면 `?before=&beforeId=` 로 이어서 요청 (둘 다 있어야 커서로 봄). `limit` 기본 30, 최대 100 |
 
 - 멤버를 내보내거나 viewer 로 강등하면 **그 사람이 만든 초대는 함께 회수**됩니다.
@@ -174,10 +184,10 @@ curl -X POST "http://localhost:4000/api/repos/$REPO/files?path=문서/계획.txt
 
 | 메서드 | 경로 | 설명 |
 | --- | --- | --- |
-| POST | `/repos/:repoId/uploads` | `{name, size}` → `{upload: {id, repoId, name, size, received, chunkSize}}` (201). 최소 viewer |
+| POST | `/repos/:repoId/uploads` | `{name, size, hash?}` → `{upload: {id, repoId, name, size, received, chunkSize}}` (201), 또는 이미 있는 내용이면 `{upload: null, blob}` (200). 최소 viewer |
 | PUT | `/uploads/:uploadId?offset=N` | `Content-Type: application/octet-stream` 조각 → `{upload}`. 다른 형식·빈 조각은 400 |
 | GET | `/uploads/:uploadId` | 어디까지 받았는지 (`received`) |
-| POST | `/uploads/:uploadId/complete` | `{blob: {hash, size, mimeType, name}}` (201). 덜 받았으면 409 + `details {received, size}` |
+| POST | `/uploads/:uploadId/complete` | `{blob: {hash, size, mimeType, name}}` (201). 덜 받았으면 409 + `details {received, size}`, 받은 내용이 `hash` 와 다르면 400 |
 | DELETE | `/uploads/:uploadId` | 취소. 조각을 받는 중이면 409 — 잠시 뒤 다시 |
 
 - `offset` 이 서버가 받은 길이와 다르면 `409` 에 `details.received` — 그 위치부터 다시 보내면 됩니다.
@@ -187,6 +197,10 @@ curl -X POST "http://localhost:4000/api/repos/$REPO/files?path=문서/계획.txt
 - 크기 한도는 세션을 만들 때 `size` 로 먼저 봅니다. **편집 권한이 없는 사람**(제안용)은 하루 업로드
   한도도 만들 때와 완료할 때 봅니다.
 - 완료한 blob 은 아직 저장소에 들어간 것이 아닙니다. `files/commit` 이나 변경 제안에 `blobHash` 로 담습니다.
+- **즉시 올리기 (1.4.0).** `hash`(내용의 sha256, 16진수 64자)를 함께 보내면, **이 저장소에 올렸거나 이력에 있는**
+  같은 내용(크기까지 같음)일 때 세션 없이 `200 {upload: null, blob}` 을 줍니다 — 보낼 것이 없습니다. 다른 저장소의
+  내용은 해시를 알아도 즉시 받지 못합니다. 세션을 열면 완료할 때 받은 내용의 해시와 견줘 다르면(전송 중 손상)
+  기록하지 않고 `400` 입니다. 앱은 PC 앱에서는 늘, 브라우저는 512MB·폰은 128MB 까지 미리 계산합니다.
 
 ### 여러 파일 커밋 (`files/commit`)
 
@@ -198,6 +212,19 @@ POST /api/repos/:repoId/files/commit
 - 한 번에 반영하고 **스냅샷 하나**를 만듭니다. `blobHash: null` 은 삭제(없는 파일이면 `400`).
 - 이 저장소에 올렸거나 이력에 있는 blob 만 담을 수 있습니다. 이름 충돌 `409`, 한도 `413`/`409`.
 - 응답 `{snapshotId, unchanged, added, updated, deleted}`. 바뀐 것이 없으면 `200` 에 `unchanged: true`.
+
+### 되돌리기 (`restore`, 1.4.0)
+
+```json
+POST /api/repos/:repoId/restore
+{ "snapshotId": "snap_…", "path": "문서" }
+```
+
+- 편집자. 과거 시점의 내용으로 저장소 전체(`path` 없음), 폴더, 파일 하나를 되돌립니다. 그 범위 안에서 그 시점에
+  없던 파일은 지우고, 범위 밖은 그대로입니다. **새 스냅샷**으로 남으므로 되돌린 것도 다시 되돌릴 수 있습니다.
+- 응답 `{snapshotId, unchanged, added, updated, deleted}` (바뀌면 201, 같으면 200 `unchanged: true`).
+- 없는 시점(보존 기간이 지나 정리됨 포함)·그 시점에도 지금도 없는 경로는 404, 되살릴 자리에 범위 밖의 같은 이름
+  파일·폴더가 있으면 409, 미러 저장소는 409.
 
 ### 폴더 삭제
 
@@ -269,6 +296,7 @@ POST /api/repos/:repoId/files/commit
 | PATCH | `/proposals/:proposalId` | 작성자 | `{title?, description?}` — `open` 상태에서만 |
 | GET | `/proposals/:proposalId/raw?path=&inline=1` | viewer | 제안에 담긴 파일 내려받기 (`inline` 은 `/raw` 와 같음) |
 | POST | `/proposals/:proposalId/comments` | viewer | `{body}` → `{comments}` (201) |
+| POST | `/proposals/:proposalId/resolve` | 작성자 또는 editor | `{resolutions: {경로: "mine"\|"theirs"\|"merge"}}` → `{proposal}`. 아래 *충돌 정리* |
 | POST | `/proposals/:proposalId/merge` | **editor** | 저장소에 반영 → `{proposal, snapshotId}`. 열려 있지 않거나 변경이 없으면 409 |
 | POST | `/proposals/:proposalId/close` | 작성자 또는 editor | 닫기 → `{proposal}`. 이미 반영됐으면 409, 이미 닫혔으면 그대로 200 |
 | POST | `/proposals/:proposalId/reopen` | 작성자 또는 editor | 다시 열기 → `{proposal}`. 닫힌 것만(아니면 409) |
@@ -329,6 +357,20 @@ POST /api/repos/:repoId/proposals
 `baseBlobHash`/`baseSize` 는 제안 당시의 원본이므로, 리뷰 화면에서 "현재본"과 "제안본"을
 나란히 내려받아 비교할 수 있습니다.
 
+### 충돌 정리 (`resolve`, 1.4.0)
+
+반영할 수 없는 제안(`conflictDetails`)을 지우지 않고 그 자리에서 풉니다. **지금의 충돌 경로마다 빠짐없이** 고릅니다.
+
+- `mine` — 제안 내용을 그대로(저장소의 그 변경을 덮어씀). `changed` 충돌만.
+- `theirs` — 저장소 내용을 그대로 — 그 파일을 제안에서 뺍니다. `name` 충돌은 이것만 됩니다.
+- `merge` — 텍스트를 줄 단위 3-way(diff3)로 합칩니다. 상세의 `conflictDetails[].autoMerge` 가 참인 것만 —
+  1MB 이하 UTF-8 텍스트이고 양쪽이 서로 다른 줄을 고쳤을 때(붙어 있는 줄을 따로 고치면 git 처럼 충돌). 합칠 수
+  없으면 409.
+
+정리하면 제안의 기준을 지금 저장소로 옮겨 다시 반영할 수 있게 되고, 무엇을 골랐는지 의견으로 남습니다. "충돌 난
+파일만 빼고 반영"은 모두 `theirs` 로 정리한 뒤 반영하면 됩니다. 빠진 충돌·충돌 아닌 경로·이름 충돌의 `mine` 은 400,
+그 사이 저장소가 바뀌면 409.
+
 ### 병합
 
 ```
@@ -342,6 +384,47 @@ POST /api/proposals/:proposalId/merge
 ```json
 409 { "error": { "code": "conflict", "message": "…", "details": { "conflicts": ["문서/회의록.md"] } } }
 ```
+
+---
+
+## 공개 링크 (1.4.0)
+
+저장소 밖의 사람(계정 없음)과 다른 서버에게 주는 링크입니다. 링크는 `<서버>/s/<토큰>` — 서버가 주는 웹이 열고,
+API 는 `/api/s/<토큰>/…` 입니다. 토큰이 곧 권한이라 로그인하지 않습니다(18바이트 무작위, 로그에는 가립니다).
+
+| 메서드 | 경로 | 최소 권한 | 설명 |
+| --- | --- | --- | --- |
+| POST | `/repos/:repoId/shares` | editor (mirror 는 owner) | `{kind, path?, label?, expiresInDays?, maxUses?, maxMb?}` → `{share}` (201) |
+| GET | `/repos/:repoId/shares` | editor | `{shares}` — 따라가기 키는 소유자에게만 |
+| DELETE | `/shares/:shareId` | 만든 사람 또는 owner | 회수 → `{share}` |
+| GET | `/s/:token` | (링크) | `{share: {kind, label, repoName, name, isFile, expiresAt, files?, remainingBytes?, maxFileBytes?}}` |
+| GET | `/s/:token/raw?path=` | (받기 링크) | 대상 안의 파일 하나 (`Range` 가능, 이어받기는 횟수에 세지 않음) |
+| GET | `/s/:token/zip` | (받기 링크) | 대상 폴더를 zip 으로 |
+| POST·PUT·GET·DELETE | `/s/:token/uploads…` | (받기 함) | 나눠 올리기와 같은 모양(`/uploads/:id?offset=`, `/complete`) |
+| POST | `/s/:token/submit` | (받기 함) | `{name, message?, files: [{path, blobHash}]}` → 변경 제안 하나 (201 `{number, files}`) |
+| GET | `/s/:token/mirror` | (따라가기 키) | 저장소의 지금 모습 `{repo, head, files: [{path, blobHash, size, mimeType, updatedAt}]}` |
+| GET | `/s/:token/mirror/blobs/:hash` | (따라가기 키) | 지금 파일의 내용 |
+
+- **kind** — `download`(받기 링크: `path` 의 파일·폴더, `''` 은 저장소 전체), `upload`(받기 함: 올린 파일이 `path`
+  폴더로 가는 변경 제안이 됨), `mirror`(따라가기 키: 저장소 전체, 기한 없음).
+- 기간은 기본 7일(`expiresInDays: null` 이면 없음, 최대 365), 받기 링크의 `maxUses` 는 받은 횟수, 받기 함은 보낸
+  횟수입니다. 받기 함의 `maxMb` 는 기본 `LISTUP_MAX_STAGING_MB_PER_DAY`.
+- 받기 함은 **덮어쓰지 않습니다** — 같은 이름이 있으면 `이름 (1).확장자` 로 더합니다. 제안의 작성자는 링크를 만든
+  사람이고 `guestName` 에 보낸 사람이 적은 이름이 들어갑니다. 손님이 보낸 `hash` 는 손상 확인에만 쓰고 즉시
+  올리기는 하지 않습니다(저장소에 어떤 내용이 있는지 해시로 떠보지 못하게).
+- 회수·만료·소진, 또는 만든 사람이 그 권한(editor·owner)을 잃으면 `409`(이유를 알려 줌). 없는 토큰은 `404`.
+- 미러 저장소에는 받기 함을 만들 수 없습니다.
+
+### 서버 간 따라가기 (미러)
+
+원본 서버의 소유자가 따라가기 키를 만들어 링크를 주면, 다른 서버의 누군가가 `POST /repos/mirror {link}` 로 그 저장소의
+**읽기 전용 사본**을 만듭니다. 그 서버가 원본의 지금 모습을 받아 **없는 내용(해시)만** 내려받아 해시를 다시 확인하고
+스냅샷 하나로 반영합니다. `LISTUP_MIRROR_INTERVAL_MIN`(기본 30분)마다, 또는 소유자가 "지금 가져오기"로.
+
+- 저장소 요약의 `mirror` 에 `{sourceUrl, lastSyncedAt, lastError, syncing}`.
+- 미러 저장소에 파일을 올리거나 바꾸거나 제안하면 409 — 원본에서 바꾸면 따라옵니다. 그만두면 보통 저장소.
+- 원본 서버가 꺼져 있거나 키가 회수돼도 사본은 그대로 봅니다(`lastError` 에 남음).
+- 남이 준 주소로 서버가 요청을 보내므로, 실패 이유는 자세히 돌려주지 않습니다.
 
 ---
 
@@ -364,3 +447,7 @@ POST /api/proposals/:proposalId/merge
 | 댓글 길이 | 2,000자 |
 | 제안 제목 / 설명 | 120자 / 2,000자 |
 | JSON 요청 본문 | 1MB |
+| 자동 병합할 텍스트 | 1MB, UTF-8 |
+| 공개 링크 기간 | 기본 7일, 최대 365일 |
+| 받기 함 한 번에 보내는 파일 | 200 |
+| 변경 이력 보존 | 최근 30일(`LISTUP_HISTORY_DAYS`), 그 전은 `LISTUP_HISTORY_KEEP_OLDER` |
