@@ -1,9 +1,10 @@
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { net } from 'electron';
+import { net, shell } from 'electron';
 import type { LocalFileEntry } from '@listup/shared';
 
 /**
@@ -21,6 +22,10 @@ const roots = new Set<string>();
 
 export function allowRoot(root: string): void {
   roots.add(path.resolve(root));
+}
+
+export function isAllowedRoot(root: string): boolean {
+  return roots.has(path.resolve(root));
 }
 
 /** 고른 폴더 안의 경로로 푼다. 밖으로 나가거나 고른 적 없는 폴더면 던진다. */
@@ -54,7 +59,8 @@ export async function scanFolder(root: string): Promise<{ entries: LocalFileEntr
       if (item.isDirectory()) await walk(full, relativePath);
       else if (item.isFile() && !JUNK.has(item.name.toLowerCase()) && !item.name.endsWith(PART_SUFFIX)) {
         try {
-          entries.push({ relativePath, size: (await fsp.stat(full)).size });
+          const stat = await fsp.stat(full);
+          entries.push({ relativePath, size: stat.size, mtime: Math.round(stat.mtimeMs) });
         } catch {
           // 훑는 사이 지워졌다.
         }
@@ -88,8 +94,27 @@ function freeName(target: string): string {
   }
 }
 
+/** 파일 내용의 sha256 — 창이 JS 로 계산하는 것보다 훨씬 빠르다. */
+export async function hashFile(root: string, relativePath: string): Promise<string> {
+  const hash = createHash('sha256');
+  await pipeline(fs.createReadStream(resolveInside(root, relativePath)), hash);
+  return hash.digest('hex');
+}
+
+/** OS 휴지통으로 — 동기화로 지운 파일을 사용자가 되살릴 수 있게. */
+export async function trashFile(root: string, relativePath: string): Promise<void> {
+  const target = resolveInside(root, relativePath);
+  if (target === path.resolve(root)) throw new Error('폴더 자체는 지울 수 없습니다.');
+  await shell.trashItem(target);
+}
+
 /** 받아서 임시 이름으로 쓴 뒤 옮긴다 — 끊겨도 반쯤 받은 파일이 진짜 이름으로 남지 않게. */
-export async function saveUrl(root: string, relativePath: string, url: string): Promise<string> {
+export async function saveUrl(
+  root: string,
+  relativePath: string,
+  url: string,
+  options: { overwrite?: boolean } = {},
+): Promise<string> {
   const wanted = resolveInside(root, relativePath);
   if (!/^https?:\/\//i.test(url)) throw new Error('받을 주소가 올바르지 않습니다.');
   await fsp.mkdir(path.dirname(wanted), { recursive: true });
@@ -98,7 +123,7 @@ export async function saveUrl(root: string, relativePath: string, url: string): 
   if (!response.ok || !response.body) throw new Error(`받지 못했습니다 (${response.status}).`);
   try {
     await pipeline(Readable.fromWeb(response.body as import('node:stream/web').ReadableStream), fs.createWriteStream(part));
-    const target = freeName(wanted);
+    const target = options.overwrite ? wanted : freeName(wanted);
     await fsp.rename(part, target);
     return path.relative(path.resolve(root), target).split(path.sep).join('/');
   } catch (err) {

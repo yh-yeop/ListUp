@@ -1,4 +1,4 @@
-import type { Member, Repo, RepoSummary, Role } from '@listup/shared';
+import type { Member, Repo, RepoMirror, RepoSummary, Role } from '@listup/shared';
 import { hasRole } from '@listup/shared';
 import type { Db } from '../db/index.ts';
 import { forbidden, notFound } from '../lib/errors.ts';
@@ -64,6 +64,26 @@ export function toRepo(row: RepoRow): Repo {
   };
 }
 
+/** 따라가는 저장소의 상태. 순환 import 를 피하려 mirror.ts 를 쓰지 않고 여기서 읽는다(진행 중 여부는 라우트가 채운다). */
+function mirrorOf(db: Db, repoId: string): RepoMirror | null {
+  const row = db
+    .prepare<[string], { source_url: string; last_synced_at: number | null; last_error: string | null }>(
+      `SELECT source_url, last_synced_at, last_error FROM mirrors WHERE repo_id = ?`,
+    )
+    .get(repoId);
+  return row
+    ? { sourceUrl: row.source_url, lastSyncedAt: row.last_synced_at, lastError: row.last_error, syncing: isMirrorSyncing(repoId) }
+    : null;
+}
+
+/** 지금 가져오는 중인 미러 — mirror.ts 가 채운다. */
+const syncingMirrors = new Set<string>();
+export const isMirrorSyncing = (repoId: string) => syncingMirrors.has(repoId);
+export function markMirrorSyncing(repoId: string, on: boolean): void {
+  if (on) syncingMirrors.add(repoId);
+  else syncingMirrors.delete(repoId);
+}
+
 export function toRepoSummary(db: Db, row: RepoRow, role: Role): RepoSummary {
   const stats = snapshotStats(db, row.head_snapshot_id);
   const owner = db
@@ -88,6 +108,7 @@ export function toRepoSummary(db: Db, row: RepoRow, role: Role): RepoSummary {
     totalSize: stats.totalSize,
     memberCount,
     openProposalCount,
+    mirror: mirrorOf(db, row.id),
   };
 }
 

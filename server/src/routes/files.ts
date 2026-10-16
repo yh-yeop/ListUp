@@ -13,6 +13,7 @@ import { badRequest, conflict, notFound, tooLarge } from '../lib/errors.ts';
 import { DEFAULT_MIME, isInlineSafe, mimeForPath } from '../lib/mime.ts';
 import { body, optionalString, queryString, requireUser, requiredString } from '../lib/request.ts';
 import { blobBelongsToRepo, manifestBytes } from '../services/proposals.ts';
+import { assertWritable } from '../services/mirror.ts';
 import { getRepoRow, requireAccess } from '../services/repos.ts';
 import {
   findPathConflict,
@@ -99,6 +100,7 @@ export async function registerFileRoutes(app: FastifyInstance, ctx: AppContext):
     const user = requireUser(req);
     const { repoId } = req.params as { repoId: string };
     requireAccess(db, repoId, user.id, 'editor');
+    assertWritable(db, repoId);
 
     const part = await req.file();
     if (!part) throw badRequest('업로드할 파일이 없습니다.');
@@ -190,6 +192,7 @@ export async function registerFileRoutes(app: FastifyInstance, ctx: AppContext):
     const user = requireUser(req);
     const { repoId } = req.params as { repoId: string };
     requireAccess(db, repoId, user.id, 'editor');
+    assertWritable(db, repoId);
     const input = body(req);
     const message = optionalString(input, 'message', { max: 200, label: '설명' });
 
@@ -276,6 +279,77 @@ export async function registerFileRoutes(app: FastifyInstance, ctx: AppContext):
   });
 
   /**
+   * 되돌리기 — 과거 시점(snapshotId)의 내용으로 저장소 전체(path 없음) 또는 폴더·파일 하나를 되돌린다.
+   * 이력을 지우지 않고 새 스냅샷으로 남기므로, 되돌린 것도 다시 되돌릴 수 있다. blob 은 이력에 있으니 다시 받지 않는다.
+   * 그 시점에 없던 파일은 지워지고(그 범위 안에서), 범위 밖은 그대로다.
+   */
+  app.post('/repos/:repoId/restore', async (req, reply) => {
+    const user = requireUser(req);
+    const { repoId } = req.params as { repoId: string };
+    requireAccess(db, repoId, user.id, 'editor');
+    assertWritable(db, repoId);
+    const input = body(req);
+    const snapshotId = requiredString(input, 'snapshotId', { max: 64, label: '시점' });
+    if (!snapshotBelongsTo(db, snapshotId, repoId)) throw notFound('그 시점을 찾을 수 없습니다. 보존 기간이 지나 정리됐을 수 있습니다.');
+    const rawPath = typeof input.path === 'string' ? input.path : '';
+    const target = rawPath.trim() === '' ? '' : normalizePath(rawPath);
+    if (target === null) throw badRequest('경로가 올바르지 않습니다.');
+
+    const result = db.transaction(() => {
+      const head = getRepoRow(db, repoId)!.head_snapshot_id;
+      const current = readManifest(db, head);
+      const past = readManifest(db, snapshotId);
+      const inScope = (filePath: string) => target === '' || filePath === target || filePath.startsWith(`${target}/`);
+
+      const pastInScope = [...past.values()].filter((entry) => inScope(entry.path));
+      const currentInScope = [...current.values()].filter((entry) => inScope(entry.path));
+      if (target !== '' && pastInScope.length === 0 && currentInScope.length === 0) {
+        throw notFound(`그 시점에도 지금도 없는 경로입니다: ${target}`);
+      }
+
+      const manifest = new Map(current);
+      const counts = { added: 0, updated: 0, deleted: 0 };
+      for (const entry of currentInScope) {
+        if (!past.has(entry.path)) {
+          manifest.delete(entry.path);
+          counts.deleted += 1;
+        }
+      }
+      const added: string[] = [];
+      for (const entry of pastInScope) {
+        const now = current.get(entry.path);
+        if (now?.blob_hash === entry.blob_hash) continue;
+        manifest.set(entry.path, { ...entry });
+        if (now) counts.updated += 1;
+        else {
+          counts.added += 1;
+          added.push(entry.path);
+        }
+      }
+      // 범위 밖의 파일·폴더와 이름이 겹치면(되살린 폴더 자리에 지금은 같은 이름 파일이 있음 등) 되돌릴 수 없다.
+      for (const filePath of added) assertNoPathConflict(manifest, filePath);
+      if (manifest.size > MAX_FILES_PER_REPO) throw conflict(`저장소당 파일은 최대 ${MAX_FILES_PER_REPO}개입니다.`);
+      assertRepoBytes(config, manifestBytes(manifest));
+
+      const total = counts.added + counts.updated + counts.deleted;
+      if (total === 0) return { snapshotId: head, unchanged: true, ...counts };
+      const when = db
+        .prepare<[string], { message: string; created_at: number }>(`SELECT message, created_at FROM snapshots WHERE id = ?`)
+        .get(snapshotId)!;
+      const label = when.message ? `"${when.message.slice(0, 60)}"` : new Date(when.created_at).toISOString().slice(0, 16);
+      const newId = writeSnapshot(db, {
+        repoId,
+        parentId: head,
+        authorId: user.id,
+        message: `되돌리기: ${target || '저장소 전체'} → ${label} 시점`,
+        manifest,
+      });
+      return { snapshotId: newId, unchanged: false, ...counts };
+    })();
+    return reply.code(result.unchanged ? 200 : 201).send(result);
+  });
+
+  /**
    * 파일 또는 폴더 삭제. 폴더면 아래 전체가 지워진다.
    * blob 자체는 다른 스냅샷/저장소가 참조할 수 있으므로 남겨둔다.
    */
@@ -283,6 +357,7 @@ export async function registerFileRoutes(app: FastifyInstance, ctx: AppContext):
     const user = requireUser(req);
     const { repoId } = req.params as { repoId: string };
     requireAccess(db, repoId, user.id, 'editor');
+    assertWritable(db, repoId);
     const target = requirePathParam(req);
 
     const result = db.transaction(() => {
@@ -319,6 +394,7 @@ export async function registerFileRoutes(app: FastifyInstance, ctx: AppContext):
     const user = requireUser(req);
     const { repoId } = req.params as { repoId: string };
     requireAccess(db, repoId, user.id, 'editor');
+    assertWritable(db, repoId);
     const input = body(req);
 
     const fromRaw = requiredString(input, 'from', { max: 512, label: '원본 경로' });
@@ -412,6 +488,7 @@ export async function registerFileRoutes(app: FastifyInstance, ctx: AppContext):
     const { repoId } = req.params as { repoId: string };
     // viewer 도 제안을 올릴 수 있어야 하므로 열람 권한이면 충분하다.
     requireAccess(db, repoId, user.id, 'viewer');
+    assertWritable(db, repoId);
 
     const part = await req.file();
     if (!part) throw badRequest('업로드할 파일이 없습니다.');

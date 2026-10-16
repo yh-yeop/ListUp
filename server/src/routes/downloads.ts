@@ -92,7 +92,7 @@ export async function registerDownloadRoutes(app: FastifyInstance, ctx: AppConte
  * 담기만 한다 — 빠르고, 크기를 미리 알 수 있어 브라우저가 진행률을 보여 준다. 4GB 를 넘으면 ZIP64.
  * 파일 스트림은 차례가 올 때 연다(한꺼번에 수천 개를 열지 않게).
  */
-async function sendArchive(
+export async function sendArchive(
   reply: FastifyReply,
   ctx: AppContext,
   repoName: string,

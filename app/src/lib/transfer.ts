@@ -1,6 +1,7 @@
 import { File } from 'expo-file-system';
 import { ApiError, UploadAbortedError, api, type UploadSource } from '../api/client';
 import { desktopBridge } from './desktop';
+import { HashAbortedError, hashSource, shouldHashBeforeUpload } from './hash';
 import type { CommitResult, UploadedBlob } from '@listup/shared';
 
 /**
@@ -10,6 +11,8 @@ import type { CommitResult, UploadedBlob } from '@listup/shared';
  * - 끊기면 서버에 받은 위치를 물어 거기서부터 다시 보낸다(몇 번까지).
  * - 조각 안에서도 보낸 바이트를 알려 줘 진행률이 부드럽다.
  * - 여러 파일·폴더는 다 올린 뒤 **커밋 하나**로 반영한다 — 파일마다 스냅샷이 생기지 않게.
+ * - 먼저 내용 해시를 계산해 보내면, 저장소에 이미 있는 내용은 보내지 않고 바로 끝난다(이름만 바뀐 사본,
+ *   다시 올리는 폴더). 서버는 받은 내용을 이 해시와 견줘 전송 중 손상을 잡는다.
  * - `signal` 로 도중에 멈출 수 있다. 멈추면 아무것도 반영하지 않는다 — 폴더가 반만 들어가지 않게.
  *   이미 올린 조각·blob 은 쓰이지 않으므로 서버 GC 가 치운다.
  */
@@ -25,6 +28,8 @@ export interface UploadProgress {
   totalFiles: number;
   /** 지금 올리는 파일 이름 */
   current: string;
+  /** 지금 하는 일 — 내용 확인(해시 계산) 중이면 'hash'. 없으면 보내는 중. */
+  phase?: 'hash' | 'send';
 }
 
 export interface UploadItem {
@@ -107,15 +112,39 @@ async function discardSession(uploadId: string): Promise<void> {
   }
 }
 
-/** 파일 하나를 나눠 올려 blob 을 받는다. onSent 에는 이 파일에서 보낸 바이트를 알려 준다. */
+/** 해시 계산을 멈추면 올리기를 멈춘 것과 같다. */
+async function hashForUpload(source: UploadSource, signal: AbortSignal | undefined, onHashed: (bytes: number) => void) {
+  if (!shouldHashBeforeUpload(source)) return undefined;
+  try {
+    return await hashSource(source, { signal, onProgress: onHashed });
+  } catch (err) {
+    if (err instanceof HashAbortedError) throw new UploadAbortedError();
+    // 해시를 못 구해도(읽기 오류 등) 올리기는 해 본다 — 서버가 받으며 계산한다.
+    return undefined;
+  }
+}
+
+/**
+ * 파일 하나를 나눠 올려 blob 을 받는다. onSent 에는 이 파일에서 보낸 바이트를 알려 준다.
+ * onHashing 은 보내기 전 내용 확인(해시) 진행을 알려 준다. 이미 있는 내용이면 instant 가 참이다.
+ */
 export async function uploadInChunks(
   repoId: string,
   source: UploadSource,
   onSent: (bytes: number) => void,
   signal?: AbortSignal,
-): Promise<UploadedBlob> {
+  onHashing?: (bytes: number) => void,
+): Promise<UploadedBlob & { instant?: boolean }> {
   throwIfAborted(signal);
-  const { upload } = await api.startUpload(repoId, { name: source.name, size: source.size });
+  const hash = await hashForUpload(source, signal, (bytes) => onHashing?.(bytes));
+  throwIfAborted(signal);
+  const started = await api.startUpload(repoId, { name: source.name, size: source.size, ...(hash ? { hash } : {}) });
+  if (!started.upload) {
+    // 저장소에 이미 있는 내용 — 보낼 것이 없다.
+    onSent(source.size);
+    return { ...started.blob!, instant: true };
+  }
+  const upload = started.upload;
   const reader = openReader(source);
   let finished = false;
   try {
@@ -171,6 +200,8 @@ export interface UploadOutcome {
   failures: { item: UploadItem; message: string }[];
   /** 사용자가 도중에 멈췄다. 멈춘 파일과 그 뒤 파일은 uploaded·failures 어디에도 없다. */
   cancelled: boolean;
+  /** uploaded 중 저장소에 이미 있어 보내지 않은 파일 수. */
+  instant: number;
 }
 
 /** 파일 여러 개를 차례로 올린다. 권한이 없으면 나머지도 같은 이유로 실패하므로 거기서 멈춘다. */
@@ -181,20 +212,22 @@ export async function uploadMany(
   signal?: AbortSignal,
 ): Promise<UploadOutcome> {
   const totalBytes = items.reduce((sum, item) => sum + item.source.size, 0);
-  const outcome: UploadOutcome = { uploaded: [], failures: [], cancelled: false };
+  const outcome: UploadOutcome = { uploaded: [], failures: [], cancelled: false, instant: 0 };
   let doneBytes = 0;
   for (const [index, item] of items.entries()) {
-    const report = (sent: number) =>
+    const report = (sent: number, phase: 'hash' | 'send' = 'send') =>
       onProgress({
         sentBytes: doneBytes + sent,
         totalBytes,
         doneFiles: index,
         totalFiles: items.length,
         current: item.source.name,
+        phase,
       });
     report(0);
     try {
-      const blob = await uploadInChunks(repoId, item.source, report, signal);
+      const { instant, ...blob } = await uploadInChunks(repoId, item.source, report, signal, () => report(0, 'hash'));
+      if (instant) outcome.instant += 1;
       outcome.uploaded.push({ item, blob });
     } catch (err) {
       if (err instanceof UploadAbortedError) {

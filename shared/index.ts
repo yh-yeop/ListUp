@@ -76,6 +76,18 @@ export interface RepoSummary extends Repo {
   totalSize: number;
   memberCount: number;
   openProposalCount: number;
+  /** 다른 서버를 따라가는 읽기 전용 저장소면 그 상태 (1.4.0 부터). */
+  mirror?: RepoMirror | null;
+}
+
+export interface RepoMirror {
+  /** 원본 서버 주소. */
+  sourceUrl: string;
+  lastSyncedAt: number | null;
+  /** 마지막으로 가져오다 실패한 이유. 성공하면 비운다. */
+  lastError: string | null;
+  /** 지금 가져오는 중. */
+  syncing: boolean;
 }
 
 export interface Member {
@@ -201,6 +213,11 @@ export interface Proposal {
   updatedAt: number;
   changeCount: number;
   commentCount: number;
+  /**
+   * 받기 함 링크로 계정 없이 올라온 제안이면 올린 사람이 적은 이름 (1.4.0 부터). 그때 author 는 링크를 만든
+   * 멤버다. 멤버의 제안이면 null.
+   */
+  guestName?: string | null;
 }
 
 export interface ProposalDetail extends Proposal {
@@ -221,7 +238,17 @@ export interface ProposalDetail extends Proposal {
 export interface ProposalConflict {
   path: string;
   reason: 'changed' | 'name';
+  /** changed 중 텍스트라 줄 단위로 자동으로 합칠 수 있는 것 (1.4.0 부터). */
+  autoMerge?: boolean;
 }
+
+/**
+ * 충돌 정리 방법 (POST /proposals/:id/resolve).
+ * - mine: 제안 내용을 그대로 — 저장소의 변경을 덮어쓴다
+ * - theirs: 저장소 내용을 그대로 — 이 파일을 제안에서 뺀다
+ * - merge: 텍스트를 줄 단위로 자동으로 합친다 (autoMerge 인 것만)
+ */
+export type ConflictResolution = 'mine' | 'theirs' | 'merge';
 
 export interface Comment {
   id: string;
@@ -412,15 +439,104 @@ export const API_VERSION = 1;
  * 서버에는 들어가지 않는다. 이 필드가 없는 서버(1.1.0 까지)는 1 이다.
  *
  * - 2 (1.2.0): 나눠 올리기, 여러 파일 커밋, 다운로드 링크·폴더 zip, Range, 비밀번호 재설정
- * - 3 (1.4.0): health 의 serverName, 제안 목록 페이지(`limit`·`before`). 앱은 둘 다 없어도 쓴다.
+ * - 3: health 의 serverName, 제안 목록 페이지(`limit`·`before`). 앱은 둘 다 없어도 쓴다.
+ * - 4 (1.4.0): 해시로 즉시 올리기, 되돌리기, 이력 보존, 충돌 정리(resolve), 용량 보기, 공개 링크·받기 함,
+ *   서버 간 따라가기, 같은 공유기 주소. 앱은 서버 수준이 4 미만이면 그 기능을 감춘다.
  *
  * API_VERSION 을 올리지 않은 이유: 옛 앱(1.1.0)은 API_VERSION 이 같아야만 들어가서, 올리면 멀쩡히
  * 쓸 수 있는 새 서버에서 옛 앱이 모두 막힌다.
  */
-export const API_LEVEL = 3;
+export const API_LEVEL = 4;
 
 /** 이 앱이 쓰는 기능이 있는 가장 낮은 서버 API_LEVEL. 앱의 업로드·내려받기가 수준 2 를 쓴다. */
 export const REQUIRED_SERVER_API_LEVEL = 2;
+
+/**
+ * 오래된 변경 이력 중 남길 것 (`LISTUP_HISTORY_KEEP_OLDER`).
+ * none 은 보존 기간이 지난 스냅샷을 모두 정리하고, daily·weekly·monthly 는 그 단위마다 마지막 하나를 남긴다.
+ */
+export const HISTORY_KEEP_OLDER = ['none', 'daily', 'weekly', 'monthly'] as const;
+export type HistoryKeepOlder = (typeof HISTORY_KEEP_OLDER)[number];
+
+/** 이력 보존 권장값 — 최근 30일은 모두 남긴다. */
+export const DEFAULT_HISTORY_DAYS = 30;
+
+// ---------------------------------------------------------------------------
+// 공개 링크 (1.4.0) — 계정 없는 사람과 주고받기, 다른 서버의 따라가기
+// ---------------------------------------------------------------------------
+
+/**
+ * - download: 링크를 아는 사람이 path 아래 파일을 받는다(폴더면 zip 도)
+ * - upload: 받기 함 — 링크를 아는 사람이 파일을 올리면 path 아래로 가는 변경 제안이 된다
+ * - mirror: 다른 ListUp 서버가 이 저장소를 따라가며 복제한다(읽기 전용)
+ */
+export type ShareKind = 'download' | 'upload' | 'mirror';
+
+export interface Share {
+  id: string;
+  repoId: string;
+  kind: ShareKind;
+  /** 대상 경로. download 는 파일 또는 폴더(''은 저장소 전체), upload 는 올린 파일이 들어갈 폴더. */
+  path: string;
+  /** 링크 토큰. 링크는 `<서버>/s/<token>`. */
+  token: string;
+  label: string;
+  createdBy: PublicUser;
+  createdAt: number;
+  expiresAt: number | null;
+  /** download: 받은 횟수 한도, upload: 보낸 횟수 한도. null 이면 없음. */
+  maxUses: number | null;
+  useCount: number;
+  /** upload: 이 링크로 올릴 수 있는 총량. */
+  maxBytes: number | null;
+  usedBytes: number;
+  revokedAt: number | null;
+  /** 지금 쓸 수 있는지 (회수·만료·소진·만든 사람의 권한 확인). */
+  active: boolean;
+}
+
+/** 링크를 연 사람(로그인 없음)에게 보이는 것. */
+export interface PublicShare {
+  kind: 'download' | 'upload';
+  label: string;
+  repoName: string;
+  /** 대상 이름(파일·폴더 이름, 저장소 전체면 ''). 경로 전체는 보이지 않는다. */
+  name: string;
+  /** download 대상이 파일 하나인지. */
+  isFile: boolean;
+  expiresAt: number | null;
+  /** download: 받을 수 있는 파일들(대상 폴더 안 경로). 파일 하나면 그 파일 하나(''). */
+  files?: { path: string; size: number }[];
+  /** upload: 남은 용량, 파일 하나 한도. */
+  remainingBytes?: number | null;
+  maxFileBytes?: number;
+}
+
+/** 다른 서버가 따라가며 받는 저장소의 지금 모습. */
+export interface MirrorManifest {
+  repo: { name: string; description: string };
+  head: string | null;
+  files: { path: string; blobHash: string; size: number; mimeType: string; updatedAt: number }[];
+}
+
+/** GET /repos/:repoId/storage — 저장소가 디스크를 얼마나, 어디에 쓰는지. */
+export interface RepoStorage {
+  /** 지금 파일. */
+  current: { files: number; bytes: number };
+  /**
+   * 변경 이력이 붙잡고 있는 것 — 지금 파일에는 없고 지난 시점에만 있는 내용의 크기(같은 내용은 한 번만).
+   * 보존 기간이 지나 이력이 정리되면 돌려받는다.
+   */
+  history: { snapshots: number; oldestAt: number | null; extraBytes: number };
+  /** 내용이 같은 파일 묶음 — 아낄 수 있는 크기가 큰 것부터 50개까지. */
+  duplicates: { hash: string; size: number; paths: string[] }[];
+  /** 아낄 수 있는 크기의 합 (묶음마다 하나만 남길 때). */
+  duplicateBytes: number;
+  /** 큰 파일 10개. */
+  largest: { path: string; size: number }[];
+  /** 이 서버의 이력 보존 설정. */
+  retention: { days: number; keepOlder: HistoryKeepOlder };
+}
 
 /** 서버 이름(`LISTUP_SERVER_NAME`)의 최대 길이. 앱의 서버 이름 칸과 같다. */
 export const MAX_SERVER_NAME_LENGTH = 60;
@@ -442,6 +558,8 @@ export interface HealthResponse {
    * 1.3.0 까지의 서버에는 이 필드가 없다 — 없으면 null 로 본다.
    */
   serverName: string | null;
+  /** 변경 이력 보존(1.4.0 부터). 없으면 모두 남기는 옛 서버다. */
+  history?: { days: number; keepOlder: HistoryKeepOlder };
 }
 
 // ---------------------------------------------------------------------------
@@ -534,6 +652,10 @@ export interface HostStatus {
   openAtLogin: boolean;
   /** 서버 이름(LISTUP_SERVER_NAME). 들어오는 앱이 서버 목록 이름 칸에 채운다. 없으면 null. */
   serverName: string | null;
+  /** 변경 이력을 모두 남기는 기간(일). 0 이면 지우지 않는다. */
+  historyDays: number;
+  /** 그보다 오래된 스냅샷 중 남길 것. */
+  historyKeepOlder: HistoryKeepOlder;
 }
 
 export interface HostSettingsPatch {
@@ -543,6 +665,8 @@ export interface HostSettingsPatch {
   openAtLogin?: boolean;
   /** 빈 문자열·null 이면 이름을 지운다. 서버를 끈 뒤에만. */
   serverName?: string | null;
+  historyDays?: number;
+  historyKeepOlder?: HistoryKeepOlder;
 }
 
 /** 공개 방식에 필요한 프로그램이 준비됐는지. */
@@ -574,6 +698,8 @@ export interface DesktopHost {
 export interface LocalFileEntry {
   relativePath: string;
   size: number;
+  /** 마지막으로 고친 시각(ms). 해시를 다시 계산할지 정하는 데 쓴다. 1.3.0 PC 앱에는 없다. */
+  mtime?: number;
 }
 
 /**
@@ -587,8 +713,19 @@ export interface DesktopFolders {
   scan(root: string): Promise<{ entries: LocalFileEntry[]; truncated: boolean }>;
   /** 파일의 offset 부터 length 바이트 (올리기 조각). */
   read(root: string, relativePath: string, offset: number, length: number): Promise<Uint8Array>;
-  /** url 을 받아 폴더 안 relativePath 에 쓴다(하위 폴더를 만들고, 같은 이름이 있으면 "이름 (1)"). 쓴 경로를 돌려준다. */
-  save(root: string, relativePath: string, url: string): Promise<string>;
+  /**
+   * url 을 받아 폴더 안 relativePath 에 쓴다(하위 폴더를 만든다). 같은 이름이 있으면 "이름 (1)" 로 —
+   * `overwrite` 면 그 파일을 바꾼다(동기화). 쓴 경로를 돌려준다.
+   */
+  save(root: string, relativePath: string, url: string, options?: { overwrite?: boolean }): Promise<string>;
+  /** 파일 내용의 sha256 (16진수). 1.4.0 부터. */
+  hash?(root: string, relativePath: string): Promise<string>;
+  /** 파일을 OS 휴지통으로 옮긴다(동기화로 지울 때). 1.4.0 부터. */
+  trash?(root: string, relativePath: string): Promise<void>;
+  /** 동기화할 폴더로 기억해 둔다 — 앱을 다시 켜도 대화상자 없이 다시 열 수 있게. 1.4.0 부터. */
+  remember?(root: string): Promise<boolean>;
+  /** 기억해 둔 폴더를 잊는다. */
+  forget?(root: string): Promise<void>;
 }
 
 export interface DesktopBridge {

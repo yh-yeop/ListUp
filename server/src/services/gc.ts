@@ -5,7 +5,7 @@
  * 저장소를 지워도 blob 자체는 그 자리에 남는다. 어디에서도 참조하지 않게 된 것만 골라 지운다.
  *
  * 참조하는 곳 — `repo_files`(지금 목록), `snapshot_changes`(저장소 이력, 앞뒤 값 모두),
- * `proposal_changes`(제안).
+ * `proposal_changes`(제안 — 담은 내용과 제안 당시 원본 모두. 이력을 솎아도 "제안 당시 원본 받기"가 되게).
  * `repo_blobs` 는 "어느 저장소로 올라왔는지"를 적어 둔 것이라 참조로 치지 않는다.
  *
  * **갓 올라온 것은 건드리지 않는다.** 제안용으로 올린 blob 은 제안을 만들기 전까지 아무 데서도
@@ -14,6 +14,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { AppContext } from '../context.ts';
+import { pruneHistory, type PruneResult } from './history.ts';
 
 export interface GcResult {
   /** 지운 blob 개수. */
@@ -51,7 +52,8 @@ export async function collectGarbage(ctx: AppContext, minAgeMs: number): Promise
           AND NOT EXISTS (SELECT 1 FROM repo_files f WHERE f.blob_hash = b.hash)
           AND NOT EXISTS (SELECT 1 FROM snapshot_changes s WHERE s.blob_hash = b.hash)
           AND NOT EXISTS (SELECT 1 FROM snapshot_changes s WHERE s.prev_blob_hash = b.hash)
-          AND NOT EXISTS (SELECT 1 FROM proposal_changes c WHERE c.blob_hash = b.hash)`,
+          AND NOT EXISTS (SELECT 1 FROM proposal_changes c WHERE c.blob_hash = b.hash)
+          AND NOT EXISTS (SELECT 1 FROM proposal_changes c WHERE c.base_blob_hash = b.hash)`,
     )
     .all(cutoff);
 
@@ -155,19 +157,27 @@ function readDirSafe(dir: string): fs.Dirent[] {
 }
 
 /**
+ * 이력을 보존 설정대로 솎은 뒤 GC 를 돈다 — 솎아서 참조가 끊긴 blob 이 같은 번에 지워진다.
+ */
+export async function runMaintenance(ctx: AppContext, minAgeMs: number): Promise<GcResult & { history: PruneResult }> {
+  const history = pruneHistory(ctx.db, { days: ctx.config.historyDays, keepOlder: ctx.config.historyKeepOlder });
+  return { ...(await collectGarbage(ctx, minAgeMs)), history };
+}
+
+/**
  * 주기적으로 GC 를 돈다. 멈추는 함수를 돌려준다.
  * 간격이나 유예 시간이 0 이면 아무것도 하지 않는다 (테스트·수동 운영).
  */
 export function scheduleGc(
   ctx: AppContext,
-  log: (result: GcResult) => void,
+  log: (result: GcResult & { history: PruneResult }) => void,
   onError: (err: unknown) => void,
 ): () => void {
   const { gcIntervalMs, gcMinAgeMs } = ctx.config;
   if (gcIntervalMs <= 0 || gcMinAgeMs <= 0) return () => {};
 
   const timer = setInterval(() => {
-    collectGarbage(ctx, gcMinAgeMs).then(log, onError);
+    runMaintenance(ctx, gcMinAgeMs).then(log, onError);
   }, gcIntervalMs);
   // GC 때문에 프로세스가 살아 있을 이유는 없다.
   timer.unref?.();

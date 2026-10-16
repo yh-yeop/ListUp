@@ -1,7 +1,12 @@
 import { randomBytes } from 'node:crypto';
 import { isIP } from 'node:net';
 import path from 'node:path';
-import { MAX_SERVER_NAME_LENGTH } from '@listup/shared';
+import {
+  DEFAULT_HISTORY_DAYS,
+  HISTORY_KEEP_OLDER,
+  MAX_SERVER_NAME_LENGTH,
+  type HistoryKeepOlder,
+} from '@listup/shared';
 
 export interface Config {
   host: string;
@@ -39,6 +44,15 @@ export interface Config {
    * null 이면 알려 주지 않는다(앱은 주소를 이름 자리에 보여준다).
    */
   serverName: string | null;
+  /**
+   * 변경 이력 보존. 최근 이만큼(일)의 스냅샷은 모두 남기고, 그보다 오래된 것은 historyKeepOlder 에 따라
+   * 솎아 낸다(지운 스냅샷의 변경은 다음 스냅샷에 합쳐 진다). 0 이면 하나도 지우지 않는다.
+   */
+  historyDays: number;
+  /** historyDays 보다 오래된 스냅샷 중 남길 것 — none(지금 파일만), daily·weekly·monthly(그 단위마다 마지막 하나). */
+  historyKeepOlder: HistoryKeep;
+  /** 미러 저장소가 원본 서버에서 바뀐 것을 가져오는 주기(ms). 0 이면 손으로만. */
+  mirrorIntervalMs: number;
   /** 이 횟수만큼 로그인에 실패하면 잠시 막는다 (IP 기준·이메일 기준을 따로 센다). */
   loginFailureLimit: number;
   /** 마지막 실패로부터 이 시간이 지나면 실패 횟수를 잊는다(ms). */
@@ -77,7 +91,22 @@ const KNOWN_ENV = new Set([
   'LISTUP_GC_MIN_AGE_HOURS',
   'LISTUP_GC_INTERVAL_HOURS',
   'LISTUP_SERVER_NAME',
+  'LISTUP_HISTORY_DAYS',
+  'LISTUP_HISTORY_KEEP_OLDER',
+  'LISTUP_MIRROR_INTERVAL_MIN',
 ]);
+
+export const HISTORY_KEEP_OPTIONS = HISTORY_KEEP_OLDER;
+export type HistoryKeep = HistoryKeepOlder;
+
+function envHistoryKeep(): HistoryKeep {
+  const raw = process.env.LISTUP_HISTORY_KEEP_OLDER?.trim().toLowerCase();
+  if (!raw) return 'none';
+  if (!(HISTORY_KEEP_OPTIONS as readonly string[]).includes(raw)) {
+    throw new Error(`LISTUP_HISTORY_KEEP_OLDER 은(는) ${HISTORY_KEEP_OPTIONS.join(', ')} 중 하나여야 합니다: "${raw}"`);
+  }
+  return raw as HistoryKeep;
+}
 
 const LOG_LEVELS = ['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'];
 
@@ -182,6 +211,10 @@ export function loadConfig(overrides: Partial<Config> = {}): Config {
     trustProxy: envTrustProxy(),
     logLevel,
     serverName: envServerName(),
+    // 권장: 최근 30일은 전부 남기고 그 전은 지운다(지금 파일은 늘 남는다).
+    historyDays: envInt('LISTUP_HISTORY_DAYS', DEFAULT_HISTORY_DAYS, { min: 0, max: 36500 }),
+    historyKeepOlder: envHistoryKeep(),
+    mirrorIntervalMs: envInt('LISTUP_MIRROR_INTERVAL_MIN', 30, { min: 0 }) * MINUTE,
     loginFailureLimit: envInt('LISTUP_LOGIN_FAILURE_LIMIT', 10, { min: 1 }),
     loginFailureWindowMs: envInt('LISTUP_LOGIN_FAILURE_WINDOW_MIN', 15, { min: 1 }) * MINUTE,
     loginBlockMs: envInt('LISTUP_LOGIN_BLOCK_MIN', 15, { min: 1 }) * MINUTE,

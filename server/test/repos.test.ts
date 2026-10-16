@@ -339,3 +339,20 @@ describe('서버 상태', () => {
     }
   });
 });
+
+describe('같은 공유기 주소', () => {
+  it('로그인한 사람에게만 서버의 사설 주소를 알려 준다', async () => {
+    const h = await createHarness();
+    try {
+      const anon = await h.app.inject({ method: 'GET', url: '/api/server/lan' });
+      assert.equal(anon.statusCode, 401);
+      const user = await signup(h.app, '누구');
+      const res = await h.app.inject({ method: 'GET', url: '/api/server/lan', headers: auth(user) });
+      assert.equal(res.statusCode, 200);
+      assert.ok(Array.isArray(res.json().urls));
+      for (const url of res.json().urls) assert.match(url, /^http:\/\/(10|192\.168|172\.(1[6-9]|2\d|3[01]))\./);
+    } finally {
+      await h.close();
+    }
+  });
+});

@@ -451,8 +451,15 @@ export const api = {
     }),
 
   // 나눠 올리기 (lib/transfer.ts 가 쓴다) ----------------------------------
-  startUpload: (repoId: string, payload: { name: string; size: number }) =>
-    request<{ upload: UploadSession }>(`/api/repos/${repoId}/uploads`, { method: 'POST', body: payload }),
+  /**
+   * 나눠 올리기 세션을 연다. `hash` 를 주면 이 저장소에 이미 있는 내용일 때 세션 없이 바로 `blob` 을 준다
+   * (1.4.0 서버부터 — 옛 서버는 hash 를 모른 채 세션을 연다).
+   */
+  startUpload: (repoId: string, payload: { name: string; size: number; hash?: string }) =>
+    request<{ upload: UploadSession | null; blob?: UploadedBlob }>(`/api/repos/${repoId}/uploads`, {
+      method: 'POST',
+      body: payload,
+    }),
 
   getUpload: (uploadId: string) => request<{ upload: UploadSession }>(`/api/uploads/${uploadId}`),
 

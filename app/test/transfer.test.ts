@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { ApiError, api, type UploadSource } from '../src/api/client';
 import { UploadAbortedError, uploadAndCommit, uploadMany, type UploadItem } from '../src/lib/transfer';
@@ -11,6 +12,8 @@ const CHUNK = 4;
 let sessions: Map<string, { name: string; size: number; received: number }>;
 let calls: string[];
 let onPut: (id: string, offset: number) => Promise<void> | void;
+/** 서버에 이미 있는 내용(해시). */
+let known: Set<string>;
 
 function patch<K extends keyof Api>(key: K, value: Api[K]) {
   if (!(key in original)) original[key] = api[key] as never;
@@ -20,13 +23,18 @@ function patch<K extends keyof Api>(key: K, value: Api[K]) {
 beforeEach(() => {
   sessions = new Map();
   calls = [];
+  known = new Set();
   onPut = () => {};
   let n = 0;
   const session = (id: string) => {
     const s = sessions.get(id)!;
     return { upload: { id, repoId: 'r', name: s.name, size: s.size, received: s.received, chunkSize: CHUNK } };
   };
-  patch('startUpload', async (_repoId, { name, size }) => {
+  patch('startUpload', async (_repoId, { name, size, hash }) => {
+    calls.push(`hash ${hash ? hash.slice(0, 8) : '-'}`);
+    if (hash && known.has(hash)) {
+      return { upload: null, blob: { hash, size, mimeType: 'text/plain', name } };
+    }
     const id = `u${++n}`;
     sessions.set(id, { name, size, received: 0 });
     calls.push(`start ${id}`);
@@ -73,7 +81,7 @@ describe('나눠 올리기', () => {
     const result = await uploadAndCommit('r', [item('a.txt', 'abcdefghij'), item('b.txt', 'xy')], () => {});
     assert.equal(result.cancelled, false);
     assert.equal(result.uploaded.length, 2);
-    assert.deepEqual(calls, [
+    assert.deepEqual(calls.filter((c) => !c.startsWith('hash')), [
       'start u1', 'put u1@0', 'put u1@4', 'put u1@8', 'complete u1',
       'start u2', 'put u2@0', 'complete u2',
       'commit 2',
@@ -101,6 +109,26 @@ describe('나눠 올리기', () => {
     const result = await uploadMany('r', [item('a', 'a'), item('b', 'b'), item('c', 'c')], () => {});
     assert.deepEqual(result.failures.map((f) => f.message), ['권한이 없습니다.', '권한 없음', '권한 없음']);
     assert.equal(calls.filter((c) => c.startsWith('start')).length, 1);
+  });
+});
+
+describe('해시로 즉시 올리기', () => {
+  const sha = (text: string) => createHash('sha256').update(text).digest('hex');
+
+  it('보내기 전에 내용 해시를 계산해 함께 보낸다', async () => {
+    await uploadMany('r', [item('a.txt', 'abcdefghij')], () => {});
+    assert.equal(calls[0], `hash ${sha('abcdefghij').slice(0, 8)}`);
+  });
+
+  it('서버에 이미 있는 내용이면 조각을 보내지 않고 바로 끝난다', async () => {
+    known.add(sha('xy'));
+    const phases: (string | undefined)[] = [];
+    const result = await uploadAndCommit('r', [item('a.txt', 'abcdefghij'), item('b.txt', 'xy')], (p) => phases.push(p.phase));
+    assert.equal(result.uploaded.length, 2);
+    assert.equal(result.instant, 1);
+    assert.ok(!calls.includes('start u2'), '두 번째 파일은 세션을 열지 않는다');
+    assert.ok(calls.includes('commit 2'));
+    assert.ok(phases.includes('hash'), '내용 확인 중임을 알린다');
   });
 });
 

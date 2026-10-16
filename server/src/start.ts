@@ -3,6 +3,7 @@ import { buildApp } from './app.ts';
 import type { Config } from './config.ts';
 import { createContext, type AppContext } from './context.ts';
 import { scheduleGc } from './services/gc.ts';
+import { scheduleMirrors } from './services/mirror.ts';
 
 export interface RunningServer {
   app: FastifyInstance;
@@ -11,9 +12,9 @@ export interface RunningServer {
   stop(): Promise<void>;
 }
 
-/** 초대 코드는 URL 경로에 실려 오므로 로그에 남기지 않는다. */
-function maskUrl(url: string): string {
-  return url.replace(/\/api\/invites\/[^/?#]+/, '/api/invites/***');
+/** 초대 코드와 공개 링크 토큰은 URL 경로에 실려 오므로 로그에 남기지 않는다. */
+export function maskUrl(url: string): string {
+  return url.replace(/\/api\/invites\/[^/?#]+/, '/api/invites/***').replace(/\/api\/s\/[^/?#]+/, '/api/s/***');
 }
 
 /**
@@ -45,17 +46,27 @@ export async function startServer(config: Config): Promise<RunningServer> {
   const stopGc = scheduleGc(
     ctx,
     (result) => {
-      if (result.removed > 0 || result.orphanFiles > 0 || result.failed > 0 || result.staleUploads > 0) {
+      if (
+        result.removed > 0 ||
+        result.orphanFiles > 0 ||
+        result.failed > 0 ||
+        result.staleUploads > 0 ||
+        result.history.removed > 0
+      ) {
         app.log.info(result, 'blob GC');
       }
     },
     (err) => app.log.error({ err }, 'blob GC 실패'),
   );
 
+  // 다른 서버를 따라가는 저장소는 주기적으로 원본에서 바뀐 것을 가져온다.
+  const stopMirrors = scheduleMirrors(ctx, (err) => app.log.warn({ err }, '미러 가져오기 실패'));
+
   let stopping: Promise<void> | null = null;
   const stop = () => {
     stopping ??= (async () => {
       stopGc();
+      stopMirrors();
       await app.close();
       ctx.close();
     })();

@@ -22,7 +22,7 @@ import {
   Tray,
 } from 'electron';
 import type { HostSettingsPatch, HostStatus } from '@listup/shared';
-import { allowRoot, readChunk, saveUrl, scanFolder } from './folders.ts';
+import { allowRoot, hashFile, isAllowedRoot, readChunk, saveUrl, scanFolder, trashFile } from './folders.ts';
 import { credentialsAvailable, getCredential, removeCredential, setCredential } from './credentials.ts';
 import { Host } from './host.ts';
 import { IPC } from './protocol.ts';
@@ -243,6 +243,8 @@ function registerIpc(): void {
   });
   ipcMain.handle(IPC.hostLogs, () => host.logs());
 
+  // 동기화하려고 기억해 둔 폴더는 다시 고르지 않아도 다룰 수 있다.
+  for (const root of readSettings().syncRoots) allowRoot(root);
   ipcMain.handle(IPC.foldersPick, async () => {
     const picked = await pickFolder({ title: '저장소와 견줄 내 폴더' });
     const root = picked.canceled ? undefined : picked.filePaths[0];
@@ -254,7 +256,23 @@ function registerIpc(): void {
   ipcMain.handle(IPC.foldersRead, (_e, root: string, relativePath: string, offset: number, length: number) =>
     readChunk(root, relativePath, offset, length),
   );
-  ipcMain.handle(IPC.foldersSave, (_e, root: string, relativePath: string, url: string) => saveUrl(root, relativePath, url));
+  ipcMain.handle(IPC.foldersSave, (_e, root: string, relativePath: string, url: string, options?: { overwrite?: boolean }) =>
+    saveUrl(root, relativePath, url, options),
+  );
+  ipcMain.handle(IPC.foldersHash, (_e, root: string, relativePath: string) => hashFile(root, relativePath));
+  ipcMain.handle(IPC.foldersTrash, (_e, root: string, relativePath: string) => trashFile(root, relativePath));
+  // 이번 실행에서 대화상자로 고른 폴더만 기억할 수 있다 — 창이 아무 경로나 기억시키지 못하게.
+  ipcMain.handle(IPC.foldersRemember, (_e, root: string) => {
+    if (!isAllowedRoot(root)) return false;
+    const syncRoots = readSettings().syncRoots;
+    const resolved = path.resolve(root);
+    if (!syncRoots.includes(resolved)) writeSettings({ syncRoots: [...syncRoots, resolved] });
+    return true;
+  });
+  ipcMain.handle(IPC.foldersForget, (_e, root: string) => {
+    const resolved = path.resolve(root);
+    writeSettings({ syncRoots: readSettings().syncRoots.filter((item) => item !== resolved) });
+  });
 }
 
 app.on('second-instance', (_event, argv) => showWindow(appUrlFromDeepLink(argv)));

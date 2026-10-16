@@ -33,7 +33,11 @@ const bridge: DesktopBridge = {
     pick: () => ipcRenderer.invoke(IPC.foldersPick),
     scan: (root) => ipcRenderer.invoke(IPC.foldersScan, root),
     read: (root, relativePath, offset, length) => ipcRenderer.invoke(IPC.foldersRead, root, relativePath, offset, length),
-    save: (root, relativePath, url) => ipcRenderer.invoke(IPC.foldersSave, root, relativePath, url),
+    save: (root, relativePath, url, options) => ipcRenderer.invoke(IPC.foldersSave, root, relativePath, url, options),
+    hash: (root, relativePath) => ipcRenderer.invoke(IPC.foldersHash, root, relativePath),
+    trash: (root, relativePath) => ipcRenderer.invoke(IPC.foldersTrash, root, relativePath),
+    remember: (root) => ipcRenderer.invoke(IPC.foldersRemember, root),
+    forget: (root) => ipcRenderer.invoke(IPC.foldersForget, root),
   },
 };
 

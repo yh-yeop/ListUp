@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import type { Role } from '@listup/shared';
+import type { RepoStorage, Role } from '@listup/shared';
 import { MAX_DESCRIPTION_LENGTH, MAX_NAME_LENGTH, isRole } from '@listup/shared';
 import type { AppContext } from '../context.ts';
 import { badRequest, conflict, forbidden, notFound } from '../lib/errors.ts';
@@ -20,6 +20,7 @@ import {
   toRepoSummary,
   type RepoRow,
 } from '../services/repos.ts';
+import { fetchMirrorManifest, getMirror, parseMirrorLink, syncMirror } from '../services/mirror.ts';
 import { listSnapshots } from '../services/snapshots.ts';
 
 /** 이 사람이 만든 미회수 초대를 모두 회수한다. 추방·강등과 같은 트랜잭션 안에서 부른다. */
@@ -31,7 +32,7 @@ function revokeInvitesBy(db: AppContext['db'], repoId: string, userId: string, n
 }
 
 export async function registerRepoRoutes(app: FastifyInstance, ctx: AppContext): Promise<void> {
-  const { db } = ctx;
+  const { db, config } = ctx;
 
   /** 내가 참여 중인 저장소 목록. */
   app.get('/repos', async (req) => {
@@ -71,6 +72,64 @@ export async function registerRepoRoutes(app: FastifyInstance, ctx: AppContext):
 
     const row = getRepoRow(db, id)!;
     return reply.code(201).send({ repo: toRepoSummary(db, row, 'owner') });
+  });
+
+  // -------------------------------------------------------------------------
+  // 따라가기(미러) — 다른 서버의 저장소를 읽기 전용 사본으로
+  // -------------------------------------------------------------------------
+
+  /** 원본 서버의 따라가기 링크(`https://원본/s/<키>`)로 미러 저장소를 만든다. 첫 가져오기는 뒤에서 한다. */
+  app.post('/repos/mirror', async (req, reply) => {
+    const user = requireUser(req);
+    const input = body(req);
+    const link = typeof input.link === 'string' ? input.link : '';
+    const parsed = parseMirrorLink(link);
+    if (!parsed) throw badRequest('따라가기 링크가 올바르지 않습니다. 원본 서버에서 받은 https://…/s/… 링크를 넣어 주세요.');
+    const exists = db
+      .prepare<[string, string], { repo_id: string }>(
+        `SELECT m.repo_id FROM mirrors m JOIN repo_members rm ON rm.repo_id = m.repo_id AND rm.user_id = ?
+          WHERE m.source_token = ?`,
+      )
+      .get(user.id, parsed.token);
+    if (exists) throw conflict('이미 이 저장소를 따라가고 있습니다.', { repoId: exists.repo_id });
+    const manifest = await fetchMirrorManifest(parsed.sourceUrl, parsed.token);
+
+    const now = Date.now();
+    const id = newId('repo');
+    const name = manifest.repo.name.trim().slice(0, MAX_NAME_LENGTH) || '따라가는 저장소';
+    const description = String(manifest.repo.description ?? '').slice(0, MAX_DESCRIPTION_LENGTH);
+    db.transaction(() => {
+      db.prepare(
+        `INSERT INTO repos (id, name, description, owner_id, head_snapshot_id, created_at, updated_at)
+         VALUES (?, ?, ?, ?, NULL, ?, ?)`,
+      ).run(id, name, description, user.id, now, now);
+      db.prepare(`INSERT INTO repo_members (repo_id, user_id, role, joined_at) VALUES (?, ?, 'owner', ?)`).run(id, user.id, now);
+      db.prepare(
+        `INSERT INTO mirrors (repo_id, source_url, source_token, created_at) VALUES (?, ?, ?, ?)`,
+      ).run(id, parsed.sourceUrl, parsed.token, now);
+    })();
+    // 큰 저장소는 오래 걸리므로 기다리지 않는다 — 상태는 저장소 요약의 mirror 로 본다.
+    void syncMirror(ctx, id).catch((err) => req.log.warn({ err, repoId: id }, '미러 첫 가져오기 실패'));
+    return reply.code(201).send({ repo: toRepoSummary(db, getRepoRow(db, id)!, 'owner') });
+  });
+
+  /** 지금 가져오기 — 소유자. 끝날 때까지 기다린다. */
+  app.post('/repos/:repoId/mirror/sync', async (req) => {
+    const user = requireUser(req);
+    const { repoId } = req.params as { repoId: string };
+    requireAccess(db, repoId, user.id, 'owner');
+    if (!getMirror(db, repoId)) throw badRequest('따라가는 저장소가 아닙니다.');
+    const result = await syncMirror(ctx, repoId);
+    return { repo: toRepoSummary(db, getRepoRow(db, repoId)!, 'owner'), result };
+  });
+
+  /** 따라가기를 그만둔다 — 지금 가진 파일과 이력을 그대로 둔 채 보통 저장소가 된다. */
+  app.delete('/repos/:repoId/mirror', async (req) => {
+    const user = requireUser(req);
+    const { repoId } = req.params as { repoId: string };
+    requireAccess(db, repoId, user.id, 'owner');
+    db.prepare(`DELETE FROM mirrors WHERE repo_id = ?`).run(repoId);
+    return { repo: toRepoSummary(db, getRepoRow(db, repoId)!, 'owner') };
   });
 
   app.get('/repos/:repoId', async (req) => {
@@ -201,6 +260,67 @@ export async function registerRepoRoutes(app: FastifyInstance, ctx: AppContext):
     })();
 
     return { repo: toRepoSummary(db, getRepoRow(db, repoId)!, 'editor') };
+  });
+
+  // -------------------------------------------------------------------------
+  // 용량 — 지금 파일, 이력이 붙잡은 것, 중복, 큰 파일
+  // -------------------------------------------------------------------------
+
+  app.get('/repos/:repoId/storage', async (req): Promise<RepoStorage> => {
+    const user = requireUser(req);
+    const { repoId } = req.params as { repoId: string };
+    requireAccess(db, repoId, user.id, 'viewer');
+
+    const current = db
+      .prepare<[string], { files: number; bytes: number }>(
+        `SELECT COUNT(*) AS files, COALESCE(SUM(size), 0) AS bytes FROM repo_files WHERE repo_id = ?`,
+      )
+      .get(repoId)!;
+    const snapshots = db
+      .prepare<[string], { n: number; oldest: number | null }>(
+        `SELECT COUNT(*) AS n, MIN(created_at) AS oldest FROM snapshots WHERE repo_id = ?`,
+      )
+      .get(repoId)!;
+    const extra = db
+      .prepare<[string, string, string], { bytes: number }>(
+        `SELECT COALESCE(SUM(b.size), 0) AS bytes FROM blobs b
+          WHERE b.hash IN (
+                  SELECT c.blob_hash FROM snapshot_changes c JOIN snapshots s ON s.id = c.snapshot_id
+                   WHERE s.repo_id = ? AND c.blob_hash IS NOT NULL
+                  UNION
+                  SELECT c.prev_blob_hash FROM snapshot_changes c JOIN snapshots s ON s.id = c.snapshot_id
+                   WHERE s.repo_id = ? AND c.prev_blob_hash IS NOT NULL)
+            AND b.hash NOT IN (SELECT blob_hash FROM repo_files WHERE repo_id = ?)`,
+      )
+      .get(repoId, repoId, repoId)!;
+    const groups = db
+      .prepare<[string], { hash: string; size: number; n: number }>(
+        `SELECT blob_hash AS hash, MAX(size) AS size, COUNT(*) AS n FROM repo_files
+          WHERE repo_id = ? GROUP BY blob_hash HAVING COUNT(*) > 1
+          ORDER BY MAX(size) * (COUNT(*) - 1) DESC`,
+      )
+      .all(repoId);
+    const pathsOf = db.prepare<[string, string], { path: string }>(
+      `SELECT path FROM repo_files WHERE repo_id = ? AND blob_hash = ? ORDER BY path`,
+    );
+    const largest = db
+      .prepare<[string], { path: string; size: number }>(
+        `SELECT path, size FROM repo_files WHERE repo_id = ? ORDER BY size DESC, path LIMIT 10`,
+      )
+      .all(repoId);
+
+    return {
+      current,
+      history: { snapshots: snapshots.n, oldestAt: snapshots.oldest, extraBytes: extra.bytes },
+      duplicates: groups.slice(0, 50).map((group) => ({
+        hash: group.hash,
+        size: group.size,
+        paths: pathsOf.all(repoId, group.hash).map((row) => row.path),
+      })),
+      duplicateBytes: groups.reduce((sum, group) => sum + group.size * (group.n - 1), 0),
+      largest,
+      retention: { days: config.historyDays, keepOlder: config.historyKeepOlder },
+    };
   });
 
   // -------------------------------------------------------------------------

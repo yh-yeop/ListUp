@@ -4,7 +4,13 @@ import fs from 'node:fs';
 import os from 'node:os';
 import { createSocket } from 'node:dgram';
 import { utilityProcess, type UtilityProcess } from 'electron';
-import { MAX_SERVER_NAME_LENGTH, type HostSettingsPatch, type HostState, type HostStatus } from '@listup/shared';
+import {
+  HISTORY_KEEP_OLDER,
+  MAX_SERVER_NAME_LENGTH,
+  type HostSettingsPatch,
+  type HostState,
+  type HostStatus,
+} from '@listup/shared';
 import type { ServerReply, ServerRequest } from './protocol.ts';
 import { cleanServerName, dataDirOf, readSettings, writeSettings } from './settings.ts';
 import { Tunnel } from './tunnel.ts';
@@ -125,6 +131,8 @@ export class Host extends EventEmitter {
       autoStart: settings.autoStart,
       openAtLogin: settings.openAtLogin,
       serverName: settings.serverName,
+      historyDays: settings.historyDays,
+      historyKeepOlder: settings.historyKeepOlder,
     };
   }
 
@@ -182,6 +190,8 @@ export class Host extends EventEmitter {
         LISTUP_LOG_LEVEL: process.env.LISTUP_LOG_LEVEL ?? 'info',
         // 관리 화면에서 정한 이름이 환경변수보다 앞선다.
         ...(settings.serverName ? { LISTUP_SERVER_NAME: settings.serverName } : {}),
+        LISTUP_HISTORY_DAYS: String(settings.historyDays),
+        LISTUP_HISTORY_KEEP_OLDER: settings.historyKeepOlder,
       },
     });
   }
@@ -321,6 +331,21 @@ export class Host extends EventEmitter {
       if (name && cleanServerName(name) === null) throw new Error(`서버 이름은 ${MAX_SERVER_NAME_LENGTH}자까지입니다.`);
       if (this.running && (name || null) !== before.serverName) throw new Error('서버 이름은 서버를 끈 뒤에 바꿀 수 있습니다.');
       patch = { ...patch, serverName: name || null };
+    }
+    if (patch.historyDays !== undefined) {
+      if (!Number.isInteger(patch.historyDays) || patch.historyDays < 0 || patch.historyDays > 36500) {
+        throw new Error('보존 기간은 0~36500 일 사이의 정수여야 합니다.');
+      }
+    }
+    if (patch.historyKeepOlder !== undefined && !HISTORY_KEEP_OLDER.includes(patch.historyKeepOlder)) {
+      throw new Error('오래된 이력 보존 방식이 올바르지 않습니다.');
+    }
+    // 이력 보존은 켜져 있는 서버에도 다음 정리부터 적용되도록 다시 켤 때 넘긴다 — 실행 중에는 막는다.
+    if (this.running && (patch.historyDays !== undefined || patch.historyKeepOlder !== undefined)) {
+      const changed =
+        (patch.historyDays !== undefined && patch.historyDays !== before.historyDays) ||
+        (patch.historyKeepOlder !== undefined && patch.historyKeepOlder !== before.historyKeepOlder);
+      if (changed) throw new Error('이력 보존 설정은 서버를 끈 뒤에 바꿀 수 있습니다.');
     }
     const after = writeSettings(patch);
     if (patch.tunnel !== undefined && patch.tunnel !== before.tunnel) {

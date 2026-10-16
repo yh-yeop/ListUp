@@ -44,6 +44,7 @@ export function TransferProgress({
       </View>
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.md }}>
         <Caption numberOfLines={1} style={{ flex: 1 }}>
+          {progress.phase === 'hash' ? '내용 확인 중 · ' : ''}
           {progress.current ? `${progress.current} · ` : ''}
           {formatBytes(progress.sentBytes)} / {formatBytes(progress.totalBytes)}
         </Caption>

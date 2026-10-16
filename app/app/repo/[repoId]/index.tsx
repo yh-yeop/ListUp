@@ -147,8 +147,10 @@ export default function RepoFilesScreen() {
           commit.added ? `추가 ${commit.added}` : '',
           commit.updated ? `수정 ${commit.updated}` : '',
         ].filter(Boolean);
-        if (parts.length > 0) notifySuccess(`${items.length}개 올렸습니다 — ${parts.join(' · ')}`);
-        else notify('바뀐 파일이 없습니다.');
+        // 저장소에 이미 있던 내용은 보내지 않았다 — 얼마나 아꼈는지 알려 준다.
+        const skipped = result.instant > 0 ? `이미 있던 ${result.instant}개는 보내지 않았습니다.` : undefined;
+        if (parts.length > 0) notifySuccess(`${items.length}개 올렸습니다 — ${parts.join(' · ')}`, skipped);
+        else notify('바뀐 파일이 없습니다.', skipped);
       }
     } catch (err) {
       notifyError('반영하지 못했습니다.', err instanceof ApiError ? err.message : undefined);

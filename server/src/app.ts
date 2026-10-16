@@ -1,3 +1,4 @@
+import os from 'node:os';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import cors from '@fastify/cors';
@@ -8,13 +9,14 @@ import { API_LEVEL, API_VERSION, type ApiErrorBody, type HealthResponse } from '
 import type { AppContext } from './context.ts';
 import { ApiError } from './lib/errors.ts';
 import { verifyToken } from './lib/auth.ts';
-import type { AuthUser } from './lib/request.ts';
+import { requireUser, type AuthUser } from './lib/request.ts';
 import { registerAuthRoutes } from './routes/auth.ts';
 import { registerRepoRoutes } from './routes/repos.ts';
 import { registerFileRoutes } from './routes/files.ts';
 import { registerInviteRoutes } from './routes/invites.ts';
 import { registerProposalRoutes } from './routes/proposals.ts';
 import { registerUploadRoutes } from './routes/uploads.ts';
+import { registerShareRoutes } from './routes/shares.ts';
 import { registerDownloadRoutes } from './routes/downloads.ts';
 import serverPackage from '../package.json' with { type: 'json' };
 
@@ -23,6 +25,20 @@ import serverPackage from '../package.json' with { type: 'json' };
  * 파일로 읽지 않고 import 한다 — PC 앱은 서버를 한 파일로 묶어 넣으므로 상대 경로가 달라진다.
  */
 const SERVER_VERSION = serverPackage.version;
+
+/** 이 PC 의 사설 IPv4 주소(공유기 안)마다 http://주소:포트. */
+export function lanUrls(port: number): string[] {
+  const urls: string[] = [];
+  for (const list of Object.values(os.networkInterfaces())) {
+    for (const net of list ?? []) {
+      if (net.family !== 'IPv4' || net.internal) continue;
+      const [a, b] = net.address.split('.').map(Number);
+      const isPrivate = a === 10 || (a === 192 && b === 168) || (a === 172 && b >= 16 && b <= 31);
+      if (isPrivate) urls.push(`http://${net.address}:${port}`);
+    }
+  }
+  return urls;
+}
 
 export interface BuildOptions {
   logger?: boolean | FastifyServerOptions['logger'];
@@ -188,7 +204,18 @@ export async function buildApp(ctx: AppContext, options: BuildOptions = {}): Pro
     version: SERVER_VERSION,
     // 앱이 서버를 목록에 더할 때 이름 칸에 미리 채운다.
     serverName: ctx.config.serverName,
+    // 변경 이력 화면이 "최근 30일 보관" 같은 안내를 보인다.
+    history: { days: ctx.config.historyDays, keepOlder: ctx.config.historyKeepOlder },
   }));
+
+  /**
+   * 같은 공유기에서 이 서버에 닿는 주소들 (1.4.0). 앱이 터널 대신 이 주소로 큰 파일을 주고받는다(Funnel 같은
+   * 터널은 대역폭이 좁다). 내부 주소를 밖에 알리지 않도록 로그인한 사람에게만 준다.
+   */
+  app.get('/api/server/lan', async (req) => {
+    requireUser(req);
+    return { urls: lanUrls(ctx.config.port) };
+  });
 
   await app.register(async (api) => {
     await registerAuthRoutes(api, ctx);
@@ -198,6 +225,7 @@ export async function buildApp(ctx: AppContext, options: BuildOptions = {}): Pro
     await registerProposalRoutes(api, ctx);
     await registerUploadRoutes(api, ctx);
     await registerDownloadRoutes(api, ctx);
+    await registerShareRoutes(api, ctx);
   }, { prefix: '/api' });
 
   return app;

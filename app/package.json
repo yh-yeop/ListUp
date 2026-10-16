@@ -16,6 +16,7 @@
   "dependencies": {
     "@expo/vector-icons": "^15.1.1",
     "@listup/shared": "*",
+    "@noble/hashes": "^2.4.0",
     "@react-native-async-storage/async-storage": "^2.2.0",
     "expo": "^57.0.14",
     "expo-build-properties": "~57.0.17",

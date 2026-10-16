@@ -20,6 +20,8 @@ export interface ProposalRow {
   merged_snapshot_id: string | null;
   created_at: number;
   updated_at: number;
+  /** 받기 함으로 들어온 손님 제안이면 손님이 적은 이름. */
+  guest_name: string | null;
 }
 
 export interface ChangeRow {
@@ -86,6 +88,7 @@ export function toProposal(db: Db, row: ProposalRow): Proposal {
     updatedAt: row.updated_at,
     changeCount,
     commentCount,
+    guestName: row.guest_name ?? null,
   };
 }
 

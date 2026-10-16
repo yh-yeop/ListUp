@@ -1,7 +1,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { app } from 'electron';
-import { MAX_SERVER_NAME_LENGTH, type HostTunnelMode } from '@listup/shared';
+import {
+  HISTORY_KEEP_OLDER,
+  MAX_SERVER_NAME_LENGTH,
+  type HistoryKeepOlder,
+  type HostTunnelMode,
+} from '@listup/shared';
 
 /** PC 앱 설정. 앱 데이터 폴더의 settings.json 에 둔다. */
 export interface Settings {
@@ -15,6 +20,12 @@ export interface Settings {
   trayNoticeShown: boolean;
   /** 서버 이름(LISTUP_SERVER_NAME 으로 넘긴다). null 이면 정하지 않음. */
   serverName: string | null;
+  /** 동기화하려고 기억해 둔 폴더(절대 경로). 앱을 켤 때 다시 허락한다. */
+  syncRoots: string[];
+  /** 이력 보존(LISTUP_HISTORY_DAYS) — 최근 며칠의 스냅샷을 모두 남길지. 0 이면 모두. */
+  historyDays: number;
+  /** 그보다 오래된 스냅샷 중 남길 것(LISTUP_HISTORY_KEEP_OLDER). */
+  historyKeepOlder: HistoryKeepOlder;
 }
 
 const DEFAULTS: Settings = {
@@ -25,6 +36,9 @@ const DEFAULTS: Settings = {
   dataDir: null,
   trayNoticeShown: false,
   serverName: null,
+  syncRoots: [],
+  historyDays: 30,
+  historyKeepOlder: 'none',
 };
 
 /** 앞뒤 공백을 뗀 서버 이름. 비었거나 너무 길면(손으로 고친 파일) null. */
@@ -56,6 +70,14 @@ export function readSettings(): Settings {
     dataDir: typeof raw.dataDir === 'string' && raw.dataDir ? raw.dataDir : null,
     trayNoticeShown: raw.trayNoticeShown === true,
     serverName: cleanServerName(raw.serverName),
+    syncRoots: Array.isArray(raw.syncRoots) ? raw.syncRoots.filter((item): item is string => typeof item === 'string') : [],
+    historyDays:
+      Number.isInteger(raw.historyDays) && raw.historyDays! >= 0 && raw.historyDays! <= 36500
+        ? raw.historyDays!
+        : DEFAULTS.historyDays,
+    historyKeepOlder: HISTORY_KEEP_OLDER.includes(raw.historyKeepOlder as HistoryKeepOlder)
+      ? (raw.historyKeepOlder as HistoryKeepOlder)
+      : DEFAULTS.historyKeepOlder,
   };
   return cached;
 }

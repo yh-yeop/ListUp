@@ -179,6 +179,80 @@ describe('나눠 올리기', () => {
   });
 });
 
+describe('해시로 즉시 올리기', () => {
+  let h: Harness;
+  let owner: Session;
+  let other: Session;
+  let repoId: string;
+  let otherRepoId: string;
+
+  before(async () => {
+    h = await createHarness();
+    owner = await signup(h.app, '소유자');
+    other = await signup(h.app, '다른 사람');
+    repoId = await createRepo(h.app, owner, '즉시');
+    otherRepoId = await createRepo(h.app, other, '남의 저장소');
+  });
+  after(async () => {
+    await h.close();
+  });
+
+  const start = (session: Session, repo: string, payload: Record<string, unknown>) =>
+    h.app.inject({ method: 'POST', url: `/api/repos/${repo}/uploads`, headers: auth(session), payload });
+  async function send(session: Session, repo: string, name: string, data: Buffer, hash?: string) {
+    const created = await start(session, repo, { name, size: data.length, ...(hash ? { hash } : {}) });
+    if (created.statusCode === 200) return created;
+    const id = created.json().upload.id;
+    await h.app.inject({
+      method: 'PUT',
+      url: `/api/uploads/${id}?offset=0`,
+      headers: { ...auth(session), 'content-type': 'application/octet-stream' },
+      payload: data,
+    });
+    return h.app.inject({ method: 'POST', url: `/api/uploads/${id}/complete`, headers: auth(session) });
+  }
+
+  it('이 저장소에 이미 있는 내용이면 보내지 않고 바로 blob 을 준다', async () => {
+    const data = Buffer.from('같은 내용');
+    const first = await send(owner, repoId, 'a.txt', data, sha256(data));
+    assert.equal(first.statusCode, 201, first.body);
+
+    const again = await start(owner, repoId, { name: '다른이름.txt', size: data.length, hash: sha256(data) });
+    assert.equal(again.statusCode, 200);
+    assert.equal(again.json().upload, null);
+    assert.equal(again.json().blob.hash, sha256(data));
+    assert.equal(again.json().blob.name, '다른이름.txt');
+  });
+
+  it('다른 저장소의 내용은 해시를 알아도 즉시 받지 못한다', async () => {
+    const secret = Buffer.from('남의 비밀');
+    await send(other, otherRepoId, 's.txt', secret, sha256(secret));
+    const res = await start(owner, repoId, { name: 's.txt', size: secret.length, hash: sha256(secret) });
+    assert.equal(res.statusCode, 201, '새로 보내야 한다');
+    assert.ok(res.json().upload);
+  });
+
+  it('크기가 다르면 같은 해시라도 즉시 받지 않는다', async () => {
+    const data = Buffer.from('같은 내용');
+    const res = await start(owner, repoId, { name: 'a.txt', size: data.length + 1, hash: sha256(data) });
+    assert.equal(res.statusCode, 201);
+  });
+
+  it('받은 내용이 보낸 해시와 다르면 기록하지 않는다', async () => {
+    const data = Buffer.from('진짜 내용');
+    const res = await send(owner, repoId, 'b.txt', data, sha256(Buffer.from('다른 내용')));
+    assert.equal(res.statusCode, 400);
+    assert.match(res.json().error.message, /손상/);
+    const blob = h.ctx.db.prepare('SELECT 1 FROM blobs WHERE hash = ?').get(sha256(data));
+    assert.equal(blob, undefined);
+  });
+
+  it('해시 모양이 틀리면 400', async () => {
+    const res = await start(owner, repoId, { name: 'a', size: 1, hash: 'xyz' });
+    assert.equal(res.statusCode, 400);
+  });
+});
+
 describe('이어받기와 다운로드 링크', () => {
   let h: Harness;
   let owner: Session;

@@ -327,4 +327,52 @@ export const MIGRATIONS: {
       CREATE INDEX idx_password_resets_user ON password_resets(user_id, used_at);
     `,
   },
+  {
+    // 1.4.0 — 해시로 즉시 올리기, 공개 링크·받기 함, 서버 간 따라가기(미러).
+    version: 8,
+    up: `
+      -- 앱이 미리 계산해 보낸 내용 해시. 완료할 때 서버가 받은 내용의 해시와 견줘 전송 중 손상을 잡는다.
+      ALTER TABLE upload_sessions ADD COLUMN expected_hash TEXT;
+      -- 계정 없는 사람이 받기 함 링크로 올리는 세션. user_id 는 링크를 만든 사람이다.
+      ALTER TABLE upload_sessions ADD COLUMN share_id TEXT;
+
+      -- 저장소 밖으로 주는 링크. 토큰을 아는 사람은 로그인 없이 쓴다.
+      --   download  path 아래 파일을 받는다 (폴더면 zip 도)
+      --   upload    받기 함 — 올린 파일이 path 아래로 가는 변경 제안이 된다
+      --   mirror    다른 ListUp 서버가 저장소 전체를 따라가며 복제한다 (읽기 전용)
+      CREATE TABLE shares (
+        id         TEXT PRIMARY KEY,
+        repo_id    TEXT NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+        kind       TEXT NOT NULL CHECK (kind IN ('download','upload','mirror')),
+        path       TEXT NOT NULL DEFAULT '',
+        token      TEXT NOT NULL UNIQUE,
+        label      TEXT NOT NULL DEFAULT '',
+        created_by TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        created_at INTEGER NOT NULL,
+        expires_at INTEGER,
+        max_uses   INTEGER,
+        use_count  INTEGER NOT NULL DEFAULT 0,
+        max_bytes  INTEGER,
+        used_bytes INTEGER NOT NULL DEFAULT 0,
+        revoked_at INTEGER
+      );
+      CREATE INDEX idx_shares_repo ON shares(repo_id, created_at DESC);
+      CREATE INDEX idx_shares_creator ON shares(created_by);
+
+      -- 받기 함으로 들어온 제안: 올린 사람이 적은 이름과 그 링크.
+      ALTER TABLE proposals ADD COLUMN guest_name TEXT;
+      ALTER TABLE proposals ADD COLUMN share_id TEXT REFERENCES shares(id) ON DELETE SET NULL;
+
+      -- 다른 서버의 저장소를 따라가는 미러. 이 저장소는 읽기 전용이 된다.
+      CREATE TABLE mirrors (
+        repo_id         TEXT PRIMARY KEY REFERENCES repos(id) ON DELETE CASCADE,
+        source_url      TEXT NOT NULL,
+        source_token    TEXT NOT NULL,
+        source_head     TEXT,
+        last_synced_at  INTEGER,
+        last_error      TEXT,
+        created_at      INTEGER NOT NULL
+      );
+    `,
+  },
 ];

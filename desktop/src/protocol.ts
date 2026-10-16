@@ -31,6 +31,10 @@ export const IPC = {
   foldersScan: 'folders:scan',
   foldersRead: 'folders:read',
   foldersSave: 'folders:save',
+  foldersHash: 'folders:hash',
+  foldersTrash: 'folders:trash',
+  foldersRemember: 'folders:remember',
+  foldersForget: 'folders:forget',
   /** main → 창: 상태가 바뀌었다. */
   hostChanged: 'host:changed',
 } as const;

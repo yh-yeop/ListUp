@@ -162,7 +162,7 @@ describe('변경 제안', () => {
     const proposal = detail.json().proposal as ProposalDetail;
     assert.equal(proposal.mergeable, false);
     assert.deepEqual(proposal.conflicts, ['보고서.txt']);
-    assert.deepEqual(proposal.conflictDetails, [{ path: '보고서.txt', reason: 'changed' }]);
+    assert.deepEqual(proposal.conflictDetails, [{ path: '보고서.txt', reason: 'changed', autoMerge: false }]);
 
     const merged = await h.app.inject({
       method: 'POST',
@@ -853,5 +853,116 @@ describe('용량 한도', () => {
       .prepare(`UPDATE repo_blobs SET created_at = created_at - ? WHERE uploaded_by = ?`)
       .run(25 * 60 * 60 * 1000, viewer.userId);
     assert.equal((await postBlob(viewer, repoId, '4.bin', Buffer.alloc(1, 4))).statusCode, 201);
+  });
+});
+
+describe('충돌 정리', () => {
+  let h: Harness;
+  let owner: Session;
+  let viewer: Session;
+  let repoId: string;
+
+  const lines = (...xs: string[]) => xs.map((x) => `${x}\n`).join('');
+
+  before(async () => {
+    h = await createHarness();
+    owner = await signup(h.app, '소유자');
+    viewer = await signup(h.app, '제안자');
+    repoId = await createRepo(h.app, owner, '충돌 정리');
+    await join(h.app, viewer, (await createInvite(h.app, owner, repoId, { role: 'viewer' })).code);
+  });
+  after(async () => {
+    await h.close();
+  });
+
+  const get = async (id: string) =>
+    (await h.app.inject({ method: 'GET', url: `/api/proposals/${id}`, headers: auth(owner) })).json().proposal as ProposalDetail;
+  const resolve = (session: Session, id: string, resolutions: Record<string, string>) =>
+    h.app.inject({ method: 'POST', url: `/api/proposals/${id}/resolve`, headers: auth(session), payload: { resolutions } });
+  const raw = async (path: string) =>
+    (await h.app.inject({ method: 'GET', url: `/api/repos/${repoId}/raw?path=${encodeURIComponent(path)}`, headers: auth(owner) })).body;
+
+  /** 저장소에 base 를 두고, 제안(mine)을 만든 뒤, 저장소를 theirs 로 바꾼다. */
+  async function conflicted(files: Record<string, { base: string; mine: string; theirs: string }>) {
+    for (const [path, v] of Object.entries(files)) await uploadFile(h.app, owner, repoId, path, v.base);
+    const changes = [];
+    for (const [path, v] of Object.entries(files)) {
+      changes.push({ path, blobHash: await uploadBlob(h.app, viewer, repoId, path.split('/').pop()!, v.mine) });
+    }
+    const created = await createProposal(h, viewer, repoId, { title: '고침', changes });
+    assert.equal(created.statusCode, 201, created.body);
+    for (const [path, v] of Object.entries(files)) await uploadFile(h.app, owner, repoId, path, v.theirs);
+    return created.json().proposal.id as string;
+  }
+
+  it('텍스트는 줄 단위로 자동으로 합칠 수 있다고 알려 주고, 합쳐서 반영한다', async () => {
+    const id = await conflicted({
+      '회의록.md': {
+        // 서로 다른 줄을, 사이에 그대로인 줄을 두고 고쳤다(붙어 있는 줄을 따로 고치면 git 처럼 충돌로 본다).
+        base: lines('# 회의', '참석: 가', '장소: 3층', '안건: 없음'),
+        mine: lines('# 회의', '참석: 가', '장소: 3층', '안건: 예산'),
+        theirs: lines('# 회의', '참석: 가, 나', '장소: 3층', '안건: 없음'),
+      },
+    });
+    const before = await get(id);
+    assert.equal(before.mergeable, false);
+    assert.deepEqual(before.conflictDetails, [{ path: '회의록.md', reason: 'changed', autoMerge: true }]);
+
+    const res = await resolve(viewer, id, { '회의록.md': 'merge' });
+    assert.equal(res.statusCode, 200, res.body);
+    const after = res.json().proposal as ProposalDetail;
+    assert.equal(after.mergeable, true);
+    assert.match(after.comments.at(-1)!.body, /자동으로 합침/);
+
+    const merged = await h.app.inject({ method: 'POST', url: `/api/proposals/${id}/merge`, headers: auth(owner) });
+    assert.equal(merged.statusCode, 200, merged.body);
+    assert.equal(await raw('회의록.md'), lines('# 회의', '참석: 가, 나', '장소: 3층', '안건: 예산'));
+  });
+
+  it('같은 줄을 둘 다 고쳤으면 자동 병합은 안 되고, 내 것/저장소 것으로 고른다', async () => {
+    const id = await conflicted({
+      'a.txt': { base: lines('x'), mine: lines('제안'), theirs: lines('저장소') },
+      'b.txt': { base: lines('y'), mine: lines('제안 b'), theirs: lines('저장소 b') },
+    });
+    const detail = await get(id);
+    assert.ok(detail.conflictDetails!.every((c) => c.autoMerge === false));
+    assert.equal((await resolve(viewer, id, { 'a.txt': 'merge', 'b.txt': 'mine' })).statusCode, 409);
+
+    const res = await resolve(viewer, id, { 'a.txt': 'mine', 'b.txt': 'theirs' });
+    assert.equal(res.statusCode, 200, res.body);
+    const after = res.json().proposal as ProposalDetail;
+    assert.deepEqual(after.changes.map((c) => c.path), ['a.txt'], '저장소 것을 고른 파일은 제안에서 빠진다');
+    assert.equal(after.mergeable, true);
+    await h.app.inject({ method: 'POST', url: `/api/proposals/${id}/merge`, headers: auth(owner) });
+    assert.equal(await raw('a.txt'), lines('제안'));
+    assert.equal(await raw('b.txt'), lines('저장소 b'));
+  });
+
+  it('모든 충돌에 정리 방법을 골라야 하고, 충돌 아닌 경로·이름 충돌의 mine 은 거절한다', async () => {
+    const id = await conflicted({
+      'c.txt': { base: 'c', mine: 'c1', theirs: 'c2' },
+      'd.txt': { base: 'd', mine: 'd1', theirs: 'd2' },
+    });
+    assert.equal((await resolve(viewer, id, { 'c.txt': 'mine' })).statusCode, 400, '빠진 충돌');
+    assert.equal((await resolve(viewer, id, { 'c.txt': 'mine', 'd.txt': 'mine', 'z.txt': 'mine' })).statusCode, 400);
+    assert.equal((await resolve(viewer, id, { 'c.txt': 'nope', 'd.txt': 'mine' })).statusCode, 400);
+
+    // 이름 충돌 — 제안은 "새/안.txt" 를 더하는데 저장소에 파일 "새" 가 생겼다.
+    const blob = await uploadBlob(h.app, viewer, repoId, '안.txt', '안');
+    const named = await createProposal(h, viewer, repoId, { title: '새 폴더', changes: [{ path: '새/안.txt', blobHash: blob }] });
+    await uploadFile(h.app, owner, repoId, '새', '파일');
+    const nid = named.json().proposal.id;
+    assert.equal((await resolve(viewer, nid, { '새/안.txt': 'mine' })).statusCode, 400);
+    const dropped = await resolve(viewer, nid, { '새/안.txt': 'theirs' });
+    assert.equal(dropped.statusCode, 200);
+    assert.equal(dropped.json().proposal.changes.length, 0);
+  });
+
+  it('작성자도 편집자도 아니면 정리할 수 없다', async () => {
+    const id = await conflicted({ 'e.txt': { base: 'e', mine: 'e1', theirs: 'e2' } });
+    const stranger = await signup(h.app, '다른 열람자');
+    await join(h.app, stranger, (await createInvite(h.app, owner, repoId, { role: 'viewer' })).code);
+    assert.equal((await resolve(stranger, id, { 'e.txt': 'theirs' })).statusCode, 403);
+    assert.equal((await resolve(owner, id, { 'e.txt': 'theirs' })).statusCode, 200, '편집자는 정리할 수 있다');
   });
 });
