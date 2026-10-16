@@ -1,5 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { ApiError, api, resolveApiUrl } from '../api/client';
+import { ApiError, api, resolveApiUrl, serverSupports } from '../api/client';
 import { listRepoFolder, type RepoFile } from './folder-compare';
 import { HashAbortedError, hashSource } from './hash';
 import { openFolderRef, type FolderRef, type LocalEntry, type LocalFolder } from './local-folder';
@@ -281,7 +281,7 @@ export async function applySync(
   const uploads = of('upload').filter((a) => scan.localEntries.has(a.path)).map((a) => a.path);
   const remoteMoves = of('move-remote').filter((a) => scan.remoteFiles.has(a.from) && scan.localEntries.has(a.path));
   const remoteDeletes = of('delete-remote').filter((a) => scan.remoteFiles.has(a.path)).map((a) => a.path);
-  const changes: { path: string; blobHash: string | null }[] = [];
+  const changes: ({ path: string; blobHash: string | null } | { path: string; movedFrom: string })[] = [];
   const uploadedHashes = new Map<string, string>();
   if (uploads.length > 0) {
     const result = await uploadMany(
@@ -317,10 +317,13 @@ export async function applySync(
         outcome.failures.push(`${move.from} → ${move.path}: ${err instanceof ApiError ? err.message : '옮기지 못했습니다'}`);
       }
     }
-  } else {
+  } else if (remoteMoves.length > 0) {
+    // 수준 5 서버는 이동 제안을 알아듣는다 — 제안 화면에 "이동" 한 줄로 보이고, 정리할 때 한쪽만 빠지지 않는다.
+    const movesKnown = await serverSupports(5).catch(() => false);
     for (const move of remoteMoves) {
       const hash = scan.remoteFiles.get(move.from)!.blobHash;
-      changes.push({ path: repoPath(move.from), blobHash: null }, { path: repoPath(move.path), blobHash: hash });
+      if (movesKnown) changes.push({ path: repoPath(move.path), movedFrom: repoPath(move.from) });
+      else changes.push({ path: repoPath(move.from), blobHash: null }, { path: repoPath(move.path), blobHash: hash });
       uploadedHashes.set(move.path, hash);
     }
   }
@@ -334,7 +337,8 @@ export async function applySync(
       .join(' · ');
     try {
       if (options.isEditor) {
-        await api.commitFiles(repoId, changes, `폴더 동기화 (${state.label}): ${summary}`);
+        const commits = changes.filter((change): change is { path: string; blobHash: string | null } => 'blobHash' in change);
+        await api.commitFiles(repoId, commits, `폴더 동기화 (${state.label}): ${summary}`);
         for (const [path, hash] of uploadedHashes) {
           const entry = scan.localEntries.get(path)!;
           base[path] = { hash, size: entry.size, mtime: entry.mtime };

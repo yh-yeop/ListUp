@@ -22,7 +22,7 @@ import { FileSearch } from '../src/components/FileSearch';
 import { useUnreadActivity } from '../src/lib/activity';
 import { notifySuccess } from '../src/lib/dialogs';
 import { useAsync } from '../src/lib/useAsync';
-import { LEVEL_1_4, useServerLevel } from '../src/lib/useServerLevel';
+import { LEVEL_1_4, LEVEL_1_5, useServerLevel } from '../src/lib/useServerLevel';
 import { useAuth } from '../src/state/auth';
 import { fontSize, radius, spacing, useTheme } from '../src/theme';
 
@@ -133,7 +133,7 @@ export default function ReposScreen() {
         <Caption>{user ? `${user.displayName} 님으로 로그인됨` : ''}</Caption>
       </View>
 
-      {serverLevel >= LEVEL_1_4 ? (
+      {serverLevel >= LEVEL_1_5 ? (
         <>
           <FileSearch placeholder="내 저장소 전부에서 파일 찾기" />
           <Pressable

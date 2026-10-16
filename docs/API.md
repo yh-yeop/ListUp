@@ -45,7 +45,7 @@ Authorization: Bearer <token>
 | GET | `/server/lan` | 로그인. 같은 공유기에서 이 서버에 닿는 주소 `{urls: ["http://192.168.0.10:4000"]}` |
 
 ```json
-{ "ok": true, "time": 1789355589634, "maxUploadBytes": 2147483648, "apiVersion": 1, "apiLevel": 4, "version": "1.4.0", "serverName": "우리집 음악서버", "history": { "days": 30, "keepOlder": "none" } }
+{ "ok": true, "time": 1789355589634, "maxUploadBytes": 2147483648, "apiVersion": 1, "apiLevel": 5, "version": "1.4.0", "serverName": "우리집 음악서버", "history": { "days": 30, "keepOlder": "none" } }
 ```
 
 - **`apiVersion`** — API 호환 버전(`shared` 의 `API_VERSION`). 서버와 앱이 서로 알아듣지 못하게
@@ -55,7 +55,8 @@ Authorization: Bearer <token>
   앱은 자기가 쓰는 기능이 있는 수준(`REQUIRED_SERVER_API_LEVEL`) 미만 서버에는 "서버가 오래됨"으로
   들어가지 않습니다. 2 = 1.2.0 (나눠 올리기·여러 파일 커밋·다운로드 링크·zip·Range·재설정),
   3 = `serverName`·제안 목록 페이지, 4 = 1.4.0 (즉시 올리기·되돌리기·이력 보존·충돌 정리·용량·공개 링크·
-  따라가기·공유기 주소). 앱은 없는 기능을 감추고, 들어가는 조건은 그대로 2 입니다.
+  따라가기·공유기 주소), 5 = 파일 찾기·새 소식·여러 개 한 번에 옮기기·이동 제안. 앱은 없는 기능을 감추고, 들어가는
+  조건은 그대로 2 입니다.
   **필드가 없는 서버(1.1.0 까지)는 `1`** 입니다.
 - `version` — 서버 버전(`server/package.json`). 사람에게 보여주는 용도이고 호환 판단에는 쓰지 않습니다.
 - `maxUploadBytes` — 파일 하나의 업로드 한도. 앱이 올리기 전에 검사합니다.
@@ -140,7 +141,7 @@ npm run reset-password -- me@example.com     # 서버가 켜져 있어도 됩니
 | POST | `/repos/:repoId/files?path=` | editor | multipart 업로드 = 직접 커밋 (201). `path` 가 없으면 파일 이름으로 저장소 맨 위에 |
 | POST | `/repos/:repoId/files/commit` | editor | `{changes:[{path, blobHash\|null}], message?}` — 여러 파일을 스냅샷 하나로 |
 | DELETE | `/repos/:repoId/files?path=` | editor | 파일 또는 폴더 삭제 → `{removed, snapshotId}`. 없으면 404 |
-| POST | `/repos/:repoId/files/move` | editor | `{from, to}` — 파일·폴더 이동/이름 변경 → `{moved, snapshotId}`. 같은 경로·자기 안으로는 400, 없으면 404, 겹치면 409 |
+| POST | `/repos/:repoId/files/move` | editor | `{from, to}` 또는 `{moves: [{from, to}, …]}`(1.4.0, 1,000개까지) — 파일·폴더 이동/이름 변경 → `{moved, snapshotId}`(moved 는 옮긴 파일 수). 여럿이어도 스냅샷 하나. 같은 경로·자기 안으로는 400, 폴더와 그 안의 것을 함께 고르면 400, 없으면 404, 겹치면 409 |
 | GET | `/repos/:repoId/raw?path=&snapshot=&inline=1` | viewer | 파일 내려받기 (`Range` 지원) |
 | POST | `/repos/:repoId/download-link` | viewer | `{path, snapshot?, archive?}` → `{url, expiresAt}` — 로그인 헤더 없이 받는 짧은 링크 |
 | GET | `/dl?t=` | (링크) | 링크로 파일 또는 폴더 zip 받기 |
@@ -328,6 +329,11 @@ POST /api/repos/:repoId/proposals
 
 - `blobHash` 는 `POST /repos/:repoId/blobs` 로 먼저 올려 받은 값입니다.
 - `blobHash: null` 은 삭제 제안입니다.
+- **이동 제안**(1.4.0, API 수준 5) — `{ "path": "보관/회의록.md", "movedFrom": "문서/회의록.md" }`. 서버가 원래 자리의
+  삭제 줄과 새 자리의 더하기 줄(`movedFrom` 이 적힌) 두 줄로 만들어, 반영·충돌 판단은 보통 변경과 같습니다. `blobHash` 를
+  생략하면 원래 파일의 내용 그대로, 주면 옮기면서 내용도 바꿉니다. 원래 파일이 없거나, 새 자리에 이미 파일이 있거나,
+  원래 경로를 따로 또 담으면 400. 폴더는 안의 파일마다 한 줄씩 보냅니다. 충돌 정리에서 한쪽 줄을 빼면 짝도 함께
+  빠집니다(복사나 삭제로 남지 않게). 상세 응답의 변경에 `movedFrom` 이 붙습니다.
 - **`op`(추가/수정/삭제)는 보내지 않습니다.** 서버가 현재 저장소 상태를 보고 판정합니다.
 - 거부되는 경우: 없는 파일 삭제, 내용이 기존과 동일, 같은 경로 중복, 올리지 않은 blob 참조,
   **다른 저장소에 올린 blob 참조**(400), 제안 안의 경로끼리 파일/폴더 이름이 겹침(400), 저장소의 파일·폴더와

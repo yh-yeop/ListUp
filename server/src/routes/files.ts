@@ -26,6 +26,22 @@ import {
 } from '../services/snapshots.ts';
 
 /** 파일명에 따옴표/개행이 들어가도 안전한 Content-Disposition 을 만든다. */
+
+/** 한 번에 옮길 수 있는 항목 수(폴더 하나는 하나로 센다). */
+const MAX_MOVES = 1000;
+
+/** 변경 이력에 남길 말 — 하나면 그대로, 여럿이면 같은 폴더로 간 것인지 본다. */
+function moveMessage(pairs: { from: string; to: string }[]): string {
+  if (pairs.length === 1) return `이동: ${pairs[0].from} → ${pairs[0].to}`;
+  const parentOf = (path: string) => (path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '');
+  const targets = new Set(pairs.map((pair) => parentOf(pair.to)));
+  if (targets.size === 1) {
+    const [target] = targets;
+    return `이동 ${pairs.length}개 → ${target ? `${target}/` : '(맨 위)'}: ${pairs.map((pair) => pair.from).slice(0, 5).join(', ')}${pairs.length > 5 ? ' …' : ''}`;
+  }
+  return `이동 ${pairs.length}개: ${pairs.slice(0, 3).map((pair) => `${pair.from} → ${pair.to}`).join(', ')}${pairs.length > 3 ? ' …' : ''}`;
+}
+
 export function contentDisposition(fileName: string, inline: boolean): string {
   const ascii = fileName.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_');
   // RFC 8187 의 attr-char 에는 `'()*` 가 없는데 encodeURIComponent 는 이들을 남겨 두므로 따로 인코딩한다.
@@ -393,6 +409,10 @@ export async function registerFileRoutes(app: FastifyInstance, ctx: AppContext):
   });
 
   /** 파일/폴더 이름 변경·이동. */
+  /**
+   * 옮기기·이름 바꾸기. `{from, to}` 하나, 또는 `{moves: [{from, to}, …]}` 여럿을 스냅샷 하나로(1.4.0, API 수준 5).
+   * 폴더를 주면 안의 파일이 모두 함께 간다. 여럿이면 모두 지금 저장소를 기준으로 한꺼번에 옮긴다 — 순서에 기대지 않는다.
+   */
   app.post('/repos/:repoId/files/move', async (req) => {
     const user = requireUser(req);
     const { repoId } = req.params as { repoId: string };
@@ -400,38 +420,73 @@ export async function registerFileRoutes(app: FastifyInstance, ctx: AppContext):
     assertWritable(db, repoId);
     const input = body(req);
 
-    const fromRaw = requiredString(input, 'from', { max: 512, label: '원본 경로' });
-    const toRaw = requiredString(input, 'to', { max: 512, label: '새 경로' });
-    const from = normalizePath(fromRaw);
-    const to = normalizePath(toRaw);
-    if (!from || !to) throw badRequest('경로가 올바르지 않습니다.');
-    if (from === to) throw badRequest('경로가 같습니다.');
-    if (to.startsWith(`${from}/`)) throw badRequest('폴더를 자기 자신 아래로 옮길 수 없습니다.');
+    const requested: { from: string; to: string }[] = [];
+    if (input.moves !== undefined) {
+      if (!Array.isArray(input.moves) || input.moves.length === 0) throw badRequest('moves 가 비었습니다.');
+      if (input.moves.length > MAX_MOVES) throw badRequest(`한 번에 ${MAX_MOVES}개까지 옮길 수 있습니다.`);
+      for (const raw of input.moves as unknown[]) {
+        if (!raw || typeof raw !== 'object') throw badRequest('옮길 항목 형식이 올바르지 않습니다.');
+        const item = raw as Record<string, unknown>;
+        requested.push({
+          from: requiredString(item, 'from', { max: 512, label: '원본 경로' }),
+          to: requiredString(item, 'to', { max: 512, label: '새 경로' }),
+        });
+      }
+    } else {
+      requested.push({
+        from: requiredString(input, 'from', { max: 512, label: '원본 경로' }),
+        to: requiredString(input, 'to', { max: 512, label: '새 경로' }),
+      });
+    }
+
+    const pairs = requested.map(({ from: fromRaw, to: toRaw }) => {
+      const from = normalizePath(fromRaw);
+      const to = normalizePath(toRaw);
+      if (!from || !to) throw badRequest(`경로가 올바르지 않습니다: ${fromRaw} → ${toRaw}`);
+      if (from === to) throw badRequest(`경로가 같습니다: ${from}`);
+      if (to.startsWith(`${from}/`)) throw badRequest(`폴더를 자기 자신 아래로 옮길 수 없습니다: ${from}`);
+      return { from, to };
+    });
+    // 고른 것끼리 겹치면(폴더와 그 안의 파일을 같이 고름) 어느 쪽을 따를지 모호하다.
+    for (const a of pairs) {
+      for (const b of pairs) {
+        if (a === b) continue;
+        if (a.from === b.from) throw badRequest(`같은 경로를 두 번 옮기려 합니다: ${a.from}`);
+        if (b.from.startsWith(`${a.from}/`)) throw badRequest(`'${a.from}' 폴더와 그 안의 '${b.from}' 를 함께 옮길 수 없습니다.`);
+      }
+    }
 
     const result = db.transaction(() => {
       const head = getRepoRow(db, repoId)!.head_snapshot_id;
       const manifest = readManifest(db, head);
       const now = Date.now();
-      const prefix = `${from}/`;
       const moves: { from: string; to: string }[] = [];
 
-      for (const path of manifest.keys()) {
-        if (path === from) moves.push({ from: path, to });
-        else if (path.startsWith(prefix)) moves.push({ from: path, to: `${to}/${path.slice(prefix.length)}` });
+      for (const pair of pairs) {
+        const prefix = `${pair.from}/`;
+        let found = false;
+        for (const path of manifest.keys()) {
+          if (path === pair.from) moves.push({ from: path, to: pair.to });
+          else if (path.startsWith(prefix)) moves.push({ from: path, to: `${pair.to}/${path.slice(prefix.length)}` });
+          else continue;
+          found = true;
+        }
+        if (!found) throw notFound(`해당 경로에 파일이 없습니다: ${pair.from}`);
       }
-      if (moves.length === 0) throw notFound('해당 경로에 파일이 없습니다.');
 
-      // 이동으로 사라지는 원본 경로는 빼고, 남는 항목과 새 경로가 겹치는지 본다.
+      // 옮겨 가며 사라지는 원본 경로는 빼고, 남는 항목·서로의 새 경로와 겹치는지 본다.
       const remaining = new Map(manifest);
       for (const move of moves) remaining.delete(move.from);
       for (const move of moves) {
         if (remaining.has(move.to)) throw conflict(`이미 존재하는 경로입니다: ${move.to}`, { conflicts: [move.to] });
         assertNoPathConflict(remaining, move.to);
+        // 새 경로끼리도 하나씩 넣어 가며 본다(두 파일이 같은 자리로, 또는 파일과 폴더 이름이 겹치게).
+        remaining.set(move.to, manifest.get(move.from)!);
       }
 
+      for (const move of moves) manifest.delete(move.from);
       for (const move of moves) {
-        const entry = manifest.get(move.from)!;
-        manifest.delete(move.from);
+        const entry = remaining.get(move.to)!;
         manifest.set(move.to, {
           ...entry,
           path: move.to,
@@ -444,7 +499,7 @@ export async function registerFileRoutes(app: FastifyInstance, ctx: AppContext):
         repoId,
         parentId: head,
         authorId: user.id,
-        message: `이동: ${from} → ${to}`,
+        message: moveMessage(pairs),
         manifest,
         now,
       });

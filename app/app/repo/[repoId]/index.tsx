@@ -28,15 +28,18 @@ import {
   Title,
 } from '../../../src/components/ui';
 import { Breadcrumb, RepoNav } from '../../../src/components/RepoNav';
+import { DragDrop } from '../../../src/components/DragDrop';
 import { FileSearch } from '../../../src/components/FileSearch';
+import { MovePicker } from '../../../src/components/MovePicker';
 import { TransferProgress } from '../../../src/components/TransferProgress';
 import { ApiError, api, getMaxUploadBytes, type UploadSource } from '../../../src/api/client';
 import { confirmAction, notify, notifyError, notifySuccess, notifyWarning } from '../../../src/lib/dialogs';
 import { downloadFromRepo, pickFiles, pickFolder } from '../../../src/lib/files';
 import { localFolderSupported } from '../../../src/lib/local-folder';
+import { describeMoves, fileMoves, planMoveInto, topLevelOnly, type MoveItem } from '../../../src/lib/move';
 import { uploadAndCommit, type UploadItem, type UploadProgress } from '../../../src/lib/transfer';
 import { useAbortable } from '../../../src/lib/useAbortable';
-import { LEVEL_1_4, useServerLevel } from '../../../src/lib/useServerLevel';
+import { LEVEL_1_4, LEVEL_1_5, useServerLevel } from '../../../src/lib/useServerLevel';
 import { useAsync } from '../../../src/lib/useAsync';
 import { fontSize, monoFont, radius, spacing, useTheme } from '../../../src/theme';
 
@@ -82,6 +85,11 @@ export default function RepoFilesScreen() {
   const [busyPath, setBusyPath] = useState<string | null>(null);
   const [editing, setEditing] = useState<Editing | null>(null);
   const [renaming, setRenaming] = useState(false);
+  // 여러 개 고르기(옮기기·지우기)와 옮길 곳 고르기.
+  const [selecting, setSelecting] = useState(false);
+  const [selected, setSelected] = useState<Map<string, MoveItem>>(new Map());
+  const [moveItems, setMoveItems] = useState<MoveItem[]>([]);
+  const [moving, setMoving] = useState(false);
 
   // 변경 이력에서 넘어온 과거 시점. 있으면 그 시점의 목록을 읽기 전용으로 보여준다.
   // 폴더 이동은 path 상태만 바꾸므로 snapshot 파라미터는 그대로 유지된다.
@@ -120,6 +128,12 @@ export default function RepoFilesScreen() {
   const canRestore = isEditor && !!snapshotId && !mirror && serverLevel >= LEVEL_1_4;
   // 계정 없는 사람에게 링크로 보내기 (1.4.0 서버부터).
   const canShare = isEditor && !snapshotId && serverLevel >= LEVEL_1_4;
+  // 열람자는 옮기기를 변경 제안으로 보낸다 (이동 제안은 수준 5 서버부터).
+  const canProposeMove = !isEditor && !!repo && !snapshotId && !mirror && serverLevel >= LEVEL_1_5;
+  const canMove = canEdit || canProposeMove;
+  // 여러 개 고르기·끌어다 놓기는 한 번에 옮기기가 되는 서버에서만.
+  const canSelect = canMove && serverLevel >= LEVEL_1_5;
+  const canDrag = canSelect && Platform.OS === 'web';
   const [syncingMirror, setSyncingMirror] = useState(false);
 
   /** 과거 시점의 내용으로 저장소 전체(''), 폴더, 파일 하나를 되돌린다. */
@@ -190,7 +204,125 @@ export default function RepoFilesScreen() {
 
   function openFolder(nextPath: string) {
     setEditing(null);
+    setSelected(new Map());
     setPath(nextPath);
+  }
+
+  function toggleSelected(item: MoveItem) {
+    setSelected((prev) => {
+      const next = new Map(prev);
+      if (next.has(item.path)) next.delete(item.path);
+      else next.set(item.path, item);
+      return next;
+    });
+  }
+
+  function stopSelecting() {
+    setSelecting(false);
+    setSelected(new Map());
+  }
+
+  /** 끌기 시작한 줄이 고른 것 가운데 하나면 고른 것 전부를, 아니면 그 줄 하나를 싣는다. */
+  function dragItems(item: MoveItem): MoveItem[] {
+    return selected.has(item.path) ? [...selected.values()] : [item];
+  }
+
+  /**
+   * 고른 것을 targetDir 로 옮긴다. 편집자는 바로(여럿이면 스냅샷 하나로), 열람자는 이동 제안으로 — 반영되면 옮겨진다.
+   * 끌어다 놓기·옮길 곳 고르기·여러 개 고르기가 모두 여기로 온다.
+   */
+  async function performMove(items: MoveItem[], targetDir: string, options: { confirm?: boolean } = {}): Promise<boolean> {
+    const plan = planMoveInto(items, targetDir);
+    if (!plan.ok) {
+      notifyWarning(plan.reason);
+      return false;
+    }
+    const where = targetDir ? `'${targetDir}'` : '맨 위';
+    if (options.confirm || !isEditor) {
+      const ok = await confirmAction({
+        title: isEditor ? `${where}로 옮길까요?` : `${where}로 옮기기를 제안할까요?`,
+        message: isEditor
+          ? describeMoves(plan.moves)
+          : `${describeMoves(plan.moves)}\n\n열람 권한이라 변경 제안으로 보냅니다. 편집자가 반영하면 옮겨집니다.`,
+        confirmLabel: isEditor ? '옮기기' : '제안하기',
+      });
+      if (!ok) return false;
+    }
+    setMoving(true);
+    try {
+      if (isEditor) {
+        if (plan.moves.length === 1) await api.movePath(repoId, plan.moves[0].from, plan.moves[0].to);
+        else await api.moveMany(repoId, plan.moves);
+        notifySuccess(`옮겼습니다 — ${describeMoves(plan.moves)}`, '변경 이력에서 되돌릴 수 있습니다.');
+      } else {
+        // 제안은 파일마다 적는다 — 폴더는 안의 파일로 편다.
+        const files: string[] = [];
+        for (const move of plan.moves) {
+          const folder = items.find((item) => item.path === move.from)?.isFolder;
+          if (!folder) files.push(move.from);
+          else {
+            const { tree } = await api.listFiles(repoId, move.from, undefined, { recursive: true });
+            files.push(...tree.files.map((file) => file.path));
+          }
+        }
+        const changes = fileMoves(plan.moves, files);
+        if (changes.length === 0) {
+          notifyWarning('옮길 파일이 없습니다.');
+          return false;
+        }
+        const { proposal } = await api.createProposal(repoId, {
+          title: `옮기기: ${describeMoves(plan.moves)}`.slice(0, 120),
+          changes,
+        });
+        notifySuccess(`변경 제안 #${proposal.number} 로 보냈습니다.`, '편집자가 반영하면 옮겨집니다.');
+        router.push(`/proposal/${proposal.id}`);
+      }
+      setMoveItems([]);
+      stopSelecting();
+      state.refresh();
+      return true;
+    } catch (err) {
+      notifyError(isEditor ? '옮기지 못했습니다.' : '제안하지 못했습니다.', err instanceof ApiError ? err.message : undefined);
+      return false;
+    } finally {
+      setMoving(false);
+    }
+  }
+
+  /** 고른 것을 한 번에 지운다 — 커밋 하나로(편집자). 폴더는 안의 파일로 편다. */
+  async function removeSelected() {
+    const items = topLevelOnly([...selected.values()]);
+    if (items.length === 0) return;
+    const ok = await confirmAction({
+      title: `${items.length}개를 지울까요?`,
+      message: `${items.map((item) => item.path + (item.isFolder ? '/' : '')).slice(0, 8).join('\n')}${items.length > 8 ? '\n…' : ''}\n\n변경 이력에는 남습니다.`,
+      confirmLabel: '삭제',
+      destructive: true,
+    });
+    if (!ok) return;
+    setMoving(true);
+    try {
+      const files: string[] = [];
+      for (const item of items) {
+        if (!item.isFolder) files.push(item.path);
+        else {
+          const { tree } = await api.listFiles(repoId, item.path, undefined, { recursive: true });
+          files.push(...tree.files.map((file) => file.path));
+        }
+      }
+      await api.commitFiles(
+        repoId,
+        files.map((file) => ({ path: file, blobHash: null })),
+        `삭제 ${items.length}개: ${items.map((item) => item.path).slice(0, 5).join(', ')}${items.length > 5 ? ' …' : ''}`,
+      );
+      notifySuccess(`${items.length}개를 지웠습니다.`, '변경 이력에서 되돌릴 수 있습니다.');
+      stopSelecting();
+      state.refresh();
+    } catch (err) {
+      notifyError('지우지 못했습니다.', err instanceof ApiError ? err.message : undefined);
+    } finally {
+      setMoving(false);
+    }
   }
 
   /** snapshot 파라미터를 지워 현재 시점으로 돌아간다. 보고 있던 폴더는 유지된다. */
@@ -402,7 +534,7 @@ export default function RepoFilesScreen() {
 
           <RepoNav repoId={repoId} openProposals={repo.openProposalCount} />
 
-          {!snapshotId && serverLevel >= LEVEL_1_4 ? <FileSearch repoId={repoId} placeholder="이 저장소에서 파일 찾기" /> : null}
+          {!snapshotId && serverLevel >= LEVEL_1_5 ? <FileSearch repoId={repoId} placeholder="이 저장소에서 파일 찾기" /> : null}
 
           {snapshotId ? (
             <View
@@ -541,7 +673,64 @@ export default function RepoFilesScreen() {
             </Caption>
           ) : null}
 
-          <Breadcrumb path={path} onNavigate={openFolder} />
+          <Row gap={spacing.sm} style={{ alignItems: 'center' }}>
+            <View style={{ flex: 1 }}>
+              <Breadcrumb
+                path={path}
+                onNavigate={openFolder}
+                onDropItems={canDrag ? (target, items) => void performMove(items, target) : undefined}
+              />
+            </View>
+            {canSelect && tree && (tree.dirs.length > 0 || tree.files.length > 0) ? (
+              <Button
+                label={selecting ? '고르기 끝' : '여러 개 고르기'}
+                icon={selecting ? 'close' : 'checkbox-outline'}
+                variant="ghost"
+                compact
+                onPress={() => (selecting ? stopSelecting() : setSelecting(true))}
+              />
+            ) : null}
+          </Row>
+
+          {selecting ? (
+            <Card style={{ gap: spacing.sm, paddingVertical: spacing.md }}>
+              <Row gap={spacing.sm} wrap style={{ alignItems: 'center' }}>
+                <Body style={{ fontWeight: '600', flex: 1 }}>{selected.size}개 고름</Body>
+                <Button
+                  label="모두"
+                  variant="ghost"
+                  compact
+                  onPress={() =>
+                    setSelected(
+                      new Map<string, MoveItem>([
+                        ...(tree?.dirs ?? []).map((dir): [string, MoveItem] => [dir.path, { path: dir.path, isFolder: true }]),
+                        ...(tree?.files ?? []).map((file): [string, MoveItem] => [file.path, { path: file.path, isFolder: false }]),
+                      ]),
+                    )
+                  }
+                />
+                <Button
+                  label={isEditor ? '옮기기' : '옮기기 제안'}
+                  icon="arrow-redo-outline"
+                  compact
+                  disabled={selected.size === 0 || moving}
+                  onPress={() => setMoveItems([...selected.values()])}
+                />
+                {canEdit ? (
+                  <Button
+                    label="지우기"
+                    icon="trash-outline"
+                    variant="secondary"
+                    compact
+                    disabled={selected.size === 0 || moving}
+                    loading={moving && moveItems.length === 0}
+                    onPress={() => void removeSelected()}
+                  />
+                ) : null}
+              </Row>
+              {canDrag ? <Caption>고른 것을 폴더나 위의 경로로 끌어다 놓아도 옮겨집니다.</Caption> : null}
+            </Card>
+          ) : null}
 
           {state.loading ? (
             // 폴더를 옮기는 동안 이전 폴더 목록이 새 브레드크럼 아래 남지 않게 한다.
@@ -582,19 +771,31 @@ export default function RepoFilesScreen() {
                           onCancel={() => setEditing(null)}
                         />
                       ) : (
+                        <DragDrop
+                          drag={canDrag ? () => dragItems({ path: dir.path, isFolder: true }) : undefined}
+                          onDrop={canDrag ? (items) => void performMove(items, dir.path) : undefined}
+                        >
                         <Pressable
-                          onPress={() => openFolder(dir.path)}
-                          accessibilityRole="button"
-                          accessibilityLabel={`${dir.name} 폴더 열기`}
+                          onPress={() => (selecting ? toggleSelected({ path: dir.path, isFolder: true }) : openFolder(dir.path))}
+                          accessibilityRole={selecting ? 'checkbox' : 'button'}
+                          aria-checked={selecting ? selected.has(dir.path) : undefined}
+                          accessibilityLabel={selecting ? `${dir.name} 폴더 고르기` : `${dir.name} 폴더 열기`}
                           style={({ pressed }) => ({
                             flexDirection: 'row',
                             alignItems: 'center',
                             gap: spacing.md,
                             paddingVertical: spacing.md,
                             paddingHorizontal: spacing.lg,
-                            backgroundColor: pressed ? colors.surfaceAlt : 'transparent',
+                            backgroundColor: selected.has(dir.path) ? colors.accentSoft : pressed ? colors.surfaceAlt : 'transparent',
                           })}
                         >
+                          {selecting ? (
+                            <Ionicons
+                              name={selected.has(dir.path) ? 'checkbox' : 'square-outline'}
+                              size={20}
+                              color={selected.has(dir.path) ? colors.accent : colors.textMuted}
+                            />
+                          ) : null}
                           <Ionicons name="folder" size={20} color={colors.accent} />
                           <View style={{ flex: 1 }}>
                             <Text
@@ -608,7 +809,7 @@ export default function RepoFilesScreen() {
                               파일 {dir.fileCount}개 · {formatBytes(dir.totalSize)}
                             </Caption>
                           </View>
-                          {busyPath === dir.path ? (
+                          {selecting ? null : busyPath === dir.path ? (
                             <ActivityIndicator size="small" color={colors.textMuted} />
                           ) : (
                             <IconButton
@@ -617,21 +818,28 @@ export default function RepoFilesScreen() {
                               onPress={() => void download(dir.path, `${dir.name}.zip`, true)}
                             />
                           )}
-                          {canRestore ? (
+                          {canRestore && !selecting ? (
                             <IconButton
                               icon="arrow-undo-outline"
                               label={`${dir.name} 폴더를 이 시점으로 되돌리기`}
                               onPress={() => void restoreTo(dir.path, true)}
                             />
                           ) : null}
-                          {canShare ? (
+                          {canShare && !selecting ? (
                             <IconButton
                               icon="share-social-outline"
                               label={`${dir.name} 폴더를 링크로 보내기`}
                               onPress={() => router.push(`/repo/${repoId}/shares?path=${encodeURIComponent(dir.path)}`)}
                             />
                           ) : null}
-                          {canEdit ? (
+                          {canMove && !selecting ? (
+                            <IconButton
+                              icon="arrow-redo-outline"
+                              label={`${dir.name} 폴더 옮기기`}
+                              onPress={() => setMoveItems([{ path: dir.path, isFolder: true }])}
+                            />
+                          ) : null}
+                          {canEdit && !selecting ? (
                             <>
                               <IconButton
                                 icon="create-outline"
@@ -646,8 +854,9 @@ export default function RepoFilesScreen() {
                               />
                             </>
                           ) : null}
-                          <Ionicons name="chevron-forward" size={18} color={colors.textFaint} />
+                          {selecting ? null : <Ionicons name="chevron-forward" size={18} color={colors.textFaint} />}
                         </Pressable>
+                        </DragDrop>
                       )}
                     </View>
                   ))}
@@ -665,19 +874,28 @@ export default function RepoFilesScreen() {
                           onCancel={() => setEditing(null)}
                         />
                       ) : (
+                        <DragDrop drag={canDrag ? () => dragItems({ path: file.path, isFolder: false }) : undefined}>
                         <Pressable
-                          onPress={() => void download(file.path, file.name)}
-                          accessibilityRole="button"
-                          accessibilityLabel={`${file.name} 내려받기`}
+                          onPress={() => (selecting ? toggleSelected({ path: file.path, isFolder: false }) : void download(file.path, file.name))}
+                          accessibilityRole={selecting ? 'checkbox' : 'button'}
+                          aria-checked={selecting ? selected.has(file.path) : undefined}
+                          accessibilityLabel={selecting ? `${file.name} 고르기` : `${file.name} 내려받기`}
                           style={({ pressed }) => ({
                             flexDirection: 'row',
                             alignItems: 'center',
                             gap: spacing.md,
                             paddingVertical: spacing.md,
                             paddingHorizontal: spacing.lg,
-                            backgroundColor: pressed ? colors.surfaceAlt : 'transparent',
+                            backgroundColor: selected.has(file.path) ? colors.accentSoft : pressed ? colors.surfaceAlt : 'transparent',
                           })}
                         >
+                          {selecting ? (
+                            <Ionicons
+                              name={selected.has(file.path) ? 'checkbox' : 'square-outline'}
+                              size={20}
+                              color={selected.has(file.path) ? colors.accent : colors.textMuted}
+                            />
+                          ) : null}
                           <Ionicons
                             name={iconForMime(file.mimeType)}
                             size={20}
@@ -695,7 +913,7 @@ export default function RepoFilesScreen() {
                               {formatBytes(file.size)} · {formatRelativeTime(file.updatedAt)}
                             </Caption>
                           </View>
-                          {busyPath === file.path ? (
+                          {selecting ? null : busyPath === file.path ? (
                             <ActivityIndicator size="small" color={colors.textMuted} />
                           ) : (
                             <>
@@ -718,6 +936,13 @@ export default function RepoFilesScreen() {
                                   onPress={() => router.push(`/repo/${repoId}/shares?path=${encodeURIComponent(file.path)}`)}
                                 />
                               ) : null}
+                              {canMove ? (
+                                <IconButton
+                                  icon="arrow-redo-outline"
+                                  label={`${file.name} 옮기기`}
+                                  onPress={() => setMoveItems([{ path: file.path, isFolder: false }])}
+                                />
+                              ) : null}
                               {canEdit ? (
                                 <>
                                   <IconButton
@@ -736,6 +961,7 @@ export default function RepoFilesScreen() {
                             </>
                           )}
                         </Pressable>
+                        </DragDrop>
                       )}
                     </View>
                   ))}
@@ -745,6 +971,15 @@ export default function RepoFilesScreen() {
           )}
         </>
       ) : null}
+      <MovePicker
+        repoId={repoId}
+        items={moveItems}
+        startDir={path}
+        busy={moving}
+        confirmLabel={isEditor ? '여기로 옮기기' : '여기로 옮기기 제안'}
+        onCancel={() => setMoveItems([])}
+        onConfirm={(target) => void performMove(moveItems, target)}
+      />
     </Screen>
   );
 }

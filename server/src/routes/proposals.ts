@@ -45,8 +45,10 @@ const MAX_TITLE_LENGTH = 120;
 
 interface ChangeInput {
   path: string;
-  /** null 이거나 없으면 삭제 제안. */
+  /** null 이거나 없으면 삭제 제안. movedFrom 이 있으면 없어도 된다(그 파일의 내용 그대로). */
   blobHash?: string | null;
+  /** 이동 제안 — 이 경로에서 path 로 옮긴다(API 수준 5). 원래 경로의 삭제 줄은 서버가 함께 만든다. */
+  movedFrom?: string | null;
 }
 
 export async function registerProposalRoutes(app: FastifyInstance, ctx: AppContext): Promise<void> {
@@ -351,6 +353,16 @@ export async function registerProposalRoutes(app: FastifyInstance, ctx: AppConte
           current?.blob_hash ?? null, current?.size ?? null, proposalId, path);
         notes.push(choice === 'merge' ? `${path}: 줄 단위로 자동으로 합침` : `${path}: 제안 내용 유지 (저장소의 변경을 덮어씀)`);
       }
+      // 이동은 "지우기 + 더하기" 한 쌍이다. 한쪽만 빠지면 복사나 삭제가 되어 버리므로 짝도 함께 뺀다.
+      const left = new Set(readChanges(db, proposalId).map((change) => change.path));
+      for (const change of changes) {
+        if (!change.moved_from) continue;
+        const addLeft = left.has(change.path);
+        const deleteLeft = left.has(change.moved_from);
+        if (addLeft === deleteLeft) continue;
+        remove.run(proposalId, addLeft ? change.path : change.moved_from);
+        notes.push(`${change.moved_from} → ${change.path}: 이동을 통째로 제안에서 뺌`);
+      }
       db.prepare(`UPDATE proposals SET base_snapshot_id = ?, updated_at = ? WHERE id = ?`).run(headId, now, proposalId);
       db.prepare(
         `INSERT INTO proposal_comments (id, proposal_id, author_id, body, created_at) VALUES (?, ?, ?, ?, ?)`,
@@ -523,6 +535,22 @@ export function createProposal(ctx: AppContext, params: CreateProposalParams): s
   const base = readManifest(db, repo.head_snapshot_id);
   const prepared = new Map<string, Omit<ChangeRow, 'proposal_id'>>();
 
+  /** 이 저장소에 올린 내용인지 확인하고 크기를 돌려준다. */
+  const checkBlob = (path: string, blobHash: unknown): { hash: string; size: number } => {
+    if (typeof blobHash !== 'string' || !/^[0-9a-f]{64}$/.test(blobHash)) {
+      throw badRequest(`blobHash 형식이 올바르지 않습니다: ${path}`);
+    }
+    const blob = db
+      .prepare<[string], { hash: string; size: number }>(`SELECT hash, size FROM blobs WHERE hash = ?`)
+      .get(blobHash);
+    if (!blob) throw badRequest(`먼저 파일을 업로드해 주세요: ${path}`);
+    // 다른 저장소에서 알아낸 해시로 남의 파일을 끌어오는 것을 막는다.
+    if (!blobBelongsToRepo(db, repoId, blobHash)) {
+      throw badRequest(`이 저장소에 올린 파일만 제안에 담을 수 있습니다: ${path}`);
+    }
+    return blob;
+  };
+
   for (const raw of rawChanges as ChangeInput[]) {
     if (!raw || typeof raw !== 'object') throw badRequest('변경 항목 형식이 올바르지 않습니다.');
     const path = normalizePath(String(raw.path ?? ''));
@@ -530,8 +558,41 @@ export function createProposal(ctx: AppContext, params: CreateProposalParams): s
     if (prepared.has(path)) throw badRequest(`같은 경로가 두 번 들어 있습니다: ${path}`);
 
     const baseEntry = base.get(path) ?? null;
-    const blobHash = raw.blobHash ?? null;
 
+    if (raw.movedFrom !== undefined && raw.movedFrom !== null) {
+      // 이동 제안 — 원래 자리를 지우고 새 자리에 더한다. 두 줄로 남겨 병합·충돌 판단은 예전 그대로 쓴다.
+      const from = normalizePath(String(raw.movedFrom));
+      if (!from) throw badRequest(`원래 경로가 올바르지 않습니다: ${String(raw.movedFrom)}`);
+      if (from === path) throw badRequest(`같은 자리로는 옮길 수 없습니다: ${path}`);
+      if (prepared.has(from)) throw badRequest(`같은 경로가 두 번 들어 있습니다: ${from}`);
+      const fromEntry = base.get(from);
+      if (!fromEntry) throw badRequest(`옮길 파일이 없습니다: ${from}`);
+      if (baseEntry) throw badRequest(`옮길 자리에 이미 파일이 있습니다: ${path}`);
+      const blob = raw.blobHash ? checkBlob(path, raw.blobHash) : { hash: fromEntry.blob_hash, size: fromEntry.size };
+      prepared.set(from, {
+        path: from,
+        op: 'delete',
+        blob_hash: null,
+        size: 0,
+        mime_type: null,
+        base_blob_hash: fromEntry.blob_hash,
+        base_size: fromEntry.size,
+        moved_from: null,
+      });
+      prepared.set(path, {
+        path,
+        op: 'add',
+        blob_hash: blob.hash,
+        size: blob.size,
+        mime_type: mimeForPath(path),
+        base_blob_hash: null,
+        base_size: null,
+        moved_from: from,
+      });
+      continue;
+    }
+
+    const blobHash = raw.blobHash ?? null;
     if (blobHash === null) {
       // 삭제 제안
       if (!baseEntry) throw badRequest(`없는 파일은 삭제할 수 없습니다: ${path}`);
@@ -543,25 +604,13 @@ export function createProposal(ctx: AppContext, params: CreateProposalParams): s
         mime_type: null,
         base_blob_hash: baseEntry.blob_hash,
         base_size: baseEntry.size,
+        moved_from: null,
       });
       continue;
     }
 
-    if (typeof blobHash !== 'string' || !/^[0-9a-f]{64}$/.test(blobHash)) {
-      throw badRequest(`blobHash 형식이 올바르지 않습니다: ${path}`);
-    }
-    const blob = db
-      .prepare<[string], { hash: string; size: number }>(
-        `SELECT hash, size FROM blobs WHERE hash = ?`,
-      )
-      .get(blobHash);
-    if (!blob) throw badRequest(`먼저 파일을 업로드해 주세요: ${path}`);
-    // 다른 저장소에서 알아낸 해시로 남의 파일을 끌어오는 것을 막는다.
-    if (!blobBelongsToRepo(db, repoId, blobHash)) {
-      throw badRequest(`이 저장소에 올린 파일만 제안에 담을 수 있습니다: ${path}`);
-    }
-
-    if (baseEntry && baseEntry.blob_hash === blobHash) {
+    const blob = checkBlob(path, blobHash);
+    if (baseEntry && baseEntry.blob_hash === blob.hash) {
       throw badRequest(`내용이 그대로입니다: ${path}`);
     }
 
@@ -569,11 +618,12 @@ export function createProposal(ctx: AppContext, params: CreateProposalParams): s
     prepared.set(path, {
       path,
       op,
-      blob_hash: blobHash,
+      blob_hash: blob.hash,
       size: blob.size,
       mime_type: mimeForPath(path),
       base_blob_hash: baseEntry?.blob_hash ?? null,
       base_size: baseEntry?.size ?? null,
+      moved_from: null,
     });
   }
 
@@ -628,8 +678,8 @@ export function createProposal(ctx: AppContext, params: CreateProposalParams): s
 
     const insert = db.prepare(
       `INSERT INTO proposal_changes
-         (proposal_id, path, op, blob_hash, size, mime_type, base_blob_hash, base_size)
-       VALUES (@proposal_id, @path, @op, @blob_hash, @size, @mime_type, @base_blob_hash, @base_size)`,
+         (proposal_id, path, op, blob_hash, size, mime_type, base_blob_hash, base_size, moved_from)
+       VALUES (@proposal_id, @path, @op, @blob_hash, @size, @mime_type, @base_blob_hash, @base_size, @moved_from)`,
     );
     for (const change of prepared.values()) insert.run({ ...change, proposal_id: proposalId });
   })();

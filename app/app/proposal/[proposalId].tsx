@@ -298,11 +298,12 @@ export default function ProposalDetailScreen() {
             <View style={{ paddingHorizontal: spacing.lg, paddingVertical: spacing.sm }}>
               <Body style={{ fontWeight: '600' }}>바뀌는 파일 ({proposal.changes.length})</Body>
             </View>
-            {proposal.changes.map((change, index) => (
+            {shownChanges(proposal.changes).map(({ change, movedFrom }, index) => (
               <View key={change.path}>
                 {index > 0 ? <Divider /> : null}
                 <ChangeRow
                   change={change}
+                  movedFrom={movedFrom}
                   proposalId={proposal.id}
                   repoId={proposal.repoId}
                   status={proposal.status}
@@ -419,14 +420,29 @@ export default function ProposalDetailScreen() {
   );
 }
 
+/**
+ * 이동은 "원래 자리 지우기 + 새 자리 더하기" 두 줄로 온다(API 수준 5). 더하는 줄 하나로 보이고, 원래 자리의 삭제 줄은
+ * 그 안에 함께 적는다. 짝이 없는 삭제·더하기는 그대로.
+ */
+function shownChanges(changes: ProposalChange[]): { change: ProposalChange; movedFrom?: ProposalChange }[] {
+  const byPath = new Map(changes.map((change) => [change.path, change]));
+  const sources = new Set(changes.map((change) => change.movedFrom).filter((path): path is string => !!path && byPath.get(path)?.op === 'delete'));
+  return changes
+    .filter((change) => !(change.op === 'delete' && sources.has(change.path)))
+    .map((change) => ({ change, movedFrom: change.movedFrom ? byPath.get(change.movedFrom) : undefined }));
+}
+
 function ChangeRow({
   change,
+  movedFrom,
   proposalId,
   repoId,
   status,
   baseSnapshotId,
 }: {
   change: ProposalChange;
+  /** 이동이면 원래 자리의 삭제 줄. */
+  movedFrom?: ProposalChange;
   proposalId: string;
   repoId: string;
   status: ProposalStatus;
@@ -435,7 +451,8 @@ function ChangeRow({
   const { colors } = useTheme();
   const [busy, setBusy] = useState<'proposed' | 'base' | null>(null);
 
-  const tone = change.op === 'add' ? 'success' : change.op === 'delete' ? 'danger' : 'accent';
+  const moved = !!movedFrom;
+  const tone = moved ? 'accent' : change.op === 'add' ? 'success' : change.op === 'delete' ? 'danger' : 'accent';
   const name = baseName(change.path);
   // 병합·닫힘 뒤에는 현재본이 이미 바뀌었을 수 있으므로 제안 당시 스냅샷의 원본을 내려준다.
   const baseIsCurrent = status === 'open';
@@ -462,14 +479,20 @@ function ChangeRow({
   return (
     <View style={{ paddingHorizontal: spacing.lg, paddingVertical: spacing.md, gap: spacing.sm }}>
       <Row gap={spacing.sm}>
-        <Badge label={CHANGE_OP_LABEL[change.op]} tone={tone} />
-        <Body numberOfLines={2} style={{ flex: 1, fontFamily: monoFont, fontSize: fontSize.sm }}>
-          {change.path}
+        <Badge label={moved ? '이동' : CHANGE_OP_LABEL[change.op]} tone={tone} />
+        <Body numberOfLines={3} style={{ flex: 1, fontFamily: monoFont, fontSize: fontSize.sm }}>
+          {moved ? `${movedFrom.path} → ${change.path}` : change.path}
         </Body>
       </Row>
 
       <Row gap={spacing.md} wrap>
-        {change.op === 'delete' ? (
+        {moved ? (
+          <Caption>
+            {movedFrom.baseBlobHash === change.blobHash
+              ? `내용 그대로 옮김 · ${formatBytes(change.size)}`
+              : `옮기면서 내용도 바뀜 · ${formatBytes(movedFrom.baseSize ?? 0)} → ${formatBytes(change.size)}`}
+          </Caption>
+        ) : change.op === 'delete' ? (
           <Caption>현재 {formatBytes(change.baseSize ?? 0)} → 삭제</Caption>
         ) : change.op === 'update' ? (
           <Caption>

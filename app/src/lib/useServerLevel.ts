@@ -21,3 +21,6 @@ export function useServerLevel(): number {
 
 /** 1.4.0 기능이 있는 서버의 수준. */
 export const LEVEL_1_4 = 4;
+
+/** 파일 찾기·새 소식·여러 개 옮기기·이동 제안이 있는 서버의 수준. */
+export const LEVEL_1_5 = 5;

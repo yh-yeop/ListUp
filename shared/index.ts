@@ -189,6 +189,11 @@ export interface ProposalChange {
   /** 제안 시점 기준 원본 blob (add 인 경우 null). */
   baseBlobHash: string | null;
   baseSize: number | null;
+  /**
+   * 이동 제안이면 원래 경로(API 수준 5). 그 경로는 같은 제안 안에 삭제 줄로도 들어 있다 — 앱은 둘을 "이동" 한 줄로 보인다.
+   * 옛 서버에는 이 필드가 없다.
+   */
+  movedFrom?: string | null;
 }
 
 export type ProposalStatus = 'open' | 'merged' | 'closed';
@@ -442,11 +447,12 @@ export const API_VERSION = 1;
  * - 3: health 의 serverName, 제안 목록 페이지(`limit`·`before`). 앱은 둘 다 없어도 쓴다.
  * - 4 (1.4.0): 해시로 즉시 올리기, 되돌리기, 이력 보존, 충돌 정리(resolve), 용량 보기, 공개 링크·받기 함,
  *   서버 간 따라가기, 같은 공유기 주소. 앱은 서버 수준이 4 미만이면 그 기능을 감춘다.
+ * - 5 (1.4.0): 파일 찾기, 새 소식, 여러 개 한 번에 옮기기(`files/move` 의 `moves`), 이동 제안(`movedFrom`).
  *
  * API_VERSION 을 올리지 않은 이유: 옛 앱(1.1.0)은 API_VERSION 이 같아야만 들어가서, 올리면 멀쩡히
  * 쓸 수 있는 새 서버에서 옛 앱이 모두 막힌다.
  */
-export const API_LEVEL = 4;
+export const API_LEVEL = 5;
 
 /** 이 앱이 쓰는 기능이 있는 가장 낮은 서버 API_LEVEL. 앱의 업로드·내려받기가 수준 2 를 쓴다. */
 export const REQUIRED_SERVER_API_LEVEL = 2;

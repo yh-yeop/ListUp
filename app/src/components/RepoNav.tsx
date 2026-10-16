@@ -2,7 +2,9 @@ import { Ionicons } from '@expo/vector-icons';
 import { router, usePathname } from 'expo-router';
 import type { ComponentProps } from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
+import type { MoveItem } from '../lib/move';
 import { fontSize, radius, spacing, useTheme } from '../theme';
+import { DragDrop } from './DragDrop';
 
 type IconName = ComponentProps<typeof Ionicons>['name'];
 
@@ -108,9 +110,12 @@ export function RepoNav({ repoId, openProposals }: { repoId: string; openProposa
 export function Breadcrumb({
   path,
   onNavigate,
+  onDropItems,
 }: {
   path: string;
   onNavigate: (nextPath: string) => void;
+  /** 주면 각 단계에 끌어다 놓아 그 폴더로 옮길 수 있다(웹·PC 앱). */
+  onDropItems?: (targetPath: string, items: MoveItem[]) => void;
 }) {
   const { colors } = useTheme();
   const segments = path === '' ? [] : path.split('/');
@@ -119,40 +124,47 @@ export function Breadcrumb({
     <View style={{ alignSelf: 'stretch' }}>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0 }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>
-          <Pressable
-            onPress={() => onNavigate('')}
-            hitSlop={6}
-            accessibilityRole="button"
-            accessibilityLabel="최상위 폴더"
-          >
-            <Ionicons
-              name="home"
-              size={15}
-              color={segments.length === 0 ? colors.text : colors.textMuted}
-            />
-          </Pressable>
+          <DragDrop onDrop={onDropItems ? (items) => onDropItems('', items) : undefined} style={{ borderRadius: radius.sm, padding: 2 }}>
+            <Pressable
+              onPress={() => onNavigate('')}
+              hitSlop={6}
+              accessibilityRole="button"
+              accessibilityLabel="최상위 폴더"
+            >
+              <Ionicons
+                name="home"
+                size={15}
+                color={segments.length === 0 ? colors.text : colors.textMuted}
+              />
+            </Pressable>
+          </DragDrop>
           {segments.map((segment, index) => {
             const target = segments.slice(0, index + 1).join('/');
             const last = index === segments.length - 1;
             return (
               <View key={target} style={{ flexDirection: 'row', alignItems: 'center' }}>
                 <Ionicons name="chevron-forward" size={13} color={colors.textFaint} />
-                <Pressable
-                  onPress={() => onNavigate(target)}
-                  hitSlop={6}
-                  accessibilityRole="button"
-                  accessibilityLabel={`${segment} 폴더`}
+                <DragDrop
+                  onDrop={onDropItems && !last ? (items) => onDropItems(target, items) : undefined}
+                  style={{ borderRadius: radius.sm, paddingHorizontal: 2 }}
                 >
-                  <Text
-                    style={{
-                      color: last ? colors.text : colors.textMuted,
-                      fontSize: fontSize.sm,
-                      fontWeight: last ? '600' : '400',
-                    }}
+                  <Pressable
+                    onPress={() => onNavigate(target)}
+                    hitSlop={6}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${segment} 폴더`}
                   >
-                    {segment}
-                  </Text>
-                </Pressable>
+                    <Text
+                      style={{
+                        color: last ? colors.text : colors.textMuted,
+                        fontSize: fontSize.sm,
+                        fontWeight: last ? '600' : '400',
+                      }}
+                    >
+                      {segment}
+                    </Text>
+                  </Pressable>
+                </DragDrop>
               </View>
             );
           })}

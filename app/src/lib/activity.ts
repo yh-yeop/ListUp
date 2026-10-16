@@ -2,7 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useCallback, useEffect, useState } from 'react';
 import type { ActivityItem } from '@listup/shared';
 import { api, serverSupports } from '../api/client';
-import { LEVEL_1_4 } from './useServerLevel';
+import { LEVEL_1_5 } from './useServerLevel';
 
 /**
  * 새 소식의 "읽지 않음" — 서버마다 마지막으로 본 시각을 기기에 둔다. 그 뒤의 것 중 내가 한 일이 아닌 것을 센다.
@@ -34,7 +34,7 @@ export const unreadOf = (items: ActivityItem[], seenAt: number) => items.filter(
 export function useUnreadActivity(serverId: string, refreshKey = 0): number | null {
   const [count, setCount] = useState<number | null>(null);
   const refresh = useCallback(async () => {
-    if (!(await serverSupports(LEVEL_1_4))) return;
+    if (!(await serverSupports(LEVEL_1_5))) return;
     try {
       const seenAt = await loadSeenAt(serverId);
       const { items } = await api.activity(seenAt, 100);

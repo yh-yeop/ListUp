@@ -33,6 +33,8 @@ export interface ChangeRow {
   mime_type: string | null;
   base_blob_hash: string | null;
   base_size: number | null;
+  /** 이동 제안이면 원래 경로(마이그레이션 v10). */
+  moved_from: string | null;
 }
 
 export function getProposalRow(db: Db, proposalId: string): ProposalRow | undefined {
@@ -56,6 +58,7 @@ export function toChange(row: ChangeRow): ProposalChange {
     mimeType: row.mime_type,
     baseBlobHash: row.base_blob_hash,
     baseSize: row.base_size,
+    movedFrom: row.moved_from ?? null,
   };
 }
 

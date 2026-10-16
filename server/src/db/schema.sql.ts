@@ -390,4 +390,12 @@ export const MIGRATIONS: {
       CREATE INDEX idx_changes_base_blob ON proposal_changes(base_blob_hash);
     `,
   },
+  {
+    version: 10,
+    up: `
+      -- 이동 제안: 더하는 줄에 어디서 왔는지 적는다. 원본 자리는 같은 제안의 삭제 줄로 따로 남아 병합·충돌 판단은
+      -- 예전과 같다 — 이 열은 "지우기 + 더하기"를 한 쌍의 이동으로 보여 주고, 한쪽만 빠지지 않게 묶는 데 쓴다.
+      ALTER TABLE proposal_changes ADD COLUMN moved_from TEXT;
+    `,
+  },
 ];

@@ -580,6 +580,13 @@ export const api = {
       body: { from, to },
     }),
 
+  /** 여러 개를 한 번에 — 스냅샷 하나로(API 수준 5). */
+  moveMany: (repoId: string, moves: { from: string; to: string }[]) =>
+    request<{ moved: number; snapshotId: string }>(`/api/repos/${repoId}/files/move`, {
+      method: 'POST',
+      body: { moves },
+    }),
+
   // 나눠 올리기 (lib/transfer.ts 가 쓴다) ----------------------------------
   /**
    * 나눠 올리기 세션을 연다. `hash` 를 주면 이 저장소에 이미 있는 내용일 때 세션 없이 바로 `blob` 을 준다
@@ -727,7 +734,12 @@ export const api = {
 
   createProposal: (
     repoId: string,
-    payload: { title: string; description?: string; changes: { path: string; blobHash: string | null }[] },
+    payload: {
+      title: string;
+      description?: string;
+      /** movedFrom 은 이동 제안(API 수준 5) — 그 파일을 path 로 옮긴다. blobHash 는 없어도 된다. */
+      changes: ({ path: string; blobHash: string | null } | { path: string; movedFrom: string })[];
+    },
   ) =>
     request<{ proposal: ProposalDetail }>(`/api/repos/${repoId}/proposals`, {
       method: 'POST',
