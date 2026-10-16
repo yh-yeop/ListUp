@@ -296,6 +296,8 @@ export async function registerFileRoutes(app: FastifyInstance, ctx: AppContext):
     if (target === null) throw badRequest('경로가 올바르지 않습니다.');
 
     const result = db.transaction(() => {
+      // 트랜잭션 안에서 다시 — 그 사이 이력 정리로 시점이 사라졌으면 빈 목록으로 되돌리면 안 된다.
+      if (!snapshotBelongsTo(db, snapshotId, repoId)) throw notFound('그 시점을 찾을 수 없습니다.');
       const head = getRepoRow(db, repoId)!.head_snapshot_id;
       const current = readManifest(db, head);
       const past = readManifest(db, snapshotId);
@@ -319,7 +321,8 @@ export async function registerFileRoutes(app: FastifyInstance, ctx: AppContext):
       for (const entry of pastInScope) {
         const now = current.get(entry.path);
         if (now?.blob_hash === entry.blob_hash) continue;
-        manifest.set(entry.path, { ...entry });
+        // 되돌린 파일도 지금 바뀐 것이다 — 다른 변경처럼 지금 시각을 적는다.
+        manifest.set(entry.path, { ...entry, updated_at: Date.now() });
         if (now) counts.updated += 1;
         else {
           counts.added += 1;

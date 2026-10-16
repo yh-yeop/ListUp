@@ -1,9 +1,10 @@
 import { Readable } from 'node:stream';
-import { normalizePath, type MirrorManifest, type RepoMirror } from '@listup/shared';
+import { MAX_FILES_PER_REPO, normalizePath, type MirrorManifest, type RepoMirror } from '@listup/shared';
 import type { AppContext } from '../context.ts';
 import type { Db } from '../db/index.ts';
-import { badRequest, conflict } from '../lib/errors.ts';
+import { badRequest, conflict, notFound } from '../lib/errors.ts';
 import { mimeForPath } from '../lib/mime.ts';
+import { blobBelongsToRepo } from './proposals.ts';
 import { isMirrorSyncing, markMirrorSyncing } from './repos.ts';
 import { readManifest, writeSnapshot, type EntryRow } from './snapshots.ts';
 
@@ -22,6 +23,8 @@ import { readManifest, writeSnapshot, type EntryRow } from './snapshots.ts';
  */
 
 const MANIFEST_TIMEOUT_MS = 30_000;
+/** 내용 하나를 받는 동안 기다리는 최대 시간 — 멈춘 원본이 가져오기를 영영 붙들지 않게. */
+const BLOB_TIMEOUT_MS = 10 * 60 * 1000;
 const MAX_MANIFEST_BYTES = 32 * 1024 * 1024;
 const HASH_RE = /^[0-9a-f]{64}$/;
 
@@ -66,11 +69,24 @@ export async function fetchMirrorManifest(sourceUrl: string, token: string): Pro
   if (!response.ok) throw badRequest(UNREACHABLE);
   const length = Number(response.headers.get('content-length') ?? 0);
   if (length > MAX_MANIFEST_BYTES) throw badRequest('원본 저장소가 너무 큽니다.');
+  // 본문을 다 받기 전에 크기를 센다 — 길이를 알려 주지 않는(chunked) 응답이 끝없이 와도 메모리가 차지 않게.
   let parsed: unknown;
   try {
-    const text = await response.text();
-    if (text.length > MAX_MANIFEST_BYTES) throw new Error('too large');
-    parsed = JSON.parse(text);
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    if (!response.body) throw new Error('empty');
+    const reader = response.body.getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > MAX_MANIFEST_BYTES) {
+        await reader.cancel();
+        throw new Error('too large');
+      }
+      chunks.push(value);
+    }
+    parsed = JSON.parse(Buffer.concat(chunks).toString('utf8'));
   } catch {
     throw badRequest(UNREACHABLE);
   }
@@ -127,9 +143,11 @@ export async function syncMirror(ctx: AppContext, repoId: string): Promise<SyncR
     }
 
     // 원본의 경로를 이 서버의 규칙으로 다시 검사한다.
+    const sourceHead = typeof manifest.head === 'string' ? manifest.head : null;
     const next = new Map<string, EntryRow>();
     let total = 0;
     for (const file of manifest.files) {
+      if (!file || typeof file !== 'object') continue;
       const path = typeof file.path === 'string' ? normalizePath(file.path) : null;
       if (!path || typeof file.blobHash !== 'string' || !HASH_RE.test(file.blobHash)) continue;
       if (!Number.isSafeInteger(file.size) || file.size < 0 || file.size > config.maxUploadBytes) continue;
@@ -143,26 +161,33 @@ export async function syncMirror(ctx: AppContext, repoId: string): Promise<SyncR
       });
     }
     if (total > config.maxRepoBytes) throw badRequest('원본 저장소가 이 서버의 저장소 용량 한도를 넘습니다.');
+    if (next.size > MAX_FILES_PER_REPO) throw badRequest(`원본 저장소의 파일이 이 서버의 한도(${MAX_FILES_PER_REPO}개)를 넘습니다.`);
 
-    const owner = db.prepare<[string], { owner_id: string }>(`SELECT owner_id FROM repos WHERE id = ?`).get(repoId)!.owner_id;
+    const ownerRow = db.prepare<[string], { owner_id: string }>(`SELECT owner_id FROM repos WHERE id = ?`).get(repoId);
+    if (!ownerRow) throw notFound('저장소가 지워졌습니다.');
+    const owner = ownerRow.owner_id;
     const result: SyncResult = { changed: false, fetched: 0, fetchedBytes: 0 };
     const known = db.prepare<[string], { size: number }>(`SELECT size FROM blobs WHERE hash = ?`);
     const fetchedHashes = new Set<string>();
     for (const entry of next.values()) {
       if (fetchedHashes.has(entry.blob_hash)) continue;
-      if (known.get(entry.blob_hash) && (await blobs.has(entry.blob_hash))) continue;
+      // 이 서버에 이미 있어도 **이 저장소의** 것일 때만 다시 받지 않는다 — 해시만 아는 남의 저장소 내용을 원본 목록에
+      // 끼워 넣어 가져오지 못하게(원본이 그 바이트를 실제로 주어야 한다).
+      if (known.get(entry.blob_hash) && blobBelongsToRepo(db, repoId, entry.blob_hash) && (await blobs.has(entry.blob_hash))) continue;
       let response: Response;
       try {
         response = await fetch(`${mirror.source_url}/api/s/${mirror.source_token}/mirror/blobs/${entry.blob_hash}`, {
           redirect: 'error',
+          signal: AbortSignal.timeout(BLOB_TIMEOUT_MS),
         });
       } catch {
         throw badRequest(UNREACHABLE);
       }
       if (!response.ok || !response.body) throw badRequest(`원본에서 내용을 받지 못했습니다: ${entry.path}`);
+      // 목록이 말한 크기까지만 받는다.
       const stored = await blobs.writeStream(
         Readable.fromWeb(response.body as import('node:stream/web').ReadableStream),
-        config.maxUploadBytes,
+        entry.size,
       );
       if (stored.hash !== entry.blob_hash || stored.size !== entry.size) {
         // 엉뚱한 내용이 이미 이 서버에 있던 것과 같다면 그 파일은 지우지 않는다.
@@ -178,7 +203,10 @@ export async function syncMirror(ctx: AppContext, repoId: string): Promise<SyncR
     }
 
     db.transaction(() => {
-      const repo = db.prepare<[string], { head_snapshot_id: string | null }>(`SELECT head_snapshot_id FROM repos WHERE id = ?`).get(repoId)!;
+      // 받는 동안 따라가기를 그만뒀거나(그 뒤 사람이 올린 것을 덮어쓰면 안 된다) 저장소가 지워졌으면 반영하지 않는다.
+      if (!getMirror(db, repoId)) throw conflict('받는 사이 따라가기를 그만뒀습니다.');
+      const repo = db.prepare<[string], { head_snapshot_id: string | null }>(`SELECT head_snapshot_id FROM repos WHERE id = ?`).get(repoId);
+      if (!repo) throw notFound('저장소가 지워졌습니다.');
       const current = readManifest(db, repo.head_snapshot_id);
       const record = db.prepare(
         `INSERT OR IGNORE INTO repo_blobs (repo_id, hash, uploaded_by, created_at) VALUES (?, ?, ?, ?)`,
@@ -197,7 +225,7 @@ export async function syncMirror(ctx: AppContext, repoId: string): Promise<SyncR
         result.changed = true;
       }
       db.prepare(`UPDATE mirrors SET source_head = ?, last_synced_at = ?, last_error = NULL WHERE repo_id = ?`).run(
-        manifest.head,
+        sourceHead,
         Date.now(),
         repoId,
       );

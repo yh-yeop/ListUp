@@ -114,7 +114,8 @@ export const MAX_MERGE_BYTES = 1024 * 1024;
 export function decodeText(buffer: Buffer): string | null {
   if (buffer.length > MAX_MERGE_BYTES || buffer.includes(0)) return null;
   try {
-    return new TextDecoder('utf-8', { fatal: true }).decode(buffer);
+    // BOM 은 글자가 아니지만 파일의 일부다 — 합친 결과에서 사라지지 않게 그대로 둔다.
+    return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(buffer);
   } catch {
     return null;
   }

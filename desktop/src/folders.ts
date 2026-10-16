@@ -108,6 +108,15 @@ export async function trashFile(root: string, relativePath: string): Promise<voi
   await shell.trashItem(target);
 }
 
+/** 폴더 안에서 옮기기·이름 바꾸기 — 동기화가 저장소에서 옮긴 파일을 따라간다. 덮어쓰지 않는다. */
+export async function moveFile(root: string, from: string, to: string): Promise<void> {
+  const source = resolveInside(root, from);
+  const target = resolveInside(root, to);
+  if (fs.existsSync(target)) throw new Error(`가는 자리에 이미 파일이 있습니다: ${to}`);
+  await fsp.mkdir(path.dirname(target), { recursive: true });
+  await fsp.rename(source, target);
+}
+
 /** 받아서 임시 이름으로 쓴 뒤 옮긴다 — 끊겨도 반쯤 받은 파일이 진짜 이름으로 남지 않게. */
 export async function saveUrl(
   root: string,

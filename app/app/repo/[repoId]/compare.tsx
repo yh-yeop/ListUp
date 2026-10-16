@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Stack, router, useLocalSearchParams } from 'expo-router';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Platform, Pressable, Switch, Text, View } from 'react-native';
 import { formatBytes, hasRole, normalizePath, type RepoSummary } from '@listup/shared';
 import {
@@ -37,6 +37,9 @@ import { fontSize, monoFont, spacing, useTheme } from '../../../src/theme';
 type Tab = 'repoOnly' | 'localOnly' | 'both' | 'moved';
 
 /** 한 번에 그리는 최대 줄 수 — 수천 개를 한꺼번에 그리면 느리다. 고르기는 전체에 적용된다. */
+/** 해시 표의 열쇠 — 경로가 같아도 크기나 고친 시각이 다르면 다른 파일이다. */
+const hashKeyOf = (entry: { relativePath: string; size: number; mtime?: number | null }) => `${entry.relativePath}|${entry.size}|${entry.mtime ?? ''}`;
+
 const PAGE = 200;
 
 /**
@@ -81,16 +84,19 @@ export default function CompareScreen() {
     [repoFiles, folder, byName],
   );
 
-  // 내용으로 확인하면 필요한 파일만 해시를 계산한다(크기가 맞는 것만). 같은 파일은 앱을 켜 있는 동안 다시 계산하지 않는다.
+  // 내용으로 확인하면 필요한 파일만 해시를 계산한다(크기가 맞는 것만). 표의 열쇠에 크기·고친 시각을 넣어, 다시 훑어 바뀐
+  // 파일은 저절로 다시 읽고 같은 파일은 앱을 켜 있는 동안 다시 계산하지 않는다.
+  const hashRun = useRef(0);
   useEffect(() => {
     if (!byContent || !comparison || !repoFiles || !folder) return;
-    const candidates = hashCandidates(comparison, repoFiles).filter((entry) => !localHashes.has(entry.relativePath));
+    const candidates = hashCandidates(comparison, repoFiles).filter((entry) => !localHashes.has(hashKeyOf(entry)));
     if (candidates.length === 0) return;
+    const run = hashRun.current;
     const signal = hashControl.start();
     const totalBytes = candidates.reduce((sum, entry) => sum + entry.size, 0);
     setHashing(true);
     void (async () => {
-      const next = new Map(localHashes);
+      const next = new Map<string, string>();
       let doneBytes = 0;
       try {
         for (const [index, entry] of candidates.entries()) {
@@ -100,9 +106,9 @@ export default function CompareScreen() {
               value: { sentBytes: doneBytes + bytes, totalBytes, doneFiles: index, totalFiles: candidates.length, current: entry.name },
             });
           report(0);
-          const key = `${folder.label}|${entry.relativePath}|${entry.size}|${entry.mtime ?? ''}`;
+          const key = `${folder.label}|${hashKeyOf(entry)}`;
           try {
-            next.set(entry.relativePath, await hashWithMemo(key, entry.source, { signal, onProgress: report }));
+            next.set(hashKeyOf(entry), await hashWithMemo(key, entry.source, { signal, onProgress: report }));
           } catch (err) {
             if (err instanceof HashAbortedError) throw err;
             // 읽지 못한 파일은 모르는 채로 둔다.
@@ -113,7 +119,14 @@ export default function CompareScreen() {
         // 멈췄다 — 계산한 데까지만 쓴다.
       } finally {
         hashControl.finish();
-        setLocalHashes(next);
+        // 그새 다른 폴더를 골랐으면 이 결과는 버린다. 아니면 계산한 것을 보탠다(겹쳐 돈 것도 잃지 않게).
+        if (hashRun.current === run) {
+          setLocalHashes((prev) => {
+            const merged = new Map(prev);
+            for (const [key, hash] of next) merged.set(key, hash);
+            return merged;
+          });
+        }
         setProgress(null);
         setHashing(false);
       }
@@ -123,12 +136,23 @@ export default function CompareScreen() {
 
   // 폴더를 새로 고르면 계산한 해시를 버린다(같은 경로라도 다른 파일이다).
   useEffect(() => {
+    hashRun.current += 1;
     setLocalHashes(new Map());
   }, [folder?.label]);
 
+  /** 지금 폴더의 파일 경로 → 해시(계산한 것만). */
+  const hashesByPath = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const entry of folder?.entries ?? []) {
+      const hash = localHashes.get(hashKeyOf(entry));
+      if (hash) map.set(entry.relativePath, hash);
+    }
+    return map;
+  }, [folder, localHashes]);
+
   const findings = useMemo(
-    () => (byContent && comparison && repoFiles ? contentFindings(comparison, localHashes, repoFiles) : null),
-    [byContent, comparison, localHashes, repoFiles],
+    () => (byContent && comparison && repoFiles ? contentFindings(comparison, hashesByPath, repoFiles) : null),
+    [byContent, comparison, hashesByPath, repoFiles],
   );
   const movedLocal = new Set(findings?.moved.map((pair) => pair.local.relativePath));
   const movedRepo = new Set(findings?.moved.map((pair) => pair.repo.path));

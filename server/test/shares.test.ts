@@ -58,11 +58,12 @@ describe('공개 링크', () => {
     assert.equal(zip.headers['content-type'], 'application/zip');
   });
 
-  it('횟수 한도 — 다 쓰면 409, 이어받기는 세지 않는다', async () => {
+  it('횟수 한도 — 다 쓰면 409, If-Range 로 밝힌 이어받기만 세지 않는다', async () => {
     const share = (await make(owner, { kind: 'download', path: '비밀.txt', maxUses: 1 })).json().share;
-    const resume = await pub('GET', `${share.token}/raw`, undefined, { range: 'bytes=3-' });
-    assert.equal(resume.statusCode, 206);
-    assert.equal((await pub('GET', `${share.token}/raw`)).statusCode, 200);
+    const first = await pub('GET', `${share.token}/raw`);
+    assert.equal(first.statusCode, 200);
+    const resume = await pub('GET', `${share.token}/raw`, undefined, { range: 'bytes=3-', 'if-range': first.headers.etag as string });
+    assert.equal(resume.statusCode, 206, '같은 내용의 이어받기는 횟수를 쓰지 않는다');
     const used = await pub('GET', `${share.token}/raw`);
     assert.equal(used.statusCode, 409);
     assert.match(used.json().error.message, /횟수/);
@@ -124,6 +125,33 @@ describe('공개 링크', () => {
     const probe = await pub('POST', `${share.token}/uploads`, { name: 'x', size: 7, hash: sha256(Buffer.from('사진1')) });
     assert.equal(probe.statusCode, 201);
     assert.ok(probe.json().upload);
+    // 보낼 때도 이 링크로 올린 내용만 — 저장소에 있는 해시를 그냥 적어 내면 거절한다(이유는 하나로).
+    const forged = await pub('POST', `${share.token}/submit`, {
+      name: '손님',
+      files: [{ path: 'x.txt', blobHash: sha256(Buffer.from('사진1')) }],
+    });
+    assert.equal(forged.statusCode, 400);
+    assert.match(forged.json().error.message, /이 받기 함으로 올린 파일이 아닙니다/);
+    const unknown = await pub('POST', `${share.token}/submit`, { name: '손님', files: [{ path: 'x.txt', blobHash: '0'.repeat(64) }] });
+    assert.equal(unknown.json().error.message, forged.json().error.message, '없는 해시와 남의 해시를 가르지 않는다');
+  });
+
+  it('받기 함 — 열어 둔 세션도 남은 용량에서 빼고, 열 수 있는 수에 한도가 있다', async () => {
+    const share = (await make(editor, { kind: 'upload', maxMb: 1 })).json().share;
+    const half = 600 * 1024;
+    assert.equal((await pub('POST', `${share.token}/uploads`, { name: 'a', size: half })).statusCode, 201);
+    const second = await pub('POST', `${share.token}/uploads`, { name: 'b', size: half });
+    assert.equal(second.statusCode, 413, '열어 둔 세션의 크기도 센다');
+    for (let i = 0; i < 9; i += 1) assert.equal((await pub('POST', `${share.token}/uploads`, { name: `s${i}`, size: 1 })).statusCode, 201);
+    assert.equal((await pub('POST', `${share.token}/uploads`, { name: 'one-more', size: 1 })).statusCode, 409, '11번째 세션은 막는다');
+    // 회수하면 세션도 치운다.
+    await h.app.inject({ method: 'DELETE', url: `/api/shares/${share.id}`, headers: auth(editor) });
+    const left = h.ctx.db.prepare('SELECT COUNT(*) AS n FROM upload_sessions WHERE share_id = ?').get(share.id) as { n: number };
+    assert.equal(left.n, 0);
+  });
+
+  it('받기 함은 폴더에만 — 파일 경로에는 만들 수 없다', async () => {
+    assert.equal((await make(editor, { kind: 'upload', path: '비밀.txt' })).statusCode, 400);
   });
 
   it('따라가기 키 — 소유자만, 지금 모습과 지금 파일 내용만 준다', async () => {
@@ -141,7 +169,8 @@ describe('공개 링크', () => {
     assert.ok(editorList.json().shares.every((s: { kind: string }) => s.kind !== 'mirror'), '편집자에게는 따라가기 키를 보이지 않는다');
   });
 
-  it('토큰은 로그에 남기지 않는다', () => {
+  it('토큰은 로그에 남기지 않는다 — API 경로도, 사람에게 주는 링크도', () => {
     assert.equal(maskUrl('/api/s/abcDEF123_-xyz456789012/raw?path=a'), '/api/s/***/raw?path=a');
+    assert.equal(maskUrl('/s/abcDEF123_-xyz456789012'), '/s/***');
   });
 });

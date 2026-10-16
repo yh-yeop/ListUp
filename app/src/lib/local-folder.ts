@@ -46,6 +46,8 @@ export interface LocalFolder {
     | null;
   /** 폴더 안 파일을 지운다(PC 앱은 휴지통으로). 지울 수 없으면 null. */
   remove: ((relativePath: string) => Promise<void>) | null;
+  /** 폴더 안에서 옮기기·이름 바꾸기(동기화가 저장소의 옮김을 따라간다). 못 하면 null — 받고 지우는 것으로 대신한다. */
+  move: ((from: string, to: string) => Promise<void>) | null;
   /** 다시 열 때 쓰는 참조. 브라우저는 null. */
   ref: FolderRef | null;
 }
@@ -103,6 +105,7 @@ async function scanDesktop(root: string): Promise<LocalFolder> {
       await folders.save(root, relativePath, url, options);
     },
     remove: folders.trash ? (relativePath) => folders.trash!(root, relativePath) : null,
+    move: folders.move ? (from, to) => folders.move!(root, from, to) : null,
     ref: { kind: 'desktop', root },
   };
 }
@@ -158,6 +161,17 @@ function scanAndroid(root: Directory): LocalFolder {
     remove: async (relativePath) => {
       const file = findAndroidFile(root, relativePath);
       if (file) file.delete();
+    },
+    move: async (from, to) => {
+      const file = findAndroidFile(root, from);
+      if (!file) throw new Error(`없는 파일입니다: ${from}`);
+      const segments = to.split('/');
+      const name = segments.pop()!;
+      let dir = root;
+      for (const segment of segments) dir = childDirectory(dir, segment);
+      if (findAndroidFile(root, to)) throw new Error(`가는 자리에 이미 파일이 있습니다: ${to}`);
+      const target = new File(dir, name);
+      file.move(target);
     },
     ref: { kind: 'android', uri: root.uri },
   };
@@ -289,6 +303,7 @@ function pickOnWeb(): Promise<LocalFolder | null> {
         rescan: null,
         save: null,
         remove: null,
+        move: null,
         ref: null,
       });
     });

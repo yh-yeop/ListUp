@@ -49,6 +49,8 @@ const MAX_LABEL = 60;
 const MAX_GUEST_NAME = 40;
 const MAX_MESSAGE = 2000;
 const MAX_SUBMIT_FILES = 200;
+/** 한 받기 함에 동시에 열어 둘 수 있는 올리기 세션 — 손님은 계정이 없으니 끝내지 않는 세션으로 디스크를 채우지 못하게. */
+const MAX_GUEST_SESSIONS = 10;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 interface ShareRow {
@@ -106,18 +108,25 @@ export async function registerShareRoutes(app: FastifyInstance, ctx: AppContext)
     };
   }
 
-  /** 토큰으로 링크를 찾는다. 없으면 404, 쓸 수 없으면 409 (어떤 이유인지는 알려 준다). */
-  function requireShare(req: FastifyRequest, kind: ShareKind): ShareRow {
+  /**
+   * 토큰으로 링크를 찾는다. 없으면 404, 쓸 수 없으면 409 (어떤 이유인지는 알려 준다).
+   * `resuming` 이면 횟수를 다 썼어도 통과시킨다 — 받다 끊긴 것을 이어받는 요청이다(회수·만료는 그래도 막는다).
+   */
+  function requireShare(req: FastifyRequest, kind: ShareKind, resuming = false): ShareRow {
     const { token } = req.params as { token: string };
     const row =
       typeof token === 'string' && /^[A-Za-z0-9_-]{16,64}$/.test(token)
         ? db.prepare<[string], ShareRow>(`SELECT * FROM shares WHERE token = ?`).get(token)
         : undefined;
     if (!row || row.kind !== kind) throw notFound('링크를 찾을 수 없습니다.');
-    const problem = problemOf(row);
+    const problem = problemOf(resuming ? { ...row, max_uses: null } : row);
     if (problem) throw conflict(problem);
     return row;
   }
+
+  /** 같은 내용의 이어받기인지 — Range 가 처음이 아니고 If-Range 가 있다(어느 내용인지는 받을 때 견준다). */
+  const isResume = (req: FastifyRequest) =>
+    typeof req.headers.range === 'string' && !/^bytes=0-/.test(req.headers.range) && typeof req.headers['if-range'] === 'string';
 
   const headOf = (repoId: string) =>
     db.prepare<[string], { head_snapshot_id: string | null; name: string; description: string }>(
@@ -153,6 +162,9 @@ export async function registerShareRoutes(app: FastifyInstance, ctx: AppContext)
       const manifest = readManifest(db, head);
       const exists = path === '' ? manifest.size > 0 : manifest.has(path) || [...manifest.keys()].some((p) => p.startsWith(`${path}/`));
       if (!exists) throw notFound('그 경로에 파일이 없습니다.');
+    }
+    if (kind === 'upload' && path !== '' && readManifest(db, headOf(repoId).head_snapshot_id).has(path)) {
+      throw badRequest('받기 함은 폴더에만 만들 수 있습니다 — 그 경로는 파일입니다.');
     }
 
     const days = input.expiresInDays;
@@ -219,7 +231,13 @@ export async function registerShareRoutes(app: FastifyInstance, ctx: AppContext)
     if (!row) throw notFound('링크를 찾을 수 없습니다.');
     const { role } = requireAccess(db, row.repo_id, user.id, 'editor');
     if (row.created_by !== user.id && role !== 'owner') throw forbidden('만든 사람이나 소유자만 회수할 수 있습니다.');
-    if (row.revoked_at === null) db.prepare(`UPDATE shares SET revoked_at = ? WHERE id = ?`).run(Date.now(), shareId);
+    if (row.revoked_at === null) {
+      db.prepare(`UPDATE shares SET revoked_at = ? WHERE id = ?`).run(Date.now(), shareId);
+      // 손님이 올리던 세션은 바로 치운다(안 치워도 GC 가 하지만 24시간 디스크를 차지한다).
+      const sessions = db.prepare<[string], { id: string }>(`SELECT id FROM upload_sessions WHERE share_id = ?`).all(shareId);
+      db.prepare(`DELETE FROM upload_sessions WHERE share_id = ?`).run(shareId);
+      for (const { id } of sessions) await ctx.blobs.removeSession(id).catch(() => {});
+    }
     return { share: toShare(db.prepare<[string], ShareRow>(`SELECT * FROM shares WHERE id = ?`).get(shareId)!) };
   });
 
@@ -240,11 +258,15 @@ export async function registerShareRoutes(app: FastifyInstance, ctx: AppContext)
     return { path: row.path ? `${row.path}/${rel}` : rel, isFile };
   }
 
-  /** 받은 횟수를 센다. 이어받기(0 이 아닌 곳부터의 Range)·HEAD 는 세지 않는다. */
-  function countDownload(req: FastifyRequest, row: ShareRow): void {
+  /**
+   * 받은 횟수를 센다. HEAD 와, 같은 내용임을 `If-Range` 로 밝힌 이어받기는 세지 않는다 — Range 만 주면 처음부터
+   * 조각조각 받아 횟수를 피할 수 있으므로 그것은 센다.
+   */
+  function countDownload(req: FastifyRequest, row: ShareRow, hash: string | null): void {
     if (req.method === 'HEAD') return;
     const range = req.headers.range;
-    if (typeof range === 'string' && !/^bytes=0-/.test(range)) return;
+    const ifRange = req.headers['if-range'];
+    if (typeof range === 'string' && !/^bytes=0-/.test(range) && hash !== null && ifRange === `"${hash}"`) return;
     db.prepare(`UPDATE shares SET use_count = use_count + 1 WHERE id = ?`).run(row.id);
   }
 
@@ -284,13 +306,17 @@ export async function registerShareRoutes(app: FastifyInstance, ctx: AppContext)
   });
 
   app.get('/s/:token/raw', async (req, reply) => {
-    const row = requireShare(req, 'download');
+    const row = requireShare(req, 'download', isResume(req));
     const relative = String((req.query as { path?: unknown }).path ?? '');
     const { path } = resolveDownload(row, relative);
     const head = headOf(row.repo_id).head_snapshot_id;
     const entry = head ? readEntry(db, head, path) : undefined;
     if (!entry) throw notFound('파일을 찾을 수 없습니다.');
-    countDownload(req, row);
+    // 이어받기라고 들어왔는데 다른 내용을 가리키면(If-Range 불일치) 처음부터 주는 셈이라 횟수를 본다.
+    if (isResume(req) && req.headers['if-range'] !== `"${entry.blob_hash}"` && row.max_uses !== null && row.use_count >= row.max_uses) {
+      throw conflict('정해진 횟수를 다 쓴 링크입니다.');
+    }
+    countDownload(req, row, entry.blob_hash);
     return sendBlob(reply, ctx, entry.blob_hash, {
       fileName: baseName(entry.path),
       mimeType: entry.mime_type,
@@ -306,7 +332,7 @@ export async function registerShareRoutes(app: FastifyInstance, ctx: AppContext)
     if (row.path !== '' && readManifest(db, repo.head_snapshot_id).has(row.path)) {
       throw badRequest('파일 하나짜리 링크입니다 — 그대로 받아 주세요.');
     }
-    countDownload(req, row);
+    countDownload(req, row, null);
     return sendArchive(reply, ctx, repo.name, repo.head_snapshot_id, row.path);
   });
 
@@ -327,6 +353,13 @@ export async function registerShareRoutes(app: FastifyInstance, ctx: AppContext)
 
   const remaining = (share: ShareRow) =>
     share.max_bytes === null ? Infinity : share.max_bytes - share.used_bytes;
+  /** 이 링크로 열려 있는(끝나지 않은) 세션 수와 그 크기의 합 — 열어 둔 것도 남은 용량에서 미리 뺀다. */
+  const openSessions = (shareId: string) =>
+    db
+      .prepare<[string], { n: number; bytes: number }>(
+        `SELECT COUNT(*) AS n, COALESCE(SUM(size), 0) AS bytes FROM upload_sessions WHERE share_id = ?`,
+      )
+      .get(shareId)!;
 
   app.post('/s/:token/uploads', async (req, reply) => {
     const share = requireShare(req, 'upload');
@@ -344,7 +377,9 @@ export async function registerShareRoutes(app: FastifyInstance, ctx: AppContext)
       shareId: share.id,
       allowInstant: false,
       checkQuota: (bytes) => {
-        if (bytes > remaining(share)) throw tooLarge('이 받기 함에 남은 용량을 넘습니다.');
+        const open = openSessions(share.id);
+        if (open.n >= MAX_GUEST_SESSIONS) throw conflict('올리는 중인 파일이 너무 많습니다. 끝난 뒤에 다시 보내 주세요.');
+        if (open.bytes + bytes > remaining(share)) throw tooLarge('이 받기 함에 남은 용량을 넘습니다.');
       },
     });
     return reply.code(201).send(result);
@@ -366,6 +401,10 @@ export async function registerShareRoutes(app: FastifyInstance, ctx: AppContext)
         const fresh = db.prepare<[string], ShareRow>(`SELECT * FROM shares WHERE id = ?`).get(share.id)!;
         if (stored.size > remaining(fresh)) throw tooLarge('이 받기 함에 남은 용량을 넘습니다.');
         db.prepare(`UPDATE shares SET used_bytes = used_bytes + ? WHERE id = ?`).run(stored.size, share.id);
+      },
+      // 손님은 자기 링크로 올린 내용만 제안에 담을 수 있다.
+      afterRecord: (stored) => {
+        db.prepare(`INSERT OR IGNORE INTO share_blobs (share_id, hash, created_at) VALUES (?, ?, ?)`).run(share.id, stored.hash, Date.now());
       },
     });
     return reply.code(201).send({ blob });
@@ -391,21 +430,36 @@ export async function registerShareRoutes(app: FastifyInstance, ctx: AppContext)
     if (files.length > MAX_SUBMIT_FILES) throw badRequest(`한 번에 최대 ${MAX_SUBMIT_FILES}개까지 보낼 수 있습니다.`);
 
     const head = readManifest(db, headOf(share.repo_id).head_snapshot_id);
-    const taken = new Set(head.keys());
-    const isTaken = (path: string) =>
-      taken.has(path) || [...taken].some((p) => p.startsWith(`${path}/`) || path.startsWith(`${p}/`));
+    // 이름이 겹치는지 — 파일 경로와, 그 조상 폴더 경로를 모두 적어 두면 경로 하나를 O(깊이)로 본다.
+    const taken = new Set<string>();
+    const dirs = new Set<string>();
+    const ancestors = (path: string) => {
+      const out: string[] = [];
+      for (let idx = path.indexOf('/'); idx !== -1; idx = path.indexOf('/', idx + 1)) out.push(path.slice(0, idx));
+      return out;
+    };
+    const take = (path: string) => {
+      taken.add(path);
+      for (const dir of ancestors(path)) dirs.add(dir);
+    };
+    for (const path of head.keys()) take(path);
+    const isTaken = (path: string) => taken.has(path) || dirs.has(path) || ancestors(path).some((dir) => taken.has(dir));
+    const mine = db.prepare<[string, string], { ok: number }>(`SELECT 1 AS ok FROM share_blobs WHERE share_id = ? AND hash = ?`);
     const changes: { path: string; blobHash: string }[] = [];
     for (const raw of files as { path?: unknown; blobHash?: unknown }[]) {
       const relative = typeof raw?.path === 'string' ? normalizePath(raw.path) : null;
       if (!relative) throw badRequest('경로가 올바르지 않습니다.');
-      if (typeof raw.blobHash !== 'string') throw badRequest(`파일 내용이 없습니다: ${relative}`);
+      // 이 링크로 올린 내용만 — 아니면 해시로 저장소에 무엇이 있는지 떠볼 수 있다. 이유는 하나로만 말한다.
+      if (typeof raw.blobHash !== 'string' || !mine.get(share.id, raw.blobHash)) {
+        throw badRequest(`이 받기 함으로 올린 파일이 아닙니다: ${relative}`);
+      }
       let path = share.path ? `${share.path}/${relative}` : relative;
       if (isTaken(path)) {
         const ext = extName(path);
         const stem = ext ? path.slice(0, -(ext.length + 1)) : path;
         for (let i = 1; isTaken(path); i += 1) path = ext ? `${stem} (${i}).${ext}` : `${stem} (${i})`;
       }
-      taken.add(path);
+      take(path);
       changes.push({ path, blobHash: raw.blobHash });
     }
 

@@ -70,7 +70,10 @@ export async function collectGarbage(ctx: AppContext, minAgeMs: number): Promise
     });
     purge(candidates);
 
+    const reappeared = db.prepare<[string], { ok: number }>(`SELECT 1 AS ok FROM blobs WHERE hash = ?`);
     for (const row of candidates) {
+      // 기록을 지운 뒤 파일을 지우는 사이에 같은 내용이 다시 올라왔으면 그 파일을 지우면 안 된다.
+      if (reappeared.get(row.hash)) continue;
       try {
         await blobs.remove(row.hash);
         result.removed += 1;

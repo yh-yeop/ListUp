@@ -15,6 +15,7 @@ import {
 import {
   getRepoRow,
   getRole,
+  isMirrorSyncing,
   listMembers,
   requireAccess,
   toRepoSummary,
@@ -128,6 +129,7 @@ export async function registerRepoRoutes(app: FastifyInstance, ctx: AppContext):
     const user = requireUser(req);
     const { repoId } = req.params as { repoId: string };
     requireAccess(db, repoId, user.id, 'owner');
+    if (isMirrorSyncing(repoId)) throw conflict('지금 가져오는 중입니다. 끝난 뒤에 그만둘 수 있습니다.');
     db.prepare(`DELETE FROM mirrors WHERE repo_id = ?`).run(repoId);
     return { repo: toRepoSummary(db, getRepoRow(db, repoId)!, 'owner') };
   });

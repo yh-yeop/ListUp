@@ -172,8 +172,9 @@ export async function uploadInChunks(
   const started = await target.start({ name: source.name, size: source.size, ...(hash ? { hash } : {}) });
   if (!started.upload) {
     // 저장소에 이미 있는 내용 — 보낼 것이 없다.
+    if (!started.blob) throw new ApiError(502, 'internal', '서버가 올리기 자리도 파일 정보도 주지 않았습니다.');
     onSent(source.size);
-    return { ...started.blob!, instant: true };
+    return { ...started.blob, instant: true };
   }
   const upload = started.upload;
   const reader = openReader(source);

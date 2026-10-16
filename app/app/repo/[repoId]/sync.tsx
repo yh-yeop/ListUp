@@ -30,12 +30,17 @@ import {
   rememberFolder,
   type LocalFolder,
 } from '../../../src/lib/local-folder';
-import { isSafeToAutoApply, resolveConflict, type ConflictReason, type SyncAction } from '../../../src/lib/sync-plan';
+import { resolveConflict, type ConflictReason, type SyncAction } from '../../../src/lib/sync-plan';
 import {
   applySync,
+  checkSync,
+  describeOutcome,
+  isSyncRunning,
   loadSyncState,
+  safeActions,
   saveSyncState,
-  scanForSync,
+  subscribeSync,
+  withSyncLock,
   type SyncScan,
   type SyncState,
 } from '../../../src/lib/sync-run';
@@ -43,8 +48,6 @@ import type { UploadProgress } from '../../../src/lib/transfer';
 import { useAbortable } from '../../../src/lib/useAbortable';
 import { useAuth } from '../../../src/state/auth';
 import { fontSize, monoFont, radius, spacing, useTheme } from '../../../src/theme';
-
-const AUTO_EVERY_MS = 60_000;
 
 const CONFLICT_TEXT: Record<ConflictReason, string> = {
   'both-changed': '양쪽에서 다르게 바뀜',
@@ -55,11 +58,15 @@ const CONFLICT_TEXT: Record<ConflictReason, string> = {
 
 type Choice = 'mine' | 'theirs' | 'skip';
 
+/** 저장소를 바꾸지 않는 일 — 다른 서버를 따라가는 저장소(미러)에서는 이것만 한다. */
+const LOCAL_ONLY_KINDS = new Set<SyncAction['kind']>(['download', 'move-local', 'delete-local']);
+
 /**
  * 폴더 동기화 — 기기의 폴더 하나를 저장소 폴더와 맞춰 둔다. 마지막으로 맞춘 상태를 기억해 누가 무엇을 바꿨는지 가린다
  * (3-way, lib/sync-plan.ts). PC 앱·안드로이드만(브라우저는 폴더에 쓸 수 없다).
  *
- * 지우기와 충돌은 늘 사람이 고른다. 자동으로 두면 앱을 켜 둔 동안 1분마다 확인해 올리기·받기만 저절로 한다.
+ * 지우기와 충돌은 늘 사람이 고른다. 자동으로 두면 앱을 켜 둔 동안 어느 화면에 있든 1분마다 확인해 올리기·받기·옮기기만
+ * 저절로 한다(lib/useAutoSync.ts). 이 화면과 자동 맞추기는 같은 잠금을 쓰므로 겹치지 않는다.
  */
 export default function SyncScreen() {
   const { repoId, path: pathParam } = useLocalSearchParams<{ repoId: string; path?: string }>();
@@ -77,6 +84,7 @@ export default function SyncScreen() {
   const [progress, setProgress] = useState<{ label: string; value: UploadProgress } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const control = useAbortable();
+  const checkedOnce = useRef(false);
   const isEditor = hasRole(repo?.role, 'editor');
   const writable = !repo?.mirror;
 
@@ -93,35 +101,43 @@ export default function SyncScreen() {
     [serverId, repoId],
   );
 
-  /** 기억해 둔 폴더를 열고 양쪽을 훑어 계획을 세운다. */
+  /**
+   * 기억해 둔 폴더를 열고 양쪽을 훑어 계획을 세운다. 기준만 고치면 되는 것(처음부터 같은 파일 등)은 이때 기준에 적어 둔다.
+   * 자동 맞추기가 이 저장소를 돌리는 중이면 기다리지 않고 건너뛴다(끝나면 알림으로 다시 확인한다).
+   */
   const check = useCallback(
-    async (current: SyncState, quiet = false): Promise<{ folder: LocalFolder; scan: SyncScan } | null> => {
+    async (current: SyncState, quiet = false): Promise<{ folder: LocalFolder; scan: SyncScan; state: SyncState } | null> => {
       setError(null);
-      setWorking('check');
-      const signal = control.start();
-      try {
-        const opened = folder?.ref && JSON.stringify(folder.ref) === JSON.stringify(current.ref) && folder.rescan ? await folder.rescan() : await openFolderRef(current.ref);
-        setFolder(opened);
-        const result = await scanForSync(repoId, current, opened, {
-          signal,
-          onHashing: (done, total, name) =>
-            setProgress({ label: '내용 확인 중', value: { sentBytes: done, totalBytes: total, doneFiles: done, totalFiles: total, current: name } }),
-        });
-        setScan(result);
-        setChoices({});
-        return { folder: opened, scan: result };
-      } catch (err) {
-        if (!(err instanceof HashAbortedError) && !quiet) {
-          setError(err instanceof ApiError || err instanceof Error ? err.message : '확인하지 못했습니다.');
+      const result = await withSyncLock(serverId, repoId, async () => {
+        setWorking('check');
+        const signal = control.start();
+        try {
+          const sameRef = folder?.ref && JSON.stringify(folder.ref) === JSON.stringify(current.ref);
+          const opened = sameRef && folder.rescan ? await folder.rescan() : await openFolderRef(current.ref);
+          setFolder(opened);
+          const checked = await checkSync(repoId, current, opened, {
+            signal,
+            onHashing: (done, total, name) =>
+              setProgress({ label: '내용 확인 중', value: { sentBytes: done, totalBytes: total, doneFiles: done, totalFiles: total, current: name } }),
+          });
+          if (checked.state !== current) await persist(checked.state);
+          setScan(checked.scan);
+          setChoices({});
+          return { folder: opened, scan: checked.scan, state: checked.state };
+        } catch (err) {
+          if (!(err instanceof HashAbortedError) && !quiet) {
+            setError(err instanceof ApiError || err instanceof Error ? err.message : '확인하지 못했습니다.');
+          }
+          return null;
+        } finally {
+          control.finish();
+          setProgress(null);
+          setWorking(null);
         }
-        return null;
-      } finally {
-        control.finish();
-        setProgress(null);
-        setWorking(null);
-      }
+      });
+      return result;
     },
-    [control, folder, repoId],
+    [control, folder, persist, repoId, serverId],
   );
 
   async function setup() {
@@ -138,6 +154,8 @@ export default function SyncScreen() {
     await rememberFolder(picked);
     const next: SyncState = { ref: picked.ref, label: picked.label, basePath: pathParam ?? '', base: null, lastSyncAt: null, auto: false };
     setFolder(picked);
+    // 아래 "들어오자마자 한 번" 효과가 겹쳐 확인하지 않게 먼저 표시해 둔다.
+    checkedOnce.current = true;
     await persist(next);
     await check(next);
   }
@@ -176,44 +194,46 @@ export default function SyncScreen() {
         actions.push(action);
       }
     }
-    // 열람자는 저장소를 바꿀 수 없으니 저장소 쪽 일은 제안으로 간다(applySync). 미러 저장소는 받기만.
-    return writable ? actions : actions.filter((action) => action.kind === 'download' || action.kind === 'delete-local');
+    // 열람자는 저장소를 바꿀 수 없으니 저장소 쪽 일은 제안으로 간다(applySync). 미러 저장소는 내 폴더 쪽 일만.
+    return writable ? actions : actions.filter((action) => LOCAL_ONLY_KINDS.has(action.kind));
   }
 
-  async function run(current: SyncState, currentScan: SyncScan, currentFolder: LocalFolder, actions: SyncAction[], auto = false) {
-    setWorking('apply');
+  async function run(current: SyncState, currentScan: SyncScan, currentFolder: LocalFolder, actions: SyncAction[]) {
     setError(null);
-    const signal = control.start();
-    try {
-      const outcome = await applySync(repoId, current, currentFolder, currentScan, actions, {
-        isEditor,
-        signal,
-        onProgress: (label, value) => setProgress({ label, value }),
-      });
-      const next: SyncState = { ...current, base: outcome.base, lastSyncAt: Date.now() };
-      await persist(next);
-      const done = [
-        outcome.uploaded ? `${isEditor ? '올림' : '제안'} ${outcome.uploaded}` : '',
-        outcome.downloaded ? `받음 ${outcome.downloaded}` : '',
-        outcome.deletedRemote ? `저장소에서 지움 ${outcome.deletedRemote}` : '',
-        outcome.deletedLocal ? `내 폴더에서 지움 ${outcome.deletedLocal}` : '',
-      ]
-        .filter(Boolean)
-        .join(' · ');
-      if (outcome.failures.length > 0) notifyWarning(done ? `일부만 맞췄습니다 — ${done}` : '맞추지 못했습니다.', outcome.failures.slice(0, 3).join('\n'));
-      else if (done) {
-        notifySuccess(
-          auto ? `자동으로 맞췄습니다 — ${done}` : `맞췄습니다 — ${done}`,
-          outcome.proposalNumber ? `변경 제안 #${outcome.proposalNumber} 로 보냈습니다. 편집자가 반영하면 맞춰집니다.` : undefined,
-        );
-      } else if (!auto) notify('맞출 것이 없습니다.');
-      // 결과를 다시 보여 준다(받은 파일의 고친 시각도 이때 기준에 적힌다).
-      await check(next, true);
-    } finally {
-      control.finish();
-      setProgress(null);
-      setWorking(null);
+    const ran = await withSyncLock(serverId, repoId, async () => {
+      setWorking('apply');
+      const signal = control.start();
+      try {
+        const outcome = await applySync(repoId, current, currentFolder, currentScan, actions, {
+          isEditor,
+          signal,
+          onProgress: (label, value) => setProgress({ label, value }),
+        });
+        // 하다 만 것도 한 것은 기준에 적는다 — 다음에 같은 일을 되풀이하지 않게.
+        const next: SyncState = { ...current, base: outcome.base, lastSyncAt: Date.now() };
+        await persist(next);
+        const done = describeOutcome(outcome, isEditor);
+        if (outcome.cancelled) notifyWarning(done ? `멈췄습니다 — 그 전까지 ${done}` : '멈췄습니다.');
+        else if (outcome.failures.length > 0) notifyWarning(done ? `일부만 맞췄습니다 — ${done}` : '맞추지 못했습니다.', outcome.failures.slice(0, 3).join('\n'));
+        else if (done) {
+          notifySuccess(
+            `맞췄습니다 — ${done}`,
+            outcome.proposalNumber ? `변경 제안 #${outcome.proposalNumber} 로 보냈습니다. 편집자가 반영하면 맞춰집니다.` : undefined,
+          );
+        } else notify('맞출 것이 없습니다.');
+        return next;
+      } finally {
+        control.finish();
+        setProgress(null);
+        setWorking(null);
+      }
+    });
+    if (ran === null) {
+      notify('자동 맞추기가 이 저장소를 돌리는 중입니다.', '끝나면 결과를 다시 보여 줍니다.');
+      return;
     }
+    // 결과를 다시 보여 준다(받은 파일의 고친 시각도 이때 기준에 적힌다).
+    await check(ran, true);
   }
 
   async function applyNow() {
@@ -236,29 +256,24 @@ export default function SyncScreen() {
     await run(state, scan, folder, actions);
   }
 
-  // 자동 — 화면을 켜 둔 동안 1분마다. 지우기·충돌이 있으면 저절로 하지 않고 알려만 둔다.
-  const autoRef = useRef({ state, working });
-  autoRef.current = { state, working };
-  useEffect(() => {
-    if (!state?.auto || !state.base) return;
-    const timer = setInterval(() => {
-      const { state: current, working: busy } = autoRef.current;
-      if (!current?.auto || busy) return;
-      void (async () => {
-        const checked = await check(current, true);
-        if (!checked) return;
-        const safe = checked.scan.plan.actions.filter((action) => action.kind === 'upload' || action.kind === 'download');
-        if (safe.length > 0 && isSafeToAutoApply(checked.scan.plan)) {
-          await run(current, checked.scan, checked.folder, writable ? safe : safe.filter((a) => a.kind === 'download'), true);
-        }
-      })();
-    }, AUTO_EVERY_MS);
-    return () => clearInterval(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state?.auto, state?.base === null]);
+  // 자동 맞추기는 앱 전체에서 돈다(lib/useAutoSync.ts). 이 저장소를 다뤘으면 바뀐 상태를 읽어 다시 보여 준다.
+  const latest = useRef({ state, working, check });
+  latest.current = { state, working, check };
+  useEffect(
+    () =>
+      subscribeSync((event) => {
+        if (event.serverId !== serverId || event.repoId !== repoId || event.type !== 'auto-ran') return;
+        void (async () => {
+          const saved = await loadSyncState(serverId, repoId);
+          if (!saved || latest.current.working) return;
+          setState(saved);
+          await latest.current.check(saved, true);
+        })();
+      }),
+    [serverId, repoId],
+  );
 
   // 기억해 둔 동기화가 있으면 들어오자마자 한 번 확인한다.
-  const checkedOnce = useRef(false);
   useEffect(() => {
     if (state && !checkedOnce.current) {
       checkedOnce.current = true;
@@ -278,7 +293,9 @@ export default function SyncScreen() {
   const actions = scan?.plan.actions ?? [];
   const group = (kind: SyncAction['kind']) => actions.filter((action) => action.kind === kind);
   const conflicts = group('conflict') as Extract<SyncAction, { kind: 'conflict' }>[];
+  const moves = [...group('move-remote'), ...group('move-local')] as Extract<SyncAction, { kind: 'move-remote' | 'move-local' }>[];
   const deletes = [...group('delete-remote'), ...group('delete-local')];
+  const autoReady = scan ? safeActions(scan.plan, writable).length : 0;
   const runnable = scan ? actionsToRun(scan, allowDeletes).length : 0;
   const sizeOf = (path: string, side: 'local' | 'remote') =>
     side === 'local' ? (scan?.local.get(path)?.size ?? 0) : (scan?.remote.get(path)?.size ?? 0);
@@ -323,7 +340,14 @@ export default function SyncScreen() {
               </Caption>
             </View>
             <Row gap={spacing.sm} wrap>
-              <Button label="지금 확인" icon="refresh" variant="secondary" loading={working === 'check'} disabled={working !== null} onPress={() => void check(state)} />
+              <Button
+                label="지금 확인"
+                icon="refresh"
+                variant="secondary"
+                loading={working === 'check'}
+                disabled={working !== null || isSyncRunning(serverId, repoId)}
+                onPress={() => void check(state)}
+              />
               <Button label="동기화 그만두기" variant="ghost" disabled={working !== null} onPress={() => void stop()} />
             </Row>
             {state.base ? (
@@ -336,7 +360,7 @@ export default function SyncScreen() {
               >
                 <View style={{ flex: 1, gap: 2 }}>
                   <Body>자동으로 맞추기</Body>
-                  <Caption>앱을 켜 둔 동안 1분마다 확인해 올리기·받기를 저절로 합니다. 지우기와 충돌은 기다립니다.</Caption>
+                  <Caption>앱을 켜 둔 동안 어느 화면에 있든 1분마다 확인해 올리기·받기·옮기기를 저절로 합니다. 지우기와 충돌은 기다립니다.</Caption>
                 </View>
                 <Switch
                   value={state.auto}
@@ -366,6 +390,11 @@ export default function SyncScreen() {
               <>
                 <ActionGroup title={isEditor ? '올릴 것' : '변경 제안으로 보낼 것'} icon="cloud-upload-outline" paths={group('upload').map((a) => a.path)} size={(p) => sizeOf(p, 'local')} />
                 <ActionGroup title="받을 것" icon="cloud-download-outline" paths={group('download').map((a) => a.path)} size={(p) => sizeOf(p, 'remote')} />
+                <ActionGroup
+                  title={isEditor || !writable ? '옮길 것' : '옮기기로 제안할 것'}
+                  icon="swap-horizontal-outline"
+                  paths={moves.map((a) => `${a.from} → ${a.path}${a.kind === 'move-local' ? '  (내 폴더에서)' : ''}`)}
+                />
                 <ActionGroup title="제안해 두고 반영을 기다리는 것" icon="hourglass-outline" paths={group('proposed').map((a) => a.path)} muted />
                 {deletes.length > 0 ? (
                   <Card style={{ gap: spacing.sm }}>
@@ -442,7 +471,10 @@ export default function SyncScreen() {
                   disabled={runnable === 0 || working !== null}
                   onPress={() => void applyNow()}
                 />
-                {!writable ? <Caption>다른 서버를 따라가는 저장소라 받기만 합니다.</Caption> : null}
+                {!writable ? <Caption>다른 서버를 따라가는 저장소라 내 폴더 쪽만 바꿉니다(받기·옮기기·지우기).</Caption> : null}
+                {state.auto && autoReady === 0 && (deletes.length > 0 || conflicts.length > 0) ? (
+                  <Caption>지우기나 충돌이 있어 자동으로는 맞추지 않습니다. 여기서 고르고 동기화를 누르세요.</Caption>
+                ) : null}
               </>
             )
           ) : working === 'check' ? null : (
@@ -462,7 +494,7 @@ function ActionGroup({
   muted,
 }: {
   title: string;
-  icon: 'cloud-upload-outline' | 'cloud-download-outline' | 'hourglass-outline';
+  icon: 'cloud-upload-outline' | 'cloud-download-outline' | 'hourglass-outline' | 'swap-horizontal-outline';
   paths: string[];
   size?: (path: string) => number;
   muted?: boolean;

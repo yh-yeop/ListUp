@@ -128,3 +128,36 @@ describe('폴더 동기화 계획 (3-way)', () => {
     assert.equal(isSafeToAutoApply(planSync(base, local, remote)), false);
   });
 });
+
+describe('폴더 동기화 — 옮긴 파일', () => {
+  it('내 쪽에서 지우고 같은 내용을 다른 이름으로 두면 저장소에서 옮긴다', () => {
+    const base: SyncBase = { 'old.txt': { hash: 'h', size: 3 } };
+    const plan = planSync(base, map({ 'new/name.txt': L('h', 3) }), map({ 'old.txt': R('h', 3) }));
+    assert.deepEqual(plan.actions, [{ kind: 'move-remote', path: 'new/name.txt', from: 'old.txt' }]);
+    assert.equal(isSafeToAutoApply(plan), true);
+  });
+
+  it('저장소에서 옮겼으면 내 폴더에서도 옮긴다', () => {
+    const base: SyncBase = { 'a.txt': { hash: 'h', size: 3 } };
+    const plan = planSync(base, map({ 'a.txt': L('h', 3) }), map({ 'b.txt': R('h', 3) }));
+    assert.deepEqual(plan.actions, [{ kind: 'move-local', path: 'b.txt', from: 'a.txt' }]);
+  });
+
+  it('같은 내용이 둘이면 하나씩만 짝짓고, 처음 맞출 때는 짝짓지 않는다', () => {
+    const base: SyncBase = { 'a.txt': { hash: 'h', size: 1 } };
+    const plan = planSync(base, map({ 'x.txt': L('h', 1), 'y.txt': L('h', 1) }), map({ 'a.txt': R('h', 1) }));
+    assert.deepEqual(plan.actions.map((a) => a.kind).sort(), ['move-remote', 'upload']);
+    assert.deepEqual(planSync(null, map({ 'x.txt': L('h', 1) }), map({ 'a.txt': R('h', 1) })).actions.map((a) => a.kind).sort(), ['download', 'upload']);
+  });
+
+  it('기준에 있던 크기와 같은 새 파일은 해시를 계산한다(옮긴 것일 수 있다)', () => {
+    assert.equal(needsHash('new.txt', { size: 7 }, {}, new Map(), new Set([7])), true);
+    assert.equal(needsHash('new.txt', { size: 8 }, {}, new Map(), new Set([7])), false);
+  });
+
+  it('열람자가 제안해 둔 새 파일은 크기·시각이 같으면 제안한 해시를 쓴다', () => {
+    const base: SyncBase = { 'n.txt': { hash: '', size: 4, mtime: 10, proposedHash: 'p' } };
+    assert.equal(cachedHash('n.txt', { size: 4, mtime: 10 }, base), 'p');
+    assert.equal(cachedHash('n.txt', { size: 4, mtime: 11 }, base), null);
+  });
+});

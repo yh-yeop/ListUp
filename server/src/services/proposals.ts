@@ -173,7 +173,8 @@ export function findConflicts(
   const conflicts: string[] = [];
 
   for (const change of changes) {
-    const baseHash = base.get(change.path)?.blob_hash ?? null;
+    // 기준 시점이 이력 정리로 사라진 뒤 다시 연 제안이면, 변경마다 적어 둔 제안 당시 원본으로 견준다.
+    const baseHash = baseSnapshotId ? (base.get(change.path)?.blob_hash ?? null) : change.base_blob_hash;
     const headHash = head.get(change.path)?.blob_hash ?? null;
     if (baseHash === headHash) continue;
     // head 가 이미 제안과 똑같은 상태라면 충돌이 아니라 이미 반영된 것이다.

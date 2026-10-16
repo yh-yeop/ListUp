@@ -33,6 +33,7 @@ export const IPC = {
   foldersSave: 'folders:save',
   foldersHash: 'folders:hash',
   foldersTrash: 'folders:trash',
+  foldersMove: 'folders:move',
   foldersRemember: 'folders:remember',
   foldersForget: 'folders:forget',
   /** main → 창: 상태가 바뀌었다. */

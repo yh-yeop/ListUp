@@ -17,6 +17,8 @@ import { registerInviteRoutes } from './routes/invites.ts';
 import { registerProposalRoutes } from './routes/proposals.ts';
 import { registerUploadRoutes } from './routes/uploads.ts';
 import { registerShareRoutes } from './routes/shares.ts';
+import { registerSearchRoutes } from './routes/search.ts';
+import { registerActivityRoutes } from './routes/activity.ts';
 import { registerDownloadRoutes } from './routes/downloads.ts';
 import serverPackage from '../package.json' with { type: 'json' };
 
@@ -226,6 +228,8 @@ export async function buildApp(ctx: AppContext, options: BuildOptions = {}): Pro
     await registerUploadRoutes(api, ctx);
     await registerDownloadRoutes(api, ctx);
     await registerShareRoutes(api, ctx);
+    await registerSearchRoutes(api, ctx);
+    await registerActivityRoutes(api, ctx);
   }, { prefix: '/api' });
 
   return app;

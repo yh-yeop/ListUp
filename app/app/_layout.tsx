@@ -6,6 +6,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ToastHost } from '../src/components/ToastHost';
 import { Loading } from '../src/components/ui';
 import { suggestUpdateOnce } from '../src/lib/updates';
+import { useAutoSync } from '../src/lib/useAutoSync';
 import { AuthProvider, useAuth } from '../src/state/auth';
 import { useTheme } from '../src/theme';
 
@@ -21,8 +22,11 @@ import { useTheme } from '../src/theme';
  * 내려가 화면의 상태가 사라지기 때문이다.
  */
 function RootNavigator() {
-  const { user, loading, entering, serverGeneration } = useAuth();
+  const { user, loading, entering, serverGeneration, activeServer } = useAuth();
   const { colors } = useTheme();
+
+  // 폴더 동기화를 자동으로 둔 저장소들은 어느 화면에 있든 1분마다 맞춘다(PC 앱·안드로이드).
+  useAutoSync(activeServer?.id ?? null, !!user && !loading);
 
   // 설치형 클라이언트는 앱을 열 때 새 버전이 있는지 보고, 있으면 한 번 제안한다.
   useEffect(() => {
@@ -75,6 +79,7 @@ function RootNavigator() {
       <Stack.Protected guard={!!user}>
         <Stack.Screen name="repos" options={{ title: 'ListUp' }} />
         <Stack.Screen name="settings" options={{ title: '내 정보' }} />
+        <Stack.Screen name="activity" options={{ title: '새 소식' }} />
         <Stack.Screen name="repo/[repoId]/index" />
         <Stack.Screen name="repo/[repoId]/proposals" />
         <Stack.Screen name="repo/[repoId]/members" />

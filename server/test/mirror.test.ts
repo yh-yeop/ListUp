@@ -109,6 +109,37 @@ describe('서버 간 따라가기', () => {
     assert.equal((await raw('앨범/2.mp3')).body, '노래2');
   });
 
+  it('원본 목록에 남의 저장소 내용의 해시가 끼어 있어도 가져오지 않는다', async () => {
+    // 이 서버(follower)의 다른 저장소에 비밀 파일을 두고, 원본이 그 해시를 목록에 넣었다고 치자.
+    const secretRepo = await createRepo(follower.app, bob, '밥의 비밀');
+    await uploadFile(follower.app, bob, secretRepo, 'secret.txt', '밥만의 비밀');
+    const secretHash = (await follower.app.inject({ method: 'GET', url: `/api/repos/${secretRepo}/files`, headers: auth(bob) })).json().tree
+      .files[0].blobHash;
+    const { syncMirror } = await import('../src/services/mirror.ts');
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/mirror')) {
+        return new Response(
+          JSON.stringify({
+            repo: { name: '음악', description: '' },
+            head: 'snap_forged',
+            files: [{ path: '훔친.txt', blobHash: secretHash, size: Buffer.byteLength('밥만의 비밀'), mimeType: 'text/plain', updatedAt: 1 }],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      return realFetch(input, init);
+    }) as typeof fetch;
+    try {
+      // 원본은 그 바이트를 줄 수 없으니(없는 내용 404) 가져오기가 실패해야 한다 — 이미 이 서버에 있다고 그냥 쓰면 안 된다.
+      await assert.rejects(() => syncMirror(follower.ctx, mirrorRepo));
+      assert.equal((await raw('훔친.txt')).statusCode, 404);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
   it('따라가기를 그만두면 보통 저장소가 된다', async () => {
     const res = await follower.app.inject({ method: 'DELETE', url: `/api/repos/${mirrorRepo}/mirror`, headers: auth(bob) });
     assert.equal(res.json().repo.mirror, null);

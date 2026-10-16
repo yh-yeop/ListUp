@@ -64,6 +64,8 @@ export interface CompleteOptions {
    * 한도에 세지 않는다. 던지면 아무것도 기록하지 않는다.
    */
   onRecord?: (blob: { hash: string; size: number }, already: boolean) => void;
+  /** blob·repo_blobs 행이 생긴 뒤 같은 트랜잭션 안에서 — 그 해시를 참조하는 행을 넣을 때. */
+  afterRecord?: (blob: { hash: string; size: number }) => void;
 }
 
 export function createUploadEngine(ctx: AppContext) {
@@ -168,6 +170,7 @@ export function createUploadEngine(ctx: AppContext) {
         const already = db
           .prepare<[string, string], { ok: number }>(`SELECT 1 AS ok FROM repo_blobs WHERE repo_id = ? AND hash = ?`)
           .get(row.repo_id, stored.hash);
+        // 한도 검사는 이 올리기를 기록하기 전에(자기 자신을 세지 않게). 던지면 전부 되돌린다.
         options.onRecord?.(stored, already !== undefined);
         db.prepare(
           `INSERT INTO blobs (hash, size, mime_type, created_at) VALUES (?, ?, ?, ?) ON CONFLICT(hash) DO NOTHING`,
@@ -175,6 +178,7 @@ export function createUploadEngine(ctx: AppContext) {
         db.prepare(
           `INSERT OR IGNORE INTO repo_blobs (repo_id, hash, uploaded_by, created_at) VALUES (?, ?, ?, ?)`,
         ).run(row.repo_id, stored.hash, uploaderId, now);
+        options.afterRecord?.(stored);
         db.prepare(`DELETE FROM upload_sessions WHERE id = ?`).run(row.id);
       });
       try {

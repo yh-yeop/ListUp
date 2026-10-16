@@ -36,6 +36,7 @@ const bridge: DesktopBridge = {
     save: (root, relativePath, url, options) => ipcRenderer.invoke(IPC.foldersSave, root, relativePath, url, options),
     hash: (root, relativePath) => ipcRenderer.invoke(IPC.foldersHash, root, relativePath),
     trash: (root, relativePath) => ipcRenderer.invoke(IPC.foldersTrash, root, relativePath),
+    move: (root, from, to) => ipcRenderer.invoke(IPC.foldersMove, root, from, to),
     remember: (root) => ipcRenderer.invoke(IPC.foldersRemember, root),
     forget: (root) => ipcRenderer.invoke(IPC.foldersForget, root),
   },

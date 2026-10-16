@@ -2,6 +2,7 @@ import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 import { MAX_FILE_SIZE } from '@listup/shared';
 import type {
+  ActivityItem,
   ApiErrorBody,
   ApiErrorCode,
   CommitResult,
@@ -10,6 +11,7 @@ import type {
   HealthResponse,
   PublicShare,
   RepoStorage,
+  SearchResult,
   Share,
   ShareKind,
   UploadSession,
@@ -623,6 +625,13 @@ export const api = {
     }),
 
   repoStorage: (repoId: string) => request<RepoStorage>(`/api/repos/${repoId}/storage`),
+
+  /** 파일 찾기 — 이름·경로에 글자가 든 지금 파일. repoId 가 없으면 내 저장소 전부. */
+  search: (q: string, repoId?: string, signal?: AbortSignal) =>
+    request<SearchResult>(`${repoId ? `/api/repos/${repoId}` : '/api'}/search?q=${encodeURIComponent(q)}`, { signal }),
+
+  /** 새 소식 — since(ms) 뒤에 내 저장소들에서 있었던 일, 최근 것부터. */
+  activity: (since = 0, limit = 50) => request<{ items: ActivityItem[] }>(`/api/activity?since=${since}&limit=${limit}`),
 
   listShares: (repoId: string) => request<{ shares: Share[] }>(`/api/repos/${repoId}/shares`),
 

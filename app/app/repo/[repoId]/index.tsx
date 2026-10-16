@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Stack, router, useFocusEffect, useLocalSearchParams } from 'expo-router';
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Platform, Pressable, RefreshControl, Text, View } from 'react-native';
 import {
   ROLE_LABEL,
@@ -28,6 +28,7 @@ import {
   Title,
 } from '../../../src/components/ui';
 import { Breadcrumb, RepoNav } from '../../../src/components/RepoNav';
+import { FileSearch } from '../../../src/components/FileSearch';
 import { TransferProgress } from '../../../src/components/TransferProgress';
 import { ApiError, api, getMaxUploadBytes, type UploadSource } from '../../../src/api/client';
 import { confirmAction, notify, notifyError, notifySuccess, notifyWarning } from '../../../src/lib/dialogs';
@@ -66,9 +67,15 @@ export default function RepoFilesScreen() {
     snapshot,
     message: snapshotMessage,
     at: snapshotAt,
-  } = useLocalSearchParams<{ repoId: string; snapshot?: string; message?: string; at?: string }>();
+    path: pathParam,
+    highlight,
+  } = useLocalSearchParams<{ repoId: string; snapshot?: string; message?: string; at?: string; path?: string; highlight?: string }>();
   const { colors } = useTheme();
-  const [path, setPath] = useState('');
+  // 찾기 결과·링크로 바로 폴더에 들어올 수 있다(?path=). highlight 는 그 파일 줄을 잠깐 밝힌다.
+  const [path, setPath] = useState(pathParam ?? '');
+  useEffect(() => {
+    if (pathParam !== undefined) setPath(pathParam);
+  }, [pathParam]);
   const [progress, setProgress] = useState<UploadProgress | null>(null);
   const uploading = progress !== null;
   const uploadControl = useAbortable();
@@ -395,6 +402,8 @@ export default function RepoFilesScreen() {
 
           <RepoNav repoId={repoId} openProposals={repo.openProposalCount} />
 
+          {!snapshotId && serverLevel >= LEVEL_1_4 ? <FileSearch repoId={repoId} placeholder="이 저장소에서 파일 찾기" /> : null}
+
           {snapshotId ? (
             <View
               style={{
@@ -644,7 +653,7 @@ export default function RepoFilesScreen() {
                   ))}
 
                   {tree.files.map((file, index) => (
-                    <View key={file.path}>
+                    <View key={file.path} style={highlight === file.path ? { backgroundColor: colors.accentSoft } : undefined}>
                       {index > 0 || tree.dirs.length > 0 ? <Divider /> : null}
                       {editing?.path === file.path ? (
                         <RenameRow

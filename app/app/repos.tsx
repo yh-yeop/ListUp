@@ -18,6 +18,8 @@ import {
   Title,
 } from '../src/components/ui';
 import { ApiError, api } from '../src/api/client';
+import { FileSearch } from '../src/components/FileSearch';
+import { useUnreadActivity } from '../src/lib/activity';
 import { notifySuccess } from '../src/lib/dialogs';
 import { useAsync } from '../src/lib/useAsync';
 import { LEVEL_1_4, useServerLevel } from '../src/lib/useServerLevel';
@@ -34,6 +36,10 @@ export default function ReposScreen() {
   const [busy, setBusy] = useState(false);
   /** 다른 서버의 저장소 따라가기 (1.4.0 서버부터). */
   const serverLevel = useServerLevel();
+  const { activeServer } = useAuth();
+  // 목록으로 돌아올 때마다 읽지 않은 소식을 다시 센다.
+  const [focusCount, setFocusCount] = useState(0);
+  const unread = useUnreadActivity(activeServer?.id ?? 'default', focusCount);
   const [following, setFollowing] = useState(false);
   const [mirrorLink, setMirrorLink] = useState('');
   const [mirrorError, setMirrorError] = useState<string | null>(null);
@@ -68,6 +74,7 @@ export default function ReposScreen() {
         return;
       }
       state.refresh();
+      setFocusCount((n) => n + 1);
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []),
   );
@@ -125,6 +132,34 @@ export default function ReposScreen() {
         <Title>내 저장소</Title>
         <Caption>{user ? `${user.displayName} 님으로 로그인됨` : ''}</Caption>
       </View>
+
+      {serverLevel >= LEVEL_1_4 ? (
+        <>
+          <FileSearch placeholder="내 저장소 전부에서 파일 찾기" />
+          <Pressable
+            onPress={() => router.push('/activity')}
+            accessibilityRole="button"
+            accessibilityLabel={unread ? `새 소식 ${unread}개` : '새 소식'}
+            style={({ pressed }) => ({
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: spacing.md,
+              paddingHorizontal: spacing.lg,
+              paddingVertical: spacing.md,
+              borderRadius: radius.md,
+              borderWidth: 1,
+              borderColor: unread ? colors.accent : colors.border,
+              backgroundColor: pressed ? colors.surfaceAlt : unread ? colors.accentSoft : colors.surface,
+            })}
+          >
+            <Ionicons name={unread ? 'notifications' : 'notifications-outline'} size={20} color={unread ? colors.accent : colors.textMuted} />
+            <Body style={{ flex: 1, fontWeight: unread ? '600' : '400' }}>
+              {unread ? `새 소식 ${unread}개` : '새 소식'}
+            </Body>
+            <Ionicons name="chevron-forward" size={18} color={colors.textFaint} />
+          </Pressable>
+        </>
+      ) : null}
 
       <Row gap={spacing.sm} wrap>
         <Button

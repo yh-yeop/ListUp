@@ -26,6 +26,8 @@ export interface SyncBaseEntry {
    * {@link PROPOSED_DELETE}.
    */
   proposedHash?: string;
+  /** 그 제안. 닫혔으면 표시를 지워 다시 보낼 수 있게 한다. */
+  proposedId?: string;
 }
 
 export type SyncBase = Record<string, SyncBaseEntry>;
@@ -59,7 +61,11 @@ export type SyncAction =
   | { kind: 'delete-local'; path: string }
   | { kind: 'conflict'; path: string; reason: ConflictReason }
   /** 열람자가 이미 제안해 둔 내용 — 반영을 기다린다. */
-  | { kind: 'proposed'; path: string };
+  | { kind: 'proposed'; path: string }
+  /** 내 폴더에서 옮기거나 이름을 바꿨다 — 저장소에서도 옮긴다(다시 올리지 않는다). */
+  | { kind: 'move-remote'; path: string; from: string }
+  /** 저장소에서 옮기거나 이름이 바뀌었다 — 내 폴더에서도 옮긴다(다시 받지 않는다). */
+  | { kind: 'move-local'; path: string; from: string };
 
 export interface SyncPlan {
   actions: SyncAction[];
@@ -126,7 +132,44 @@ export function planSync(base: SyncBase | null, local: Map<string, LocalSide>, r
     const reason: ConflictReason = l && r ? 'both-changed' : l ? 'changed-deleted' : 'deleted-changed';
     plan.actions.push({ kind: 'conflict', path, reason });
   }
+  plan.actions = pairMoves(plan.actions, base, local, remote);
   return plan;
+}
+
+/**
+ * "지우기 + 같은 내용 올리기"는 옮긴 것이다. 내 쪽에서 지운 경로(기준의 해시)와 내 쪽의 새 파일(같은 해시)을 짝지어
+ * move-remote 로, 저장소 쪽도 같은 방식으로 move-local 로 바꾼다. 한 파일은 한 번만 짝짓는다.
+ */
+function pairMoves(actions: SyncAction[], base: SyncBase | null, local: Map<string, LocalSide>, remote: Map<string, RemoteSide>): SyncAction[] {
+  if (!base) return actions;
+  const result: SyncAction[] = [];
+  const consumed = new Set<number>();
+  const pair = (
+    deleteKind: 'delete-remote' | 'delete-local',
+    addKind: 'upload' | 'download',
+    moveKind: 'move-remote' | 'move-local',
+    hashOfAdded: (path: string) => string | null | undefined,
+  ) => {
+    const deletedByHash = new Map<string, number[]>();
+    actions.forEach((action, index) => {
+      if (action.kind !== deleteKind) return;
+      const hash = base[action.path]?.hash;
+      if (hash) deletedByHash.set(hash, [...(deletedByHash.get(hash) ?? []), index]);
+    });
+    actions.forEach((action, index) => {
+      if (action.kind !== addKind) return;
+      const hash = hashOfAdded(action.path);
+      const candidates = hash ? deletedByHash.get(hash) : undefined;
+      const from = candidates?.find((i) => !consumed.has(i));
+      if (from === undefined) return;
+      consumed.add(from);
+      consumed.add(index);
+      result.push({ kind: moveKind, path: action.path, from: actions[from].path });
+    });
+  };
+  pair('delete-remote', 'upload', 'move-remote', (path) => local.get(path)?.hash);
+  pair('delete-local', 'download', 'move-local', (path) => remote.get(path)?.hash);
+  return [...actions.filter((_, index) => !consumed.has(index)), ...result];
 }
 
 /** 충돌 하나를 어떻게 풀지 — 내 쪽을 따르면 올리기/저장소에서 지우기, 저장소를 따르면 받기/내 폴더에서 지우기. */
@@ -143,21 +186,31 @@ export function resolveConflict(
  * 해시를 새로 계산해야 하는 내 파일인지. 기준과 크기·고친 시각이 같으면 그대로라고 보고 읽지 않는다. 기준에 없고
  * 저장소에 같은 경로·같은 크기가 없으면 어차피 올리거나 충돌이라 내용을 몰라도 된다(올릴 때 계산한다).
  */
-export function needsHash(path: string, local: { size: number; mtime?: number }, base: SyncBase | null, remote: Map<string, RemoteSide>): boolean {
+export function needsHash(
+  path: string,
+  local: { size: number; mtime?: number },
+  base: SyncBase | null,
+  remote: Map<string, RemoteSide>,
+  /** 기준에 있는데 지금 내 폴더에 없는 파일들의 크기 — 새 파일이 그중 하나와 크기가 같으면 옮긴 것일 수 있다. */
+  missingSizes: Set<number> = new Set(),
+): boolean {
   const b = base?.[path];
   if (b && b.size === local.size && b.mtime !== undefined && b.mtime === local.mtime) return false;
   if (b) return true;
   const r = remote.get(path);
-  return !!r && r.size === local.size;
+  return (!!r && r.size === local.size) || missingSizes.has(local.size);
 }
 
-/** 기준에서 그대로라고 본 내 파일의 해시. */
+/** 기준에서 그대로라고 본 내 파일의 해시. 열람자가 제안해 둔 새 파일은 그 제안한 해시다. */
 export function cachedHash(path: string, local: { size: number; mtime?: number }, base: SyncBase | null): string | null {
   const b = base?.[path];
-  return b && b.size === local.size && b.mtime !== undefined && b.mtime === local.mtime ? b.hash : null;
+  if (!b || b.size !== local.size || b.mtime === undefined || b.mtime !== local.mtime) return null;
+  return b.hash || (b.proposedHash && b.proposedHash !== PROPOSED_DELETE ? b.proposedHash : null);
 }
 
 /** 자동으로 해도 되는 계획인지 — 지우기와 충돌이 없을 때만. 지우는 것은 늘 사람이 확인한다. */
 export function isSafeToAutoApply(plan: SyncPlan): boolean {
-  return plan.actions.every((action) => action.kind === 'upload' || action.kind === 'download' || action.kind === 'proposed');
+  return plan.actions.every(
+    (action) => action.kind === 'upload' || action.kind === 'download' || action.kind === 'proposed' || action.kind === 'move-remote' || action.kind === 'move-local',
+  );
 }

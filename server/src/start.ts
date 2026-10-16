@@ -14,7 +14,8 @@ export interface RunningServer {
 
 /** 초대 코드와 공개 링크 토큰은 URL 경로에 실려 오므로 로그에 남기지 않는다. */
 export function maskUrl(url: string): string {
-  return url.replace(/\/api\/invites\/[^/?#]+/, '/api/invites/***').replace(/\/api\/s\/[^/?#]+/, '/api/s/***');
+  // 사람에게 주는 링크(/s/<토큰>)는 웹 앱 경로라 API 가 아닌 요청으로도 들어온다.
+  return url.replace(/\/api\/invites\/[^/?#]+/, '/api/invites/***').replace(/\/(api\/)?s\/[^/?#]+/, '/$1s/***');
 }
 
 /**

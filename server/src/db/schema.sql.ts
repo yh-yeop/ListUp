@@ -375,4 +375,19 @@ export const MIGRATIONS: {
       );
     `,
   },
+  {
+    version: 9,
+    up: `
+      -- 받기 함 링크로 올라온 blob. 손님은 자기 링크로 올린 내용만 제안에 담을 수 있다(해시로 떠보지 못하게).
+      CREATE TABLE share_blobs (
+        share_id   TEXT NOT NULL REFERENCES shares(id) ON DELETE CASCADE,
+        hash       TEXT NOT NULL REFERENCES blobs(hash),
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (share_id, hash)
+      );
+      CREATE INDEX idx_share_blobs_hash ON share_blobs(hash);
+      -- GC 가 제안 당시 원본도 참조로 세므로 그 열에도 인덱스가 있어야 전체 스캔을 하지 않는다.
+      CREATE INDEX idx_changes_base_blob ON proposal_changes(base_blob_hash);
+    `,
+  },
 ];

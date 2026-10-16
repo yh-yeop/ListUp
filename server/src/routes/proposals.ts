@@ -11,6 +11,12 @@ import {
 import type { AppContext } from '../context.ts';
 import { badRequest, conflict, forbidden, notFound } from '../lib/errors.ts';
 import { MAX_MERGE_BYTES, decodeText, merge3 } from '../lib/merge.ts';
+
+/** 상세를 볼 때마다 다시 합쳐 보지 않게 — (원본, 저장소, 제안) 세 해시로 기억한다. */
+const mergeCache = new Map<string, Buffer | null>();
+const MERGE_CACHE_SIZE = 200;
+/** 상세 하나에서 자동 병합을 시험해 보는 최대 충돌 수 — 그 뒤 것은 정리 때 고르면 그때 계산한다. */
+const MAX_AUTOMERGE_PROBES = 20;
 import { mimeForPath } from '../lib/mime.ts';
 import { newId } from '../lib/ids.ts';
 import { body, optionalString, queryInt, queryString, requireUser, requiredString } from '../lib/request.ts';
@@ -295,6 +301,18 @@ export async function registerProposalRoutes(app: FastifyInstance, ctx: AppConte
       if (getRepoRow(db, row.repo_id)!.head_snapshot_id !== headId) {
         throw conflict('그 사이 저장소가 바뀌었습니다. 다시 확인한 뒤 정리해 주세요.');
       }
+      // 합치는 동안(파일 쓰기) 제안이 닫혔거나 다른 정리가 끼어들었으면 그 위에 덮지 않는다.
+      const fresh = getProposalRow(db, proposalId);
+      const freshChanges = readChanges(db, proposalId);
+      if (
+        !fresh ||
+        fresh.status !== 'open' ||
+        fresh.base_snapshot_id !== row.base_snapshot_id ||
+        freshChanges.length !== changes.length ||
+        freshChanges.some((c, i) => c.path !== changes[i].path || c.blob_hash !== changes[i].blob_hash)
+      ) {
+        throw conflict('그 사이 제안이 바뀌었습니다. 다시 확인한 뒤 정리해 주세요.');
+      }
       const remove = db.prepare(`DELETE FROM proposal_changes WHERE proposal_id = ? AND path = ?`);
       const rebase = db.prepare(
         `UPDATE proposal_changes SET op = ?, blob_hash = ?, size = ?, mime_type = ?, base_blob_hash = ?, base_size = ?
@@ -422,17 +440,25 @@ function mergedContent(ctx: AppContext, change: ChangeRow, headEntry: EntryRow |
   if (change.size > MAX_MERGE_BYTES || (change.base_size ?? Infinity) > MAX_MERGE_BYTES || headEntry.size > MAX_MERGE_BYTES) {
     return null;
   }
+  const key = `${change.base_blob_hash}|${headEntry.blob_hash}|${change.blob_hash}`;
+  const cached = mergeCache.get(key);
+  if (cached !== undefined) return cached;
+  let merged: Buffer | null = null;
   try {
     const read = (hash: string) => decodeText(fs.readFileSync(ctx.blobs.pathFor(hash)));
     const base = read(change.base_blob_hash);
     const theirs = read(headEntry.blob_hash);
     const mine = read(change.blob_hash);
-    if (base === null || theirs === null || mine === null) return null;
-    const result = merge3(base, theirs, mine);
-    return result.ok ? Buffer.from(result.text, 'utf8') : null;
+    if (base !== null && theirs !== null && mine !== null) {
+      const result = merge3(base, theirs, mine);
+      merged = result.ok ? Buffer.from(result.text, 'utf8') : null;
+    }
   } catch {
-    return null;
+    merged = null;
   }
+  if (mergeCache.size >= MERGE_CACHE_SIZE) mergeCache.delete(mergeCache.keys().next().value!);
+  mergeCache.set(key, merged);
+  return merged;
 }
 
 /** 제안 상세 — 현재 head 기준 병합 가능 여부를 함께 계산한다. */
@@ -447,10 +473,10 @@ export function detail(ctx: AppContext, proposalId: string): ProposalDetail {
     const head = readManifest(db, repo.head_snapshot_id);
     const byPath = new Map(changes.map((change) => [change.path, change]));
     conflictDetails = [
-      ...findConflicts(db, changes, row.base_snapshot_id, repo.head_snapshot_id).map((path) => ({
+      ...findConflicts(db, changes, row.base_snapshot_id, repo.head_snapshot_id).map((path, index) => ({
         path,
         reason: 'changed' as const,
-        autoMerge: mergedContent(ctx, byPath.get(path)!, head.get(path)) !== null,
+        ...(index < MAX_AUTOMERGE_PROBES ? { autoMerge: mergedContent(ctx, byPath.get(path)!, head.get(path)) !== null } : {}),
       })),
       ...findPathConflicts(head, changes).map((path) => ({ path, reason: 'name' as const })),
     ];

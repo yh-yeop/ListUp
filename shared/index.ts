@@ -519,6 +519,47 @@ export interface MirrorManifest {
   files: { path: string; blobHash: string; size: number; mimeType: string; updatedAt: number }[];
 }
 
+// ---------------------------------------------------------------------------
+// 검색·새 소식 (1.4.0)
+// ---------------------------------------------------------------------------
+
+/** 파일 이름·경로로 찾은 파일 하나. 저장소 전체 검색(/search)이면 어느 저장소인지도. */
+export interface SearchHit extends FileEntry {
+  repoId: string;
+  repoName: string;
+  /** 파일 이름에 맞았으면(경로 중간이 아니라) 앞에 온다. */
+  nameMatch: boolean;
+}
+
+export interface SearchResult {
+  hits: SearchHit[];
+  /** 한도에 걸려 더 있을 수 있다. */
+  truncated: boolean;
+}
+
+/**
+ * 내 저장소들에서 최근에 있었던 일. 푸시 알림 대신 앱이 열릴 때 보여 준다.
+ * - commit: 파일이 바뀜(스냅샷)
+ * - proposal: 변경 제안이 올라옴 / 반영됨 / 닫힘
+ * - comment: 제안에 의견이 달림
+ */
+export type ActivityKind = 'commit' | 'proposal-opened' | 'proposal-merged' | 'proposal-closed' | 'comment';
+
+export interface ActivityItem {
+  kind: ActivityKind;
+  at: number;
+  repoId: string;
+  repoName: string;
+  actor: PublicUser;
+  /** 스냅샷 메시지·제안 제목·의견 앞부분. */
+  title: string;
+  /** 제안 관련이면 그 제안. */
+  proposalId?: string;
+  proposalNumber?: number;
+  /** 내가 한 일인지 — 앱이 "읽지 않음"에서 뺀다. */
+  mine: boolean;
+}
+
 /** GET /repos/:repoId/storage — 저장소가 디스크를 얼마나, 어디에 쓰는지. */
 export interface RepoStorage {
   /** 지금 파일. */
@@ -722,6 +763,8 @@ export interface DesktopFolders {
   hash?(root: string, relativePath: string): Promise<string>;
   /** 파일을 OS 휴지통으로 옮긴다(동기화로 지울 때). 1.4.0 부터. */
   trash?(root: string, relativePath: string): Promise<void>;
+  /** 폴더 안에서 파일을 옮기거나 이름을 바꾼다(하위 폴더를 만든다). 가는 자리에 파일이 있으면 던진다. 1.4.0 부터. */
+  move?(root: string, from: string, to: string): Promise<void>;
   /** 동기화할 폴더로 기억해 둔다 — 앱을 다시 켜도 대화상자 없이 다시 열 수 있게. 1.4.0 부터. */
   remember?(root: string): Promise<boolean>;
   /** 기억해 둔 폴더를 잊는다. */

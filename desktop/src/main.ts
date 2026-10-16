@@ -22,7 +22,7 @@ import {
   Tray,
 } from 'electron';
 import type { HostSettingsPatch, HostStatus } from '@listup/shared';
-import { allowRoot, hashFile, isAllowedRoot, readChunk, saveUrl, scanFolder, trashFile } from './folders.ts';
+import { allowRoot, hashFile, isAllowedRoot, moveFile, readChunk, saveUrl, scanFolder, trashFile } from './folders.ts';
 import { credentialsAvailable, getCredential, removeCredential, setCredential } from './credentials.ts';
 import { Host } from './host.ts';
 import { IPC } from './protocol.ts';
@@ -261,6 +261,7 @@ function registerIpc(): void {
   );
   ipcMain.handle(IPC.foldersHash, (_e, root: string, relativePath: string) => hashFile(root, relativePath));
   ipcMain.handle(IPC.foldersTrash, (_e, root: string, relativePath: string) => trashFile(root, relativePath));
+  ipcMain.handle(IPC.foldersMove, (_e, root: string, from: string, to: string) => moveFile(root, from, to));
   // 이번 실행에서 대화상자로 고른 폴더만 기억할 수 있다 — 창이 아무 경로나 기억시키지 못하게.
   ipcMain.handle(IPC.foldersRemember, (_e, root: string) => {
     if (!isAllowedRoot(root)) return false;

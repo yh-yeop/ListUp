@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { api } from '../lib.mjs';
 
-export const title = '1.4 — 즉시 올리기·되돌리기·충돌 정리·용량·공유 링크·받기 함·따라가기·내용으로 비교';
+export const title = '1.4 — 즉시 올리기·되돌리기·충돌 정리·용량·공유 링크·받기 함·따라가기·내용으로 비교·찾기·새 소식';
 
 const lines = (...xs) => xs.map((x) => `${x}\n`).join('');
 
@@ -237,6 +237,49 @@ export default async function run(t, env) {
         (await raw(A, token, repoId, 'new/c.txt')) === 'moved content' && (await raw(A, token, repoId, 'old/c.txt')) === null,
         '내용으로: 다시 올리지 않고 저장소에서 내 폴더 위치로 옮긴다',
       );
+      await ctx.close();
+    }
+
+    // 파일 찾기 — 저장소 안, 내 저장소 전부. 결과를 누르면 그 폴더로.
+    {
+      const repoId = await newRepo('search');
+      await put(A, token, repoId, 'docs/deep/report-2026.txt', 'r');
+      await put(A, token, repoId, 'other.txt', 'o');
+      const { ctx, page } = await signedIn(env, A, owner);
+      await page.goto(`${A}/repos`);
+      await page.getByLabel('파일 찾기').fill('report');
+      await page.getByRole('button', { name: 'docs/deep/report-2026.txt 열기' }).click();
+      await page.getByText('report-2026.txt').first().waitFor();
+      t.must(new URL(page.url()).pathname === `/repo/${repoId}`, '전체 찾기 → 그 저장소의 폴더로');
+      // 웹 스택은 이전 화면(저장소 목록)을 DOM 에 숨겨 두므로 보이는 찾기 칸만.
+      await page.getByLabel('파일 찾기').filter({ visible: true }).fill('zzz-none');
+      await page.getByText('맞는 파일이 없습니다').waitFor();
+      t.ok('저장소 안 찾기: 없으면 없다고');
+      await ctx.close();
+    }
+
+    // 새 소식 — 남이 한 일만 읽지 않음으로 세고, 보고 나면 0
+    {
+      const repoId = await newRepo('news');
+      const friend = await api(A, '/api/auth/signup', { email: `evo-f-${env.run}@a.test`, password: 'password-1', displayName: '친구' });
+      const invite = (await api(A, `/api/repos/${repoId}/invites`, { role: 'editor' }, token)).json.invite;
+      await api(A, `/api/invites/${invite.code}/join`, {}, friend.json.token);
+      const { ctx, page } = await signedIn(env, A, owner);
+      // 앞 절에서 손님이 보낸 받기 함 제안 등 남의 일이 이미 쌓여 있다 — 한 번 보아 읽음으로 하고 시작한다.
+      await page.goto(`${A}/activity`);
+      await page.getByText('파일을 바꿨습니다').first().waitFor();
+      await put(A, friend.json.token, repoId, 'hello.txt', '친구가 올림');
+      await put(A, token, repoId, 'mine.txt', '내가 올림');
+      await page.goto(`${A}/repos`);
+      await page.getByRole('button', { name: '새 소식 1개' }).waitFor();
+      t.ok('새 소식: 남이 한 일 하나만 읽지 않음');
+      await page.getByRole('button', { name: '새 소식 1개' }).click();
+      await page.getByText('친구 님이 파일을 바꿨습니다').waitFor();
+      await page.getByText('추가: mine.txt').waitFor();
+      t.ok('새 소식: 내가 한 일도 보인다(읽지 않음으로 세지는 않는다)');
+      await page.goBack();
+      await page.getByRole('button', { name: '새 소식', exact: true }).waitFor();
+      t.ok('새 소식: 보고 나면 읽지 않음이 사라진다');
       await ctx.close();
     }
   } finally {

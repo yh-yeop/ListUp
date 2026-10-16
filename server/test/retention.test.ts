@@ -217,6 +217,31 @@ describe('이력 보존 (솎기)', () => {
     assert.equal(row.base_snapshot_id, null);
   });
 
+  it('기준 시점이 정리된 뒤 다시 연 제안도 제대로 판단한다', async () => {
+    const now = Date.now();
+    await commitAt('a.txt', 'v1', now - 90 * DAY);
+    await commitAt('a.txt', 'v2', now - 80 * DAY);
+    const blob = await h.app.inject({ method: 'POST', url: `/api/repos/${repoId}/uploads`, headers: auth(owner), payload: { name: 'a.txt', size: 2 } });
+    const id = blob.json().upload.id;
+    await h.app.inject({ method: 'PUT', url: `/api/uploads/${id}?offset=0`, headers: { ...auth(owner), 'content-type': 'application/octet-stream' }, payload: Buffer.from('v9') });
+    const done = await h.app.inject({ method: 'POST', url: `/api/uploads/${id}/complete`, headers: auth(owner) });
+    const proposal = (await h.app.inject({
+      method: 'POST',
+      url: `/api/repos/${repoId}/proposals`,
+      headers: auth(owner),
+      payload: { title: '고침', changes: [{ path: 'a.txt', blobHash: done.json().blob.hash }] },
+    })).json().proposal;
+    await commitAt('other.txt', 'x', now - 1 * DAY);
+    await h.app.inject({ method: 'POST', url: `/api/proposals/${proposal.id}/close`, headers: auth(owner) });
+    pruneRepoHistory(h.ctx.db, repoId, { days: 30, keepOlder: 'none', now });
+    await h.app.inject({ method: 'POST', url: `/api/proposals/${proposal.id}/reopen`, headers: auth(owner) });
+    const detail = await h.app.inject({ method: 'GET', url: `/api/proposals/${proposal.id}`, headers: auth(owner) });
+    assert.deepEqual(detail.json().proposal.conflicts, [], 'a.txt 는 그 뒤 바뀌지 않았으니 충돌이 아니다');
+    assert.equal(detail.json().proposal.mergeable, true);
+    const merged = await h.app.inject({ method: 'POST', url: `/api/proposals/${proposal.id}/merge`, headers: auth(owner) });
+    assert.equal(merged.statusCode, 200, merged.body);
+  });
+
   it('보존 기간 0 이면 아무것도 지우지 않는다', async () => {
     const now = Date.now();
     await commitAt('a.txt', '1', now - 900 * DAY);
