@@ -37,7 +37,7 @@ export const ROLE_LABEL: Record<Role, string> = {
 /** 역할별로 할 수 있는 일 요약 (UI 설명용). */
 export const ROLE_DESCRIPTION: Record<Role, string> = {
   viewer: '파일을 보고 내려받을 수 있고, 변경 제안을 올릴 수 있습니다.',
-  editor: '파일을 직접 올리고 지울 수 있고, 다른 사람의 제안을 병합할 수 있습니다.',
+  editor: '파일을 직접 올리고 지울 수 있고, 다른 사람의 제안을 저장소에 반영할 수 있습니다.',
   owner: '저장소 설정과 멤버를 관리할 수 있습니다.',
 };
 
@@ -183,7 +183,7 @@ export type ProposalStatus = 'open' | 'merged' | 'closed';
 
 export const PROPOSAL_STATUS_LABEL: Record<ProposalStatus, string> = {
   open: '검토 중',
-  merged: '병합됨',
+  merged: '반영됨',
   closed: '닫힘',
 };
 
@@ -210,6 +210,17 @@ export interface ProposalDetail extends Proposal {
   mergeable: boolean;
   /** 병합을 막는 경로들 (base 이후 head 에서 바뀐 파일, 또는 head 의 파일/폴더와 이름이 겹치는 경로). */
   conflicts: string[];
+  /**
+   * conflicts 의 경로마다 이유. 1.3.0 까지의 서버에는 없다 — 없으면 이유를 가르지 않고 보여준다.
+   * - changed: 제안을 만든 뒤 저장소에서 같은 파일이 바뀌었다
+   * - name: 더하려는 경로가 저장소의 파일·폴더와 이름이 겹치게 됐다 (`a` 파일이 있는데 `a/b` 를 더함 등)
+   */
+  conflictDetails?: ProposalConflict[];
+}
+
+export interface ProposalConflict {
+  path: string;
+  reason: 'changed' | 'name';
 }
 
 export interface Comment {
@@ -299,6 +310,20 @@ export function formatBytes(bytes: number): string {
   return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
 }
 
+const pad2 = (n: number) => String(n).padStart(2, '0');
+
+/** 날짜 — `2026.10.23`. 화면마다 날짜 모양이 다르지 않게 이것만 쓴다(formatRelativeTime 의 30일 넘는 날짜와 같은 모양). */
+export function formatDate(timestamp: number): string {
+  const d = new Date(timestamp);
+  return `${d.getFullYear()}.${pad2(d.getMonth() + 1)}.${pad2(d.getDate())}`;
+}
+
+/** 시각 — `15:45` (24시간). */
+export function formatTime(timestamp: number): string {
+  const d = new Date(timestamp);
+  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+}
+
 export function formatRelativeTime(timestamp: number, now: number = Date.now()): string {
   const diff = Math.max(0, now - timestamp);
   const minute = 60_000;
@@ -308,10 +333,7 @@ export function formatRelativeTime(timestamp: number, now: number = Date.now()):
   if (diff < hour) return `${Math.floor(diff / minute)}분 전`;
   if (diff < day) return `${Math.floor(diff / hour)}시간 전`;
   if (diff < 30 * day) return `${Math.floor(diff / day)}일 전`;
-  const date = new Date(timestamp);
-  return `${date.getFullYear()}.${String(date.getMonth() + 1).padStart(2, '0')}.${String(
-    date.getDate(),
-  ).padStart(2, '0')}`;
+  return formatDate(timestamp);
 }
 
 // ---------------------------------------------------------------------------
@@ -399,6 +421,9 @@ export const API_LEVEL = 3;
 
 /** 이 앱이 쓰는 기능이 있는 가장 낮은 서버 API_LEVEL. 앱의 업로드·내려받기가 수준 2 를 쓴다. */
 export const REQUIRED_SERVER_API_LEVEL = 2;
+
+/** 서버 이름(`LISTUP_SERVER_NAME`)의 최대 길이. 앱의 서버 이름 칸과 같다. */
+export const MAX_SERVER_NAME_LENGTH = 60;
 
 /** GET /api/health 응답. 로그인 없이 부를 수 있다. */
 export interface HealthResponse {
@@ -507,6 +532,8 @@ export interface HostStatus {
   autoStart: boolean;
   /** Windows 에 로그인하면 앱을 (창 없이) 켤지. */
   openAtLogin: boolean;
+  /** 서버 이름(LISTUP_SERVER_NAME). 들어오는 앱이 서버 목록 이름 칸에 채운다. 없으면 null. */
+  serverName: string | null;
 }
 
 export interface HostSettingsPatch {
@@ -514,6 +541,8 @@ export interface HostSettingsPatch {
   tunnel?: HostTunnelMode;
   autoStart?: boolean;
   openAtLogin?: boolean;
+  /** 빈 문자열·null 이면 이름을 지운다. 서버를 끈 뒤에만. */
+  serverName?: string | null;
 }
 
 /** 공개 방식에 필요한 프로그램이 준비됐는지. */

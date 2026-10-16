@@ -209,7 +209,8 @@ try {
   t.must(reset.status === 200, '발급한 코드로 실제로 비밀번호를 바꿀 수 있다');
 
   // 7. 실행 중에는 포트를 못 바꾼다
-  t.must(await page.getByRole('button', { name: '저장' }).isDisabled(), '실행 중에는 포트 저장이 막힌다');
+  t.must(await page.getByRole('button', { name: '포트 저장' }).isDisabled(), '실행 중에는 포트 저장이 막힌다');
+  t.must(await page.getByRole('button', { name: '서버 이름 저장' }).isDisabled(), '실행 중에는 서버 이름 저장도 막힌다');
 
   // 8. 로그가 보인다
   await page.getByText('최근 로그').waitFor({ timeout: 10_000 });
@@ -239,6 +240,18 @@ try {
   }
   const backedUp = fs.readdirSync(backupDir);
   t.must(backedUp.some((f) => /^listup-\d{8}-\d{6}\.db$/.test(f)), '백업: DB 사본을 담는다');
+
+  // 11-2. 서버 이름 — 끈 채로 정하고 켜면 health 가 그 이름을 알려준다
+  await page.getByPlaceholder('예: 우리집 음악서버').filter({ visible: true }).fill('  가족 서버 ');
+  await page.getByRole('button', { name: '서버 이름 저장' }).click();
+  await page.waitForFunction(async () => (await window.listupDesktop.host.getStatus()).serverName === '가족 서버');
+  t.must(true, '서버 이름을 앞뒤 공백 없이 저장한다');
+  await page.getByRole('button', { name: '서버 켜기' }).click();
+  await page.getByRole('button', { name: '서버 끄기' }).waitFor({ timeout: 30_000 });
+  const named = await (await fetch(`http://127.0.0.1:${PORT}/api/health`)).json();
+  t.must(named.serverName === '가족 서버', `켜면 health 가 서버 이름을 알려준다 (${named.serverName})`);
+  await page.getByRole('button', { name: '서버 끄기' }).click();
+  await page.getByRole('button', { name: '서버 켜기' }).waitFor({ timeout: 20_000 });
 
   // 12. 포트를 다른 프로그램이 쓰고 있으면 이유를 알린다
   await new Promise((r) => blocker.listen(PORT, '0.0.0.0', r));

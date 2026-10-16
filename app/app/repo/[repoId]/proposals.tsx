@@ -131,7 +131,7 @@ export default function ProposalsScreen() {
           })}
         </Row>
         <Button
-          label="새 제안"
+          label="변경 제안 만들기"
           icon="add"
           compact
           onPress={() => router.push(`/repo/${repoId}/new-proposal`)}

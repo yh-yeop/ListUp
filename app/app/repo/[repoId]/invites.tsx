@@ -5,6 +5,7 @@ import { Platform, Pressable, RefreshControl, Share, View } from 'react-native';
 import {
   ROLE_DESCRIPTION,
   ROLE_LABEL,
+  formatDate,
   formatInviteCode,
   formatRelativeTime,
   hasRole,
@@ -38,7 +39,7 @@ import { serverUrl } from '../../../src/state/servers';
 import { fontSize, monoFont, radius, spacing, useTheme } from '../../../src/theme';
 
 const EXPIRY_OPTIONS = [
-  { label: '무제한', days: null },
+  { label: '기한 없음', days: null },
   { label: '1일', days: 1 },
   { label: '7일', days: 7 },
   { label: '30일', days: 30 },
@@ -258,7 +259,7 @@ export default function InvitesScreen() {
                             ? '기한 없음'
                             : invite.expiresAt <= Date.now()
                               ? '만료됨'
-                              : `${new Date(invite.expiresAt).toLocaleDateString('ko-KR')}까지`}
+                              : `${formatDate(invite.expiresAt)} 까지`}
                       </Caption>
                       <Caption>{formatRelativeTime(invite.createdAt)} 생성</Caption>
                     </Row>

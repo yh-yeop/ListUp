@@ -156,8 +156,11 @@ export function Button({
   full,
   compact,
   style,
+  accessibilityLabel,
 }: {
   label: string;
+  /** 화면에 같은 글자의 버튼이 여럿일 때(저장 등) 스크린리더에 읽힐 이름. 없으면 label. */
+  accessibilityLabel?: string;
   onPress?: () => void;
   variant?: ButtonVariant;
   icon?: IconName;
@@ -183,7 +186,7 @@ export function Button({
       onPress={isDisabled ? undefined : onPress}
       disabled={isDisabled}
       accessibilityRole="button"
-      accessibilityLabel={label}
+      accessibilityLabel={accessibilityLabel ?? label}
       accessibilityState={{ disabled: !!isDisabled, busy: !!loading }}
       style={({ pressed }) => [
         {

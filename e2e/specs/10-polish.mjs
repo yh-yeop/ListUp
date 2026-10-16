@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { api, screen } from '../lib.mjs';
 
-export const title = '다듬기 — 서버 이름·제안 더 보기·올리기 멈추기·토스트';
+export const title = '다듬기 — 서버 이름·제안 더 보기·다시 담기·충돌 설명·올리기 멈추기·토스트';
 
 /** 나눠 올리기 API 로 작은 파일 하나를 올려 blob 해시를 받는다. */
 async function uploadBlob(base, token, repoId, name, content) {
@@ -81,6 +81,76 @@ export default async function run(t, env) {
     await page.getByText('#1', { exact: true }).waitFor();
     t.must((await numbers.count()) === 32, '더 보기 → 32개 전부');
     t.must((await page.getByRole('button', { name: '더 보기' }).count()) === 0, '끝이면 더 보기가 사라진다');
+    await ctx.close();
+  }
+
+  // 제안에 같은 파일을 다시 담으면 바꿀지 묻는다 — 안 바꾸면 하나만, 바꾸면 그래도 하나
+  {
+    const repo = (await api(A, '/api/repos', { name: '다시 담기' }, token)).json.repo;
+    const work = fs.mkdtempSync(path.join(os.tmpdir(), 'listup-e2e-restage-'));
+    fs.writeFileSync(path.join(work, 'note.txt'), '첫 번째');
+    const { ctx, page } = await signedInPage(env, A, reg);
+    page.removeAllListeners('dialog');
+    const answers = [false, true];
+    const asked = [];
+    page.on('dialog', async (d) => {
+      asked.push(d.message());
+      if (answers.shift()) await d.accept();
+      else await d.dismiss();
+    });
+    await page.goto(`${A}/repo/${repo.id}/new-proposal`);
+    const add = async () => {
+      const chooser = page.waitForEvent('filechooser');
+      await page.getByRole('button', { name: '파일 담기' }).click();
+      await (await chooser).setFiles(path.join(work, 'note.txt'));
+    };
+    await add();
+    await page.getByRole('button', { name: /^제안 올리기 \(1개 변경\)$/ }).waitFor();
+    await add();
+    await page.waitForTimeout(500);
+    t.must(asked.length === 1 && asked[0].includes('이미 담긴 파일입니다'), '같은 경로를 다시 담으면 바꿀지 묻는다');
+    t.must((await page.getByRole('button', { name: /^제안 올리기 \(1개 변경\)$/ }).count()) === 1, '안 바꾸면 그대로 하나');
+    fs.writeFileSync(path.join(work, 'note.txt'), '두 번째 내용');
+    await add();
+    await page.waitForTimeout(1500);
+    t.must(asked.length === 2, '바꿀 때도 묻는다');
+    await page.getByPlaceholder('예: 3월 회의록 오타 수정').filter({ visible: true }).fill('다시 담기');
+    await page.getByRole('button', { name: /^제안 올리기 \(1개 변경\)$/ }).click();
+    await page.waitForURL(/\/proposal\//, { timeout: 15000 });
+    const proposals = (await api(A, `/api/repos/${repo.id}/proposals`, undefined, token)).json.proposals;
+    const detail = (await api(A, `/api/proposals/${proposals[0].id}`, undefined, token)).json.proposal;
+    t.must(detail.changes.length === 1 && detail.changes[0].size === Buffer.byteLength('두 번째 내용'), '바꾸면 새 내용 하나로 제안된다');
+    await ctx.close();
+    fs.rmSync(work, { recursive: true, force: true });
+  }
+
+  // 반영할 수 없는 제안 — 이유별로 나눠 설명한다
+  {
+    const repo = (await api(A, '/api/repos', { name: '충돌' }, token)).json.repo;
+    const commit = async (changes) => {
+      const res = await api(A, `/api/repos/${repo.id}/files/commit`, { changes }, token);
+      if (res.status >= 300) throw new Error(`커밋 실패: ${JSON.stringify(res.json)}`);
+    };
+    await commit([{ path: 'doc.txt', blobHash: await uploadBlob(A, token, repo.id, 'doc.txt', '원본') }]);
+    const proposal = (
+      await api(A, `/api/repos/${repo.id}/proposals`, {
+        title: '두 가지 충돌',
+        changes: [
+          { path: 'doc.txt', blobHash: await uploadBlob(A, token, repo.id, 'doc.txt', '제안본') },
+          { path: 'new/inner.txt', blobHash: await uploadBlob(A, token, repo.id, 'inner.txt', '안') },
+        ],
+      }, token)
+    ).json.proposal;
+    // 제안 뒤 저장소에서 doc.txt 가 바뀌고, 'new' 라는 파일이 생긴다.
+    await commit([
+      { path: 'doc.txt', blobHash: await uploadBlob(A, token, repo.id, 'doc.txt', '다른 사람이 고침') },
+      { path: 'new', blobHash: await uploadBlob(A, token, repo.id, 'new', '파일') },
+    ]);
+    const { ctx, page } = await signedInPage(env, A, reg);
+    await page.goto(`${A}/proposal/${proposal.id}`);
+    await page.getByText('지금은 반영할 수 없습니다').waitFor();
+    t.must(await page.getByText('이 제안을 만든 뒤 저장소에서 바뀐 파일입니다', { exact: false }).isVisible(), '바뀐 파일 설명');
+    t.must(await page.getByText('같은 이름의 파일이나 폴더가 생겨', { exact: false }).isVisible(), '이름이 겹친 경로 설명');
     await ctx.close();
   }
 

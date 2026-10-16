@@ -1,6 +1,7 @@
 import { Stack, router, useLocalSearchParams } from 'expo-router';
 import { useState } from 'react';
 import { KeyboardAvoidingView, Platform, View } from 'react-native';
+import { MAX_SERVER_NAME_LENGTH } from '@listup/shared';
 import {
   Body,
   Button,
@@ -154,7 +155,7 @@ export default function ServerFormScreen() {
               value={label}
               onChangeText={setLabel}
               placeholder={isDefault ? '기본 서버' : '예: 우리집 음악서버'}
-              maxLength={60}
+              maxLength={MAX_SERVER_NAME_LENGTH}
             />
           </Field>
 

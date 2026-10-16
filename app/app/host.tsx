@@ -2,7 +2,7 @@ import * as Clipboard from 'expo-clipboard';
 import { useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import { Linking, Pressable, Switch, View } from 'react-native';
-import type { HostStatus, HostTools, HostTunnelMode } from '@listup/shared';
+import { MAX_SERVER_NAME_LENGTH, formatTime, type HostStatus, type HostTools, type HostTunnelMode } from '@listup/shared';
 import { HOST_STATE_BADGE, useEnterOwnServer } from '../src/components/HostCard';
 import {
   Badge,
@@ -303,9 +303,7 @@ function ResetCodeCard({ running }: { running: boolean }) {
     }
   };
 
-  const until = issued
-    ? new Date(issued.expiresAt).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })
-    : '';
+  const until = issued ? formatTime(issued.expiresAt) : '';
 
   return (
     <Card style={{ gap: spacing.md }}>
@@ -376,6 +374,9 @@ function StartupCard({ status, stopped, act }: { status: HostStatus; stopped: bo
   useEffect(() => setPort(String(status.port)), [status.port]);
   const portNumber = Number(port);
   const portValid = /^\d+$/.test(port) && portNumber >= 1 && portNumber <= 65535;
+  const [name, setName] = useState(status.serverName ?? '');
+  useEffect(() => setName(status.serverName ?? ''), [status.serverName]);
+  const nameChanged = name.trim() !== (status.serverName ?? '');
 
   return (
     <Card style={{ gap: spacing.lg }}>
@@ -403,10 +404,38 @@ function StartupCard({ status, stopped, act }: { status: HostStatus; stopped: bo
           />
           <Button
             label="저장"
+            accessibilityLabel="포트 저장"
             variant="secondary"
             compact
             disabled={!stopped || !portValid || portNumber === status.port}
             onPress={() => void act('port', () => host.update({ port: portNumber }))}
+          />
+        </Row>
+      </Field>
+      <Field
+        label="서버 이름"
+        hint={
+          stopped
+            ? '다른 사람이 이 서버를 목록에 더할 때 이름 칸에 미리 채워집니다. 비워 두면 주소가 보입니다.'
+            : '서버를 끈 뒤에 바꿀 수 있습니다.'
+        }
+      >
+        <Row gap={spacing.sm}>
+          <Input
+            value={name}
+            onChangeText={setName}
+            editable={stopped}
+            placeholder="예: 우리집 음악서버"
+            maxLength={MAX_SERVER_NAME_LENGTH}
+            style={{ flex: 1 }}
+          />
+          <Button
+            label="저장"
+            accessibilityLabel="서버 이름 저장"
+            variant="secondary"
+            compact
+            disabled={!stopped || !nameChanged}
+            onPress={() => void act('server-name', () => host.update({ serverName: name.trim() || null }))}
           />
         </Row>
       </Field>

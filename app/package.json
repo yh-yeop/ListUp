@@ -10,7 +10,8 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "build:web": "expo export --platform web",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --import ./test/setup.mjs --test test/*.test.ts"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.1.1",
@@ -37,6 +38,7 @@
   },
   "devDependencies": {
     "@types/react": "^19.2.18",
+    "tsx": "^4.19.2",
     "typescript": "^5.9.3"
   }
 }

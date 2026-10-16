@@ -162,6 +162,7 @@ describe('변경 제안', () => {
     const proposal = detail.json().proposal as ProposalDetail;
     assert.equal(proposal.mergeable, false);
     assert.deepEqual(proposal.conflicts, ['보고서.txt']);
+    assert.deepEqual(proposal.conflictDetails, [{ path: '보고서.txt', reason: 'changed' }]);
 
     const merged = await h.app.inject({
       method: 'POST',
@@ -493,6 +494,7 @@ describe('변경 제안', () => {
     const proposal = detail.json().proposal as ProposalDetail;
     assert.equal(proposal.mergeable, false);
     assert.deepEqual(proposal.conflicts, ['새폴더/안.txt']);
+    assert.deepEqual(proposal.conflictDetails, [{ path: '새폴더/안.txt', reason: 'name' }]);
 
     const merged = await h.app.inject({
       method: 'POST',

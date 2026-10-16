@@ -35,7 +35,10 @@ export function contentDisposition(fileName: string, inline: boolean): string {
   return `${inline ? 'inline' : 'attachment'}; filename="${ascii}"; filename*=UTF-8''${encoded}`;
 }
 
-/** 새 경로가 기존 파일/폴더와 이름 공간이 겹치면(파일 "a" 와 폴더 "a/") 409 를 던진다. */
+/**
+ * 새 경로가 기존 파일/폴더와 이름 공간이 겹치면(파일 "a" 와 폴더 "a/") 409 를 던진다.
+ * 제안과 같이 `details.conflicts` 에 부딪힌 (새) 경로를 담는다.
+ */
 export function assertNoPathConflict(manifest: Map<string, EntryRow>, filePath: string): void {
   const clash = findPathConflict(manifest, filePath);
   if (clash === null) return;
@@ -43,6 +46,7 @@ export function assertNoPathConflict(manifest: Map<string, EntryRow>, filePath: 
     clash.startsWith(`${filePath}/`)
       ? `같은 이름의 폴더가 이미 있습니다: ${filePath}`
       : `상위 경로에 파일이 있습니다: ${clash}`,
+    { conflicts: [filePath] },
   );
 }
 
@@ -342,7 +346,7 @@ export async function registerFileRoutes(app: FastifyInstance, ctx: AppContext):
       const remaining = new Map(manifest);
       for (const move of moves) remaining.delete(move.from);
       for (const move of moves) {
-        if (remaining.has(move.to)) throw conflict(`이미 존재하는 경로입니다: ${move.to}`);
+        if (remaining.has(move.to)) throw conflict(`이미 존재하는 경로입니다: ${move.to}`, { conflicts: [move.to] });
         assertNoPathConflict(remaining, move.to);
       }
 

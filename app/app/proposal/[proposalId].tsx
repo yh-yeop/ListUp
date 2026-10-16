@@ -166,14 +166,15 @@ export default function ProposalDetailScreen() {
                   지금은 반영할 수 없습니다
                 </Body>
               </Row>
-              <Caption style={{ color: colors.warning }}>
-                이 제안을 만든 뒤 아래 파일이 저장소에서 바뀌었거나, 이름이 겹치는 파일·폴더가
-                생겼습니다. 저장소의 최신 상태를 확인한 뒤 다시 제안해 주세요.
-              </Caption>
-              {proposal.conflicts.map((path) => (
-                <Body key={path} style={{ fontFamily: monoFont, fontSize: fontSize.sm }}>
-                  {path}
-                </Body>
+              {conflictGroups(proposal).map((group) => (
+                <View key={group.title} style={{ gap: spacing.xs }}>
+                  <Caption style={{ color: colors.warning }}>{group.title}</Caption>
+                  {group.paths.map((path) => (
+                    <Body key={path} style={{ fontFamily: monoFont, fontSize: fontSize.sm }}>
+                      {path}
+                    </Body>
+                  ))}
+                </View>
               ))}
             </Card>
           ) : null}
@@ -391,4 +392,38 @@ function ChangeRow({
       </Row>
     </View>
   );
+}
+
+/**
+ * 병합을 막는 경로를 이유별로 묶어 설명을 붙인다. 이유를 알려주지 않는 서버(1.3.0 까지)는 한 묶음으로.
+ */
+function conflictGroups(proposal: ProposalDetail): { title: string; paths: string[] }[] {
+  const details = proposal.conflictDetails;
+  if (!details) {
+    return [
+      {
+        title:
+          '이 제안을 만든 뒤 아래 파일이 저장소에서 바뀌었거나, 이름이 겹치는 파일·폴더가 생겼습니다. 저장소의 최신 상태를 확인한 뒤 다시 제안해 주세요.',
+        paths: proposal.conflicts,
+      },
+    ];
+  }
+  const changed = details.filter((d) => d.reason === 'changed').map((d) => d.path);
+  const named = details.filter((d) => d.reason === 'name').map((d) => d.path);
+  const groups: { title: string; paths: string[] }[] = [];
+  if (changed.length > 0) {
+    groups.push({
+      title:
+        '이 제안을 만든 뒤 저장소에서 바뀐 파일입니다. 그대로 반영하면 그 변경을 덮어쓰므로, 최신 파일을 받아 다시 고쳐 제안해 주세요.',
+      paths: changed,
+    });
+  }
+  if (named.length > 0) {
+    groups.push({
+      title:
+        '저장소에 같은 이름의 파일이나 폴더가 생겨 이 경로에 더할 수 없습니다(파일 아래에 파일을 두거나 폴더와 이름이 같아짐). 다른 이름이나 위치로 다시 제안해 주세요.',
+      paths: named,
+    });
+  }
+  return groups;
 }

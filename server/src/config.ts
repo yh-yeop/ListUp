@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { isIP } from 'node:net';
 import path from 'node:path';
+import { MAX_SERVER_NAME_LENGTH } from '@listup/shared';
 
 export interface Config {
   host: string;
@@ -127,15 +128,12 @@ function envTrustProxy(): boolean | string[] {
   return entries;
 }
 
-/** 앱의 서버 이름 칸(`app/app/server.tsx`)과 같은 길이. */
-export const SERVER_NAME_MAX_LENGTH = 60;
-
 /** `LISTUP_SERVER_NAME` — 앞뒤 공백을 떼고, 비어 있으면 null. 너무 길면 뜨지 않는다. */
 function envServerName(): string | null {
   const value = process.env.LISTUP_SERVER_NAME?.trim();
   if (!value) return null;
-  if ([...value].length > SERVER_NAME_MAX_LENGTH) {
-    throw new Error(`LISTUP_SERVER_NAME 은(는) ${SERVER_NAME_MAX_LENGTH}자 이하여야 합니다: "${value}"`);
+  if ([...value].length > MAX_SERVER_NAME_LENGTH) {
+    throw new Error(`LISTUP_SERVER_NAME 은(는) ${MAX_SERVER_NAME_LENGTH}자 이하여야 합니다: "${value}"`);
   }
   return value;
 }

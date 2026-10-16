@@ -4,9 +4,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import { createSocket } from 'node:dgram';
 import { utilityProcess, type UtilityProcess } from 'electron';
-import type { HostSettingsPatch, HostState, HostStatus } from '@listup/shared';
+import { MAX_SERVER_NAME_LENGTH, type HostSettingsPatch, type HostState, type HostStatus } from '@listup/shared';
 import type { ServerReply, ServerRequest } from './protocol.ts';
-import { dataDirOf, readSettings, writeSettings } from './settings.ts';
+import { cleanServerName, dataDirOf, readSettings, writeSettings } from './settings.ts';
 import { Tunnel } from './tunnel.ts';
 
 /** 서버 프로세스를 띄우는 데 필요한 파일 위치. main 이 개발/설치에 맞춰 정한다. */
@@ -124,6 +124,7 @@ export class Host extends EventEmitter {
       dataDir: dataDirOf(settings),
       autoStart: settings.autoStart,
       openAtLogin: settings.openAtLogin,
+      serverName: settings.serverName,
     };
   }
 
@@ -179,6 +180,8 @@ export class Host extends EventEmitter {
         LISTUP_PORT: String(settings.port),
         LISTUP_WEB_DIR: this.paths.serverWeb,
         LISTUP_LOG_LEVEL: process.env.LISTUP_LOG_LEVEL ?? 'info',
+        // 관리 화면에서 정한 이름이 환경변수보다 앞선다.
+        ...(settings.serverName ? { LISTUP_SERVER_NAME: settings.serverName } : {}),
       },
     });
   }
@@ -312,6 +315,12 @@ export class Host extends EventEmitter {
         throw new Error('포트는 1~65535 사이의 정수여야 합니다.');
       }
       if (this.running && patch.port !== before.port) throw new Error('포트는 서버를 끈 뒤에 바꿀 수 있습니다.');
+    }
+    if (patch.serverName !== undefined) {
+      const name = patch.serverName === null ? '' : patch.serverName.trim();
+      if (name && cleanServerName(name) === null) throw new Error(`서버 이름은 ${MAX_SERVER_NAME_LENGTH}자까지입니다.`);
+      if (this.running && (name || null) !== before.serverName) throw new Error('서버 이름은 서버를 끈 뒤에 바꿀 수 있습니다.');
+      patch = { ...patch, serverName: name || null };
     }
     const after = writeSettings(patch);
     if (patch.tunnel !== undefined && patch.tunnel !== before.tunnel) {

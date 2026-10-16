@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { app } from 'electron';
-import type { HostTunnelMode } from '@listup/shared';
+import { MAX_SERVER_NAME_LENGTH, type HostTunnelMode } from '@listup/shared';
 
 /** PC 앱 설정. 앱 데이터 폴더의 settings.json 에 둔다. */
 export interface Settings {
@@ -13,6 +13,8 @@ export interface Settings {
   dataDir: string | null;
   /** 창을 닫아도 서버가 돈다는 안내를 이미 보였는지. */
   trayNoticeShown: boolean;
+  /** 서버 이름(LISTUP_SERVER_NAME 으로 넘긴다). null 이면 정하지 않음. */
+  serverName: string | null;
 }
 
 const DEFAULTS: Settings = {
@@ -22,7 +24,15 @@ const DEFAULTS: Settings = {
   openAtLogin: false,
   dataDir: null,
   trayNoticeShown: false,
+  serverName: null,
 };
+
+/** 앞뒤 공백을 뗀 서버 이름. 비었거나 너무 길면(손으로 고친 파일) null. */
+export function cleanServerName(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const name = value.trim();
+  return name && [...name].length <= MAX_SERVER_NAME_LENGTH ? name : null;
+}
 
 const file = () => path.join(app.getPath('userData'), 'settings.json');
 
@@ -45,6 +55,7 @@ export function readSettings(): Settings {
     openAtLogin: raw.openAtLogin === true,
     dataDir: typeof raw.dataDir === 'string' && raw.dataDir ? raw.dataDir : null,
     trayNoticeShown: raw.trayNoticeShown === true,
+    serverName: cleanServerName(raw.serverName),
   };
   return cached;
 }

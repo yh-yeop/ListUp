@@ -22,6 +22,7 @@ import {
 } from '../../../src/components/ui';
 import { ApiError, api, getMaxUploadBytes } from '../../../src/api/client';
 import { TransferProgress } from '../../../src/components/TransferProgress';
+import { alreadyStaged, mergeStaged, type StagedChange } from '../../../src/lib/staging';
 import { useAbortable } from '../../../src/lib/useAbortable';
 import { confirmAction, notify, notifyError, notifyWarning } from '../../../src/lib/dialogs';
 import { pickFiles } from '../../../src/lib/files';
@@ -29,15 +30,6 @@ import { uploadMany, type UploadProgress } from '../../../src/lib/transfer';
 import { useAsync } from '../../../src/lib/useAsync';
 import { fontSize, monoFont, spacing, useTheme } from '../../../src/theme';
 
-/** 화면에서 준비 중인 변경 한 건. */
-interface StagedChange {
-  key: string;
-  path: string;
-  /** null 이면 삭제 제안. */
-  blobHash: string | null;
-  size: number;
-  originalName: string;
-}
 
 export default function NewProposalScreen() {
   const { repoId, path: initialPath } = useLocalSearchParams<{ repoId: string; path?: string }>();
@@ -99,7 +91,18 @@ export default function NewProposalScreen() {
     // 한도는 서버 설정을 따르므로 서버에 물어본 값으로 거른다.
     const maxBytes = await getMaxUploadBytes();
     const tooLarge = sources.filter((source) => source.size > maxBytes).map((source) => source.name);
-    const accepted = sources.filter((source) => source.size <= maxBytes);
+    const pathOf = (name: string) => (targetFolder ? `${targetFolder}/${name}` : name);
+    let accepted = sources.filter((source) => source.size <= maxBytes);
+    // 이미 담긴 경로면 바꿀지 묻는다. 안 바꾸면 그 파일은 올리지도 않는다.
+    const duplicates = alreadyStaged(staged, accepted.map((source) => pathOf(source.name)));
+    if (duplicates.length > 0) {
+      const replace = await confirmAction({
+        title: duplicates.length === 1 ? '이미 담긴 파일입니다. 바꿀까요?' : `이미 담긴 파일 ${duplicates.length}개를 바꿀까요?`,
+        message: `${duplicates.slice(0, 5).join('\n')}${duplicates.length > 5 ? `\n외 ${duplicates.length - 5}개` : ''}\n\n바꾸지 않으면 이 파일들은 빼고 담습니다.`,
+        confirmLabel: '바꾸기',
+      });
+      if (!replace) accepted = accepted.filter((source) => !duplicates.includes(pathOf(source.name)));
+    }
     const added: StagedChange[] = [];
     if (accepted.length > 0) {
       setProgress({ sentBytes: 0, totalBytes: 0, doneFiles: 0, totalFiles: accepted.length, current: '' });
@@ -107,10 +110,7 @@ export default function NewProposalScreen() {
       const signal = uploadControl.start();
       const { uploaded, failures, cancelled } = await uploadMany(
         repoId,
-        accepted.map((source) => ({
-          source,
-          path: targetFolder ? `${targetFolder}/${source.name}` : source.name,
-        })),
+        accepted.map((source) => ({ source, path: pathOf(source.name) })),
         setProgress,
         signal,
       );
@@ -130,7 +130,7 @@ export default function NewProposalScreen() {
       if (failures.length > 0) setError(`${failures[0].item.source.name}: ${failures[0].message}`);
       setProgress(null);
     }
-    setStaged((prev) => [...prev, ...added]);
+    setStaged((prev) => mergeStaged(prev, added));
     if (tooLarge.length > 0) {
       notifyWarning(
         '너무 큰 파일은 건너뛰었습니다.',
@@ -216,7 +216,7 @@ export default function NewProposalScreen() {
       <View style={{ gap: spacing.sm }}>
         <Title>변경 제안 만들기</Title>
         <Subtitle>
-          담은 내용은 바로 반영되지 않습니다. 편집 권한이 있는 멤버가 확인한 뒤 병합합니다.
+          담은 내용은 바로 반영되지 않습니다. 편집 권한이 있는 멤버가 확인한 뒤 반영합니다.
         </Subtitle>
       </View>
 

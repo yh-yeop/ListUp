@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 import Database from 'better-sqlite3';
-import { openDb } from '../src/db/index.ts';
+import { migrate, openDb } from '../src/db/index.ts';
 import { MIGRATIONS } from '../src/db/schema.sql.ts';
 import { blobBelongsToRepo } from '../src/services/proposals.ts';
 import { listSnapshots, readManifest, snapshotStats } from '../src/services/snapshots.ts';
@@ -168,5 +168,67 @@ describe('마이그레이션 v5 (스냅샷을 바뀐 것만 기록)', () => {
         db.close();
       }
     });
+  });
+});
+
+describe('마이그레이션 실행', () => {
+  /** 부모(parents)·자식(children, ON DELETE CASCADE) 이 있는 v1 DB. */
+  const base = {
+    version: 1,
+    up: `
+      CREATE TABLE parents (id TEXT PRIMARY KEY, name TEXT NOT NULL);
+      CREATE TABLE children (id TEXT PRIMARY KEY, parent_id TEXT NOT NULL REFERENCES parents(id) ON DELETE CASCADE);
+      INSERT INTO parents VALUES ('p1', 'a'), ('p2', 'b');
+      INSERT INTO children VALUES ('c1', 'p1'), ('c2', 'p2');
+    `,
+  };
+
+  function freshDb(): Database.Database {
+    const db = new Database(':memory:');
+    db.pragma('foreign_keys = ON');
+    migrate(db, [base]);
+    return db;
+  }
+
+  it('부모 표를 새로 만들어 옮겨도 자식 행이 지워지지 않는다', () => {
+    const db = freshDb();
+    // 제약을 바꾸려면 표를 새로 만들어 옮겨야 한다 — 외래 키를 켠 채면 DROP 이 자식을 CASCADE 로 지운다.
+    migrate(db, [
+      base,
+      {
+        version: 2,
+        up: `
+          CREATE TABLE parents_new (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE);
+          INSERT INTO parents_new SELECT id, name FROM parents;
+          DROP TABLE parents;
+          ALTER TABLE parents_new RENAME TO parents;
+        `,
+      },
+    ]);
+    assert.equal(db.pragma('user_version', { simple: true }), 2);
+    assert.equal((db.prepare('SELECT COUNT(*) AS n FROM children').get() as { n: number }).n, 2);
+    assert.equal(db.pragma('foreign_keys', { simple: true }), 1, '끝나면 외래 키 검사를 다시 켠다');
+    // 다시 켜졌으니 없는 부모를 가리키는 행은 막힌다.
+    assert.throws(() => db.prepare(`INSERT INTO children VALUES ('c3', 'nope')`).run());
+    db.close();
+  });
+
+  it('참조가 어긋나면 그 마이그레이션을 되돌리고 멈춘다', () => {
+    const db = freshDb();
+    assert.throws(
+      () => migrate(db, [base, { version: 2, up: `DELETE FROM parents WHERE id = 'p1';` }]),
+      /v2 뒤 어긋난 외래 키 1건: children → parents/,
+    );
+    assert.equal(db.pragma('user_version', { simple: true }), 1, 'user_version 은 그대로');
+    assert.equal((db.prepare('SELECT COUNT(*) AS n FROM parents').get() as { n: number }).n, 2, '지운 것도 되돌린다');
+    assert.equal(db.pragma('foreign_keys', { simple: true }), 1, '실패해도 외래 키 검사를 다시 켠다');
+    db.close();
+  });
+
+  it('밀린 것이 없으면 아무것도 하지 않는다', () => {
+    const db = freshDb();
+    migrate(db, [base]);
+    assert.equal(db.pragma('user_version', { simple: true }), 1);
+    db.close();
   });
 });

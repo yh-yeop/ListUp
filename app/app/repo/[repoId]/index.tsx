@@ -366,7 +366,7 @@ export default function RepoFilesScreen() {
                 />
               ) : null}
               <Button
-                label="변경 제안하기"
+                label="변경 제안 만들기"
                 icon="git-pull-request-outline"
                 variant={canEdit ? 'secondary' : 'primary'}
                 onPress={() =>

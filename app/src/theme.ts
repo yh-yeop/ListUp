@@ -30,12 +30,14 @@ const light: Palette = {
   // textMuted/textFaint 는 bg·surface·surfaceAlt 위에서 WCAG AA(4.5:1) 를 넘긴다.
   textMuted: '#535b65',
   textFaint: '#686e76',
-  accent: '#2f6df6',
+  // accent·danger·success 는 글자로도 쓰인다(활성 탭·필터 칩·배지·오류 문구). bg·surface·surfaceAlt 와
+  // 모든 *Soft 배경 위에서 4.8:1 을 넘기고, 흰 글자를 얹어도 5.5:1 이다. (#2f6df6 은 accentSoft 위 3.95 였다.)
+  accent: '#1f5fe0',
   accentText: '#ffffff',
   accentSoft: '#e8f0ff',
-  danger: '#d4363c',
+  danger: '#c4282e',
   dangerSoft: '#fdeaea',
-  success: '#12805c',
+  success: '#0f7553',
   successSoft: '#e3f5ee',
   warning: '#996100',
   warningText: '#ffffff',

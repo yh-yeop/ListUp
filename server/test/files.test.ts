@@ -338,6 +338,8 @@ describe('저장소와 파일', () => {
     assert.equal(res.statusCode, 409);
     assert.equal(res.json().error.code, 'conflict');
     assert.match(res.json().error.message, /상위 경로에 파일이 있습니다/);
+    // 제안과 같이 부딪힌 경로를 details.conflicts 로 알려준다.
+    assert.deepEqual(res.json().error.details.conflicts, ['겹침/이름/안.txt']);
   });
 
   it('폴더가 있는 이름으로는 파일을 만들 수 없다', async () => {
@@ -346,6 +348,7 @@ describe('저장소와 파일', () => {
     const res = await uploadFile(h.app, owner, repoId, '겹침/폴더', '파일');
     assert.equal(res.statusCode, 409);
     assert.match(res.json().error.message, /같은 이름의 폴더가 이미 있습니다/);
+    assert.deepEqual(res.json().error.details.conflicts, ['겹침/폴더']);
   });
 
   it('이동할 때도 파일과 폴더 이름이 겹치면 거부한다', async () => {
@@ -366,6 +369,7 @@ describe('저장소와 파일', () => {
     const underFile = await move('겹침/폴더', '겹침/이름/하위');
     assert.equal(underFile.statusCode, 409);
     assert.match(underFile.json().error.message, /상위 경로에 파일이 있습니다/);
+    assert.deepEqual(underFile.json().error.details.conflicts, ['겹침/이름/하위/안.txt']);
 
     // 폴더의 유일한 파일을 폴더 이름 자리로 옮기면 폴더가 사라지므로 겹치지 않는다.
     const collapse = await move('겹침/폴더/안.txt', '겹침/폴더');

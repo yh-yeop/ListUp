@@ -26,11 +26,14 @@ Authorization: Bearer <token>
 | `forbidden` | 403 | 멤버지만 권한이 모자람 |
 | `not_found` | 404 | 없거나, **멤버가 아니라 숨긴 경우** |
 | `conflict` | 409 | 병합 충돌, 초대 소진, 중복 가입, 파일/폴더 이름 충돌, 나눠 올리기 위치 어긋남 등 |
-| `payload_too_large` | 413 | 파일 하나 크기·저장소 총량·하루 업로드 한도 초과 |
+| `payload_too_large` | 413 | 파일 하나 크기·저장소 총량·하루 업로드 한도 초과, JSON 본문 1MB 초과 |
 | `too_many_requests` | 429 | 로그인·재설정 코드 실패가 잦음. `details.retryAfterSeconds` 뒤에 다시 |
 | `internal` | 500 | 서버 오류. `requestId` 가 함께 오므로 로그와 대조할 수 있습니다 |
 
-병합 충돌·경로 충돌일 때는 `details.conflicts` 에 문제가 된 경로 목록이 들어갑니다.
+병합 충돌·경로 충돌일 때는 `details.conflicts` 에 문제가 된 경로 목록이 들어갑니다 (파일 올리기·여러 파일 커밋·이동·
+제안 만들기·병합 모두).
+
+`GET` 경로는 모두 `HEAD` 도 받습니다 — 파일·zip 내려받기는 본문 없이 크기·`ETag` 만 줍니다.
 
 ---
 
@@ -67,10 +70,10 @@ Authorization: Bearer <token>
 | POST | `/auth/login` | `{email, password}` → `{token, user}` |
 | GET | `/auth/me` | 현재 사용자 |
 | PATCH | `/auth/me` | `{displayName}` |
-| POST | `/auth/password` | `{currentPassword, newPassword}` |
+| POST | `/auth/password` | `{currentPassword, newPassword}` → `{ok, token}` |
 | POST | `/auth/reset` | `{email, code, newPassword}` → `{token, user}` — 로그인 없이 |
 
-비밀번호는 8자 이상. 로그인 실패 메시지는 이메일 존재 여부와 무관하게 동일하고, 응답 시간도
+비밀번호는 8자 이상 200자 이하. 로그인 실패 메시지는 이메일 존재 여부와 무관하게 동일하고, 응답 시간도
 같게 맞춥니다. `/auth/password` 에서 현재 비밀번호가 틀리면 `401` 이 아니라 **`400`** 입니다 —
 `401` 은 "토큰이 무효"라는 뜻이라 앱이 로그아웃해 버리기 때문입니다.
 
@@ -102,15 +105,15 @@ npm run reset-password -- me@example.com     # 서버가 켜져 있어도 됩니
 | 메서드 | 경로 | 최소 권한 | 설명 |
 | --- | --- | --- | --- |
 | GET | `/repos` | — | 내가 참여 중인 저장소 목록 |
-| POST | `/repos` | — | `{name, description?}` → 만든 사람이 owner |
+| POST | `/repos` | — | `{name, description?}` → `{repo}` (201). 만든 사람이 owner |
 | GET | `/repos/:repoId` | viewer | 요약(파일 수, 용량, 멤버 수, 열린 제안 수, 내 역할) |
 | PATCH | `/repos/:repoId` | owner | `{name?, description?}` |
 | DELETE | `/repos/:repoId` | owner | 저장소 삭제 |
 | GET | `/repos/:repoId/members` | viewer | 멤버 목록 (이메일은 owner 에게만) |
-| PATCH | `/repos/:repoId/members/:userId` | owner | `{role}` — `viewer` 또는 `editor` |
+| PATCH | `/repos/:repoId/members/:userId` | owner | `{role}` — `viewer` 또는 `editor`. owner 의 역할은 못 바꿈(400), 멤버가 아니면 404 |
 | DELETE | `/repos/:repoId/members/:userId` | 본인 또는 owner | 내보내기/나가기. owner 는 나갈 수 없음 |
-| POST | `/repos/:repoId/transfer` | owner | `{userId}` — 넘긴 사람은 editor 로 남음 |
-| GET | `/repos/:repoId/history` | viewer | 스냅샷 목록. 응답 `{snapshots, next}` — `next` 가 있으면 `?before=&beforeId=` 로 이어서 요청 (`limit` 최대 100) |
+| POST | `/repos/:repoId/transfer` | owner | `{userId}` — 넘긴 사람은 editor 로 남음. 자기 자신은 400, 멤버가 아니면 404 |
+| GET | `/repos/:repoId/history` | viewer | 스냅샷 목록. 응답 `{snapshots, next}` — `next` 가 있으면 `?before=&beforeId=` 로 이어서 요청 (둘 다 있어야 커서로 봄). `limit` 기본 30, 최대 100 |
 
 - 멤버를 내보내거나 viewer 로 강등하면 **그 사람이 만든 초대는 함께 회수**됩니다.
 
@@ -120,11 +123,11 @@ npm run reset-password -- me@example.com     # 서버가 켜져 있어도 됩니
 
 | 메서드 | 경로 | 최소 권한 | 설명 |
 | --- | --- | --- | --- |
-| GET | `/repos/:repoId/files?path=&snapshot=&recursive=` | viewer | 폴더 목록. `snapshot` 을 주면 과거 시점, `recursive=1` 이면 하위 폴더 파일까지 모두 `files` 에(`dirs` 는 비고 `recursive: true`) |
-| POST | `/repos/:repoId/files?path=` | editor | multipart 업로드 = 직접 커밋 |
+| GET | `/repos/:repoId/files?path=&snapshot=&recursive=` | viewer | 폴더 목록 `{tree: {path, snapshotId, dirs, files, recursive?}}`. `snapshot` 을 주면 과거 시점, `recursive=1` 이면 하위 폴더 파일까지 모두 `files` 에(`dirs` 는 비고 `recursive: true`) |
+| POST | `/repos/:repoId/files?path=` | editor | multipart 업로드 = 직접 커밋 (201). `path` 가 없으면 파일 이름으로 저장소 맨 위에 |
 | POST | `/repos/:repoId/files/commit` | editor | `{changes:[{path, blobHash\|null}], message?}` — 여러 파일을 스냅샷 하나로 |
-| DELETE | `/repos/:repoId/files?path=` | editor | 파일 또는 폴더 삭제 |
-| POST | `/repos/:repoId/files/move` | editor | `{from, to}` — 파일·폴더 이동/이름 변경 |
+| DELETE | `/repos/:repoId/files?path=` | editor | 파일 또는 폴더 삭제 → `{removed, snapshotId}`. 없으면 404 |
+| POST | `/repos/:repoId/files/move` | editor | `{from, to}` — 파일·폴더 이동/이름 변경 → `{moved, snapshotId}`. 같은 경로·자기 안으로는 400, 없으면 404, 겹치면 409 |
 | GET | `/repos/:repoId/raw?path=&snapshot=&inline=1` | viewer | 파일 내려받기 (`Range` 지원) |
 | POST | `/repos/:repoId/download-link` | viewer | `{path, snapshot?, archive?}` → `{url, expiresAt}` — 로그인 헤더 없이 받는 짧은 링크 |
 | GET | `/dl?t=` | (링크) | 링크로 파일 또는 폴더 zip 받기 |
@@ -159,7 +162,7 @@ curl -X POST "http://localhost:4000/api/repos/$REPO/files?path=문서/계획.txt
 }
 ```
 
-내용이 기존과 완전히 같으면 새 스냅샷을 만들지 않고 `unchanged: true` 를 돌려줍니다.
+내용이 기존과 완전히 같으면 새 스냅샷을 만들지 않고 `unchanged: true` 를 돌려줍니다(그래도 `201`).
 
 - 한도(`LISTUP_MAX_UPLOAD_MB`)를 넘는 파일은 `413` 이고 **아무것도 커밋되지 않습니다.**
 - 저장소 총량이 `LISTUP_MAX_REPO_MB` 를 넘게 되면 `413` 입니다.
@@ -171,14 +174,14 @@ curl -X POST "http://localhost:4000/api/repos/$REPO/files?path=문서/계획.txt
 
 | 메서드 | 경로 | 설명 |
 | --- | --- | --- |
-| POST | `/repos/:repoId/uploads` | `{name, size}` → `{upload: {id, size, received, chunkSize}}` (201). 최소 viewer |
-| PUT | `/uploads/:uploadId?offset=N` | `Content-Type: application/octet-stream` 조각 → `{upload}` |
+| POST | `/repos/:repoId/uploads` | `{name, size}` → `{upload: {id, repoId, name, size, received, chunkSize}}` (201). 최소 viewer |
+| PUT | `/uploads/:uploadId?offset=N` | `Content-Type: application/octet-stream` 조각 → `{upload}`. 다른 형식·빈 조각은 400 |
 | GET | `/uploads/:uploadId` | 어디까지 받았는지 (`received`) |
-| POST | `/uploads/:uploadId/complete` | `{blob: {hash, size, mimeType, name}}` (201) |
-| DELETE | `/uploads/:uploadId` | 취소 |
+| POST | `/uploads/:uploadId/complete` | `{blob: {hash, size, mimeType, name}}` (201). 덜 받았으면 409 + `details {received, size}` |
+| DELETE | `/uploads/:uploadId` | 취소. 조각을 받는 중이면 409 — 잠시 뒤 다시 |
 
 - `offset` 이 서버가 받은 길이와 다르면 `409` 에 `details.received` — 그 위치부터 다시 보내면 됩니다.
-  끊긴 조각은 받은 데까지만 남습니다.
+  끊긴 조각은 받은 데까지만 남습니다. 같은 세션에 조각이 동시에 오면 뒤의 것도 `409` + `details.received`.
 - 세션은 만든 사람만 쓰고, 그 저장소 멤버가 아니게 되면 `404` 입니다. 서버를 다시 켜도 이어지고,
   오래 멈춘 세션은 정리 작업(GC)이 지웁니다.
 - 크기 한도는 세션을 만들 때 `size` 로 먼저 봅니다. **편집 권한이 없는 사람**(제안용)은 하루 업로드
@@ -192,7 +195,7 @@ POST /api/repos/:repoId/files/commit
 { "changes": [ { "path": "사진/1.jpg", "blobHash": "a1b2…" }, { "path": "옛날.txt", "blobHash": null } ], "message": "폴더 올리기" }
 ```
 
-- 한 번에 반영하고 **스냅샷 하나**를 만듭니다. `blobHash: null` 은 삭제(없는 파일이면 무시).
+- 한 번에 반영하고 **스냅샷 하나**를 만듭니다. `blobHash: null` 은 삭제(없는 파일이면 `400`).
 - 이 저장소에 올렸거나 이력에 있는 blob 만 담을 수 있습니다. 이름 충돌 `409`, 한도 `413`/`409`.
 - 응답 `{snapshotId, unchanged, added, updated, deleted}`. 바뀐 것이 없으면 `200` 에 `unchanged: true`.
 
@@ -240,7 +243,7 @@ POST /api/repos/:repoId/files/commit
 | --- | --- | --- | --- |
 | POST | `/repos/:repoId/invites` | editor | `{role?, expiresInDays?, maxUses?}` |
 | GET | `/repos/:repoId/invites` | editor | 발급 목록 |
-| DELETE | `/invites/:inviteId` | 발급자 또는 owner | 회수 |
+| DELETE | `/invites/:inviteId` | editor 이면서 발급자, 또는 owner | 회수 (viewer 로 내려간 발급자는 403) |
 | GET | `/invites/:code` | 로그인 | 참여 전 미리보기 |
 | POST | `/invites/:code/join` | 로그인 | 참여 |
 
@@ -251,6 +254,8 @@ POST /api/repos/:repoId/files/commit
   소모하지 않습니다.**
 - 초대를 만든 사람이 더 이상 그 저장소의 editor 이상 멤버가 아니면 그 초대는 쓸 수 없습니다
   (`409`). 목록의 `active` 도 `false` 입니다.
+- 코드 모양이 틀리면 `400`, 없는 코드(또는 지워진 저장소)는 `404`, 회수·만료·소진은 `409` 입니다.
+  미리보기는 이미 멤버인 사람에게는 회수·만료된 코드도 보여 줍니다(`currentRole`).
 
 ---
 
@@ -258,19 +263,19 @@ POST /api/repos/:repoId/files/commit
 
 | 메서드 | 경로 | 최소 권한 | 설명 |
 | --- | --- | --- | --- |
-| GET | `/repos/:repoId/proposals?status=&limit=&before=` | viewer | 목록 (`open`/`merged`/`closed`). 아래 *제안 목록 페이지* |
-| POST | `/repos/:repoId/proposals` | **viewer** | 제안 만들기 |
+| GET | `/repos/:repoId/proposals?status=&limit=&before=` | viewer | 목록 (`open`/`merged`/`closed`, 그 밖은 400). 아래 *제안 목록 페이지* |
+| POST | `/repos/:repoId/proposals` | **viewer** | 제안 만들기 → `{proposal}` (201) |
 | GET | `/proposals/:proposalId` | viewer | 상세 + 충돌 여부 |
 | PATCH | `/proposals/:proposalId` | 작성자 | `{title?, description?}` — `open` 상태에서만 |
-| GET | `/proposals/:proposalId/raw?path=` | viewer | 제안에 담긴 파일 내려받기 |
-| POST | `/proposals/:proposalId/comments` | viewer | `{body}` |
-| POST | `/proposals/:proposalId/merge` | **editor** | 저장소에 반영 |
-| POST | `/proposals/:proposalId/close` | 작성자 또는 editor | 닫기 |
-| POST | `/proposals/:proposalId/reopen` | 작성자 또는 editor | 다시 열기 |
+| GET | `/proposals/:proposalId/raw?path=&inline=1` | viewer | 제안에 담긴 파일 내려받기 (`inline` 은 `/raw` 와 같음) |
+| POST | `/proposals/:proposalId/comments` | viewer | `{body}` → `{comments}` (201) |
+| POST | `/proposals/:proposalId/merge` | **editor** | 저장소에 반영 → `{proposal, snapshotId}`. 열려 있지 않거나 변경이 없으면 409 |
+| POST | `/proposals/:proposalId/close` | 작성자 또는 editor | 닫기 → `{proposal}`. 이미 반영됐으면 409, 이미 닫혔으면 그대로 200 |
+| POST | `/proposals/:proposalId/reopen` | 작성자 또는 editor | 다시 열기 → `{proposal}`. 닫힌 것만(아니면 409) |
 
 **제안 목록 페이지.** 응답은 `{proposals, next}` 이고 새 제안(번호가 큰 것)부터 옵니다.
 
-- `limit` 을 주면(최대 100) 그만큼만 주고, 더 있으면 `next` 에 `{before: <이 페이지 마지막 번호>}` 를 줍니다.
+- `limit` 을 주면(최대 100, 숫자가 아니면 30) 그만큼만 주고, 더 있으면 `next` 에 `{before: <이 페이지 마지막 번호>}` 를 줍니다.
   다음 페이지는 `?limit=30&before=<next.before>` 로 부릅니다. 더 없으면 `next: null`.
 - 커서가 제안 번호라 그 사이에 새 제안이 올라와도 페이지가 밀리거나 겹치지 않습니다.
 - `limit` 이 없으면 예전처럼 전부를 한 번에 주고 `next: null` 입니다 (1.3.0 까지의 앱).
@@ -294,20 +299,32 @@ POST /api/repos/:repoId/proposals
 - `blobHash: null` 은 삭제 제안입니다.
 - **`op`(추가/수정/삭제)는 보내지 않습니다.** 서버가 현재 저장소 상태를 보고 판정합니다.
 - 거부되는 경우: 없는 파일 삭제, 내용이 기존과 동일, 같은 경로 중복, 올리지 않은 blob 참조,
-  **다른 저장소에 올린 blob 참조**(400), 파일/폴더 이름 충돌(409), 저장소 총량·파일 수 한도(413/409).
+  **다른 저장소에 올린 blob 참조**(400), 제안 안의 경로끼리 파일/폴더 이름이 겹침(400), 저장소의 파일·폴더와
+  이름 충돌(409), 저장소 총량·파일 수 한도(413/409).
 
 ### 상세 응답에서 볼 것
 
+상세·만들기·고치기·닫기·다시 열기는 모두 `{proposal: {...}}` 로 감싸서 줍니다.
+
 ```json
 {
-  "status": "open",
-  "mergeable": false,
-  "conflicts": ["문서/회의록.md"],
-  "changes": [
-    { "path": "…", "op": "update", "size": 2048, "baseBlobHash": "…", "baseSize": 1990 }
-  ]
+  "proposal": {
+    "status": "open",
+    "mergeable": false,
+    "conflicts": ["문서/회의록.md", "새폴더/안.txt"],
+    "conflictDetails": [
+      { "path": "문서/회의록.md", "reason": "changed" },
+      { "path": "새폴더/안.txt", "reason": "name" }
+    ],
+    "changes": [
+      { "path": "…", "op": "update", "size": 2048, "baseBlobHash": "…", "baseSize": 1990 }
+    ]
+  }
 }
 ```
+
+`conflictDetails` 는 `conflicts` 의 경로마다 이유를 붙입니다 — `changed` 는 제안 뒤 저장소에서 같은 파일이
+바뀐 것, `name` 은 더하려는 경로가 저장소의 파일·폴더와 이름이 겹치게 된 것. 1.3.0 까지의 서버에는 없습니다.
 
 `baseBlobHash`/`baseSize` 는 제안 당시의 원본이므로, 리뷰 화면에서 "현재본"과 "제안본"을
 나란히 내려받아 비교할 수 있습니다.
@@ -345,3 +362,5 @@ POST /api/proposals/:proposalId/merge
 | 초대 만료 | 최대 365일 |
 | 초대 사용 횟수 | 최대 10,000 |
 | 댓글 길이 | 2,000자 |
+| 제안 제목 / 설명 | 120자 / 2,000자 |
+| JSON 요청 본문 | 1MB |

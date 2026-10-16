@@ -1,4 +1,4 @@
-# 푸시와 PR 마다 타입 검사 → 서버 테스트 → 웹 흐름 테스트.
+# 푸시와 PR 마다 타입 검사 → 서버·앱 단위 테스트 → 웹 흐름 테스트.
 name: CI
 
 on:
@@ -27,7 +27,7 @@ jobs:
       - name: 타입 검사
         run: npm run typecheck
 
-      - name: 서버 테스트
+      - name: 서버·앱 단위 테스트
         run: npm test
 
       - name: 브라우저 (Chromium)
