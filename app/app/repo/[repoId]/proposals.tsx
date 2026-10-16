@@ -23,24 +23,66 @@ import {
   Title,
 } from '../../../src/components/ui';
 import { RepoNav } from '../../../src/components/RepoNav';
-import { api } from '../../../src/api/client';
+import { ApiError, api } from '../../../src/api/client';
+import { notifyError } from '../../../src/lib/dialogs';
 import { useAsync } from '../../../src/lib/useAsync';
 import { fontSize, radius, spacing, useTheme } from '../../../src/theme';
 
 type Filter = 'open' | 'all';
 
+type Cursor = { before: number };
+
+interface ProposalPage {
+  proposals: Proposal[];
+  /** 더 볼 게 있으면 다음 요청에 넘길 커서. */
+  next: Cursor | null;
+}
+
+/**
+ * '더 보기' 로 이어 받은 페이지들. `from` 은 이 페이지들이 이어지는 첫 페이지의 목록 —
+ * 새로고침·필터 변경으로 첫 페이지가 바뀌면 참조가 달라지므로 이어 받은 것은 버린다.
+ */
+interface ExtraPages extends ProposalPage {
+  from: Proposal[];
+}
+
 export default function ProposalsScreen() {
   const { repoId } = useLocalSearchParams<{ repoId: string }>();
   const { colors } = useTheme();
   const [filter, setFilter] = useState<Filter>('open');
+  const [extra, setExtra] = useState<ExtraPages | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const status = filter === 'open' ? 'open' : undefined;
 
-  const state = useAsync<{ repo: RepoSummary; proposals: Proposal[] }>(async () => {
-    const [{ repo }, { proposals }] = await Promise.all([
+  const state = useAsync<{ repo: RepoSummary } & ProposalPage>(async () => {
+    const [{ repo }, { proposals, next }] = await Promise.all([
       api.getRepo(repoId),
-      api.listProposals(repoId, filter === 'open' ? 'open' : undefined),
+      api.listProposals(repoId, status),
     ]);
-    return { repo, proposals };
+    return { repo, proposals, next };
   }, [repoId, filter]);
+
+  const firstPage = state.data?.proposals;
+  const extraPages = extra && extra.from === firstPage ? extra : null;
+  const proposals = [...(firstPage ?? []), ...(extraPages?.proposals ?? [])];
+  const next = extraPages ? extraPages.next : (state.data?.next ?? null);
+
+  async function loadMore() {
+    if (!firstPage || !next || loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const page = await api.listProposals(repoId, status, next);
+      setExtra((prev) => ({
+        from: firstPage,
+        proposals: [...(prev && prev.from === firstPage ? prev.proposals : []), ...page.proposals],
+        next: page.next,
+      }));
+    } catch (err) {
+      notifyError(err instanceof ApiError ? err.message : '더 불러오지 못했습니다.');
+    } finally {
+      setLoadingMore(false);
+    }
+  }
 
   useFocusEffect(
     useCallback(() => {
@@ -100,11 +142,23 @@ export default function ProposalsScreen() {
         <Loading />
       ) : state.error ? (
         <ErrorNotice message={state.error} onRetry={state.reload} />
-      ) : state.data && state.data.proposals.length > 0 ? (
+      ) : state.data && proposals.length > 0 ? (
         <View style={{ gap: spacing.md }}>
-          {state.data.proposals.map((proposal) => (
+          {proposals.map((proposal) => (
             <ProposalCard key={proposal.id} proposal={proposal} />
           ))}
+          {next ? (
+            <Button
+              label="더 보기"
+              icon="chevron-down"
+              variant="secondary"
+              compact
+              full
+              onPress={() => void loadMore()}
+              loading={loadingMore}
+              disabled={state.refreshing}
+            />
+          ) : null}
         </View>
       ) : (
         <Card>

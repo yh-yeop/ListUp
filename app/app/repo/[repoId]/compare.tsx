@@ -19,8 +19,9 @@ import {
   Title,
 } from '../../../src/components/ui';
 import { TransferProgress } from '../../../src/components/TransferProgress';
+import { useAbortable } from '../../../src/lib/useAbortable';
 import { ApiError, api, getMaxUploadBytes, resolveApiUrl } from '../../../src/api/client';
-import { confirmAction, notify } from '../../../src/lib/dialogs';
+import { confirmAction, notify, notifyError, notifySuccess, notifyWarning } from '../../../src/lib/dialogs';
 import { compareFolder, listRepoFolder, type RepoFile } from '../../../src/lib/folder-compare';
 import { localFolderSupported, pickLocalFolder, type LocalEntry, type LocalFolder } from '../../../src/lib/local-folder';
 import { uploadAndCommit, uploadMany, type UploadProgress } from '../../../src/lib/transfer';
@@ -51,6 +52,7 @@ export default function CompareScreen() {
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState<{ label: string; value: UploadProgress } | null>(null);
   const busy = scanning || progress !== null;
+  const uploadControl = useAbortable();
 
   const loadRepo = useCallback(async () => {
     const [{ repo: summary }, files] = await Promise.all([api.getRepo(repoId), listRepoFolder(repoId, basePath)]);
@@ -157,7 +159,7 @@ export default function CompareScreen() {
       doneBytes += file.size;
     }
     setProgress(null);
-    notify(
+    (failures.length === 0 ? notifySuccess : notifyWarning)(
       failures.length === 0 ? `${files.length}개를 받았습니다.` : `${files.length - failures.length}개 받음, ${failures.length}개 실패`,
       failures.slice(0, 3).join('\n') || undefined,
     );
@@ -172,7 +174,7 @@ export default function CompareScreen() {
     const valid = items.filter((item): item is { entry: LocalEntry; path: string } => item.path !== null);
     const skipped = entries.length - valid.length;
     if (valid.length === 0) {
-      notify('올릴 수 있는 파일이 없습니다.', `한 파일 ${formatBytes(maxBytes)} 를 넘거나 쓸 수 없는 이름입니다.`);
+      notifyWarning('올릴 수 있는 파일이 없습니다.', `한 파일 ${formatBytes(maxBytes)} 를 넘거나 쓸 수 없는 이름입니다.`);
       return;
     }
     const totalBytes = valid.reduce((sum, item) => sum + item.entry.size, 0);
@@ -188,15 +190,24 @@ export default function CompareScreen() {
 
     const uploadItems = valid.map((item) => ({ source: item.entry.source, path: item.path }));
     const onProgress = (value: UploadProgress) => setProgress({ label: '올리는 중', value });
+    const signal = uploadControl.start();
     try {
       if (isEditor) {
-        const { failures } = await uploadAndCommit(repoId, uploadItems, onProgress);
-        notify(
+        const { failures, cancelled } = await uploadAndCommit(repoId, uploadItems, onProgress, signal);
+        if (cancelled) {
+          notify('올리기를 멈췄습니다.', '아무것도 반영하지 않았습니다. 저장소는 그대로입니다.');
+          return;
+        }
+        (failures.length === 0 ? notifySuccess : notifyWarning)(
           failures.length === 0 ? `${uploadItems.length}개를 올렸습니다.` : `${uploadItems.length - failures.length}개 올림, ${failures.length}개 실패`,
           failures.slice(0, 3).map((f) => `${f.item.path}: ${f.message}`).join('\n') || undefined,
         );
       } else {
-        const { uploaded, failures } = await uploadMany(repoId, uploadItems, onProgress);
+        const { uploaded, failures, cancelled } = await uploadMany(repoId, uploadItems, onProgress, signal);
+        if (cancelled) {
+          notify('올리기를 멈췄습니다.', '제안을 만들지 않았습니다.');
+          return;
+        }
         if (uploaded.length > 0) {
           const { proposal } = await api.createProposal(repoId, {
             title: `내 폴더에서 ${uploaded.length}개 추가`,
@@ -204,15 +215,16 @@ export default function CompareScreen() {
             changes: uploaded.map(({ item, blob }) => ({ path: item.path, blobHash: blob.hash })),
           });
           setProgress(null);
-          if (failures.length > 0) notify(`${failures.length}개는 올리지 못했습니다.`);
+          if (failures.length > 0) notifyWarning(`${failures.length}개는 올리지 못했습니다.`);
           router.push(`/proposal/${proposal.id}`);
           return;
         }
-        notify('올리지 못했습니다.', failures.slice(0, 3).map((f) => `${f.item.path}: ${f.message}`).join('\n'));
+        notifyError('올리지 못했습니다.', failures.slice(0, 3).map((f) => `${f.item.path}: ${f.message}`).join('\n'));
       }
     } catch (err) {
-      notify('반영하지 못했습니다.', err instanceof ApiError ? err.message : undefined);
+      notifyError('반영하지 못했습니다.', err instanceof ApiError ? err.message : undefined);
     } finally {
+      uploadControl.finish();
       setProgress(null);
     }
     await refresh();
@@ -334,7 +346,15 @@ export default function CompareScreen() {
         </Pressable>
       </Card>
 
-      {progress ? <TransferProgress progress={progress.value} label={progress.label} /> : null}
+      {progress ? (
+        <TransferProgress
+          progress={progress.value}
+          label={progress.label}
+          // 받기는 파일마다 따로라 멈출 것이 없다. 올리기만 멈춘다.
+          onCancel={progress.label === '올리는 중' ? uploadControl.cancel : undefined}
+          cancelling={uploadControl.cancelling}
+        />
+      ) : null}
 
       {!repoFiles && !error ? <Loading label="저장소 목록 불러오는 중…" /> : null}
 

@@ -638,6 +638,87 @@ describe('제안 목록 필터', () => {
     const res = await h.app.inject({ method: 'GET', url: `/api/repos/${repoId}`, headers: auth(owner) });
     assert.equal(res.json().repo.openProposalCount, 1);
   });
+  it('limit 을 주지 않으면 전부를 한 번에 준다 (옛 앱)', async () => {
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/repos/${repoId}/proposals`,
+      headers: auth(owner),
+    });
+    assert.equal(res.json().proposals.length, 2);
+    assert.equal(res.json().next, null);
+  });
+});
+
+describe('제안 목록 페이지', () => {
+  let h: Harness;
+  let owner: Session;
+  let repoId: string;
+
+  before(async () => {
+    h = await createHarness();
+    owner = await signup(h.app, '소유자');
+    repoId = await createRepo(h.app, owner, '페이지 테스트');
+    // 1~5번 제안. 짝수 번호는 닫는다.
+    for (let i = 1; i <= 5; i += 1) {
+      const blob = await uploadBlob(h.app, owner, repoId, `f${i}.txt`, `content ${i}`);
+      const res = await createProposal(h, owner, repoId, {
+        title: `제안 ${i}`,
+        changes: [{ path: `f${i}.txt`, blobHash: blob }],
+      });
+      if (i % 2 === 0) {
+        await h.app.inject({
+          method: 'POST',
+          url: `/api/proposals/${res.json().proposal.id}/close`,
+          headers: auth(owner),
+        });
+      }
+    }
+  });
+  after(async () => {
+    await h.close();
+  });
+
+  async function list(query: string) {
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/repos/${repoId}/proposals?${query}`,
+      headers: auth(owner),
+    });
+    return res;
+  }
+
+  it('번호 커서로 새것부터 나눠 준다', async () => {
+    const first = (await list('limit=2')).json();
+    assert.deepEqual(first.proposals.map((p: { number: number }) => p.number), [5, 4]);
+    assert.deepEqual(first.next, { before: 4 });
+
+    const second = (await list(`limit=2&before=${first.next.before}`)).json();
+    assert.deepEqual(second.proposals.map((p: { number: number }) => p.number), [3, 2]);
+    assert.deepEqual(second.next, { before: 2 });
+
+    // 마지막 페이지가 딱 limit 개가 아니어도, 딱 맞아도 next 는 null 이다.
+    const last = (await list(`limit=2&before=${second.next.before}`)).json();
+    assert.deepEqual(last.proposals.map((p: { number: number }) => p.number), [1]);
+    assert.equal(last.next, null);
+
+    const exact = (await list('limit=5')).json();
+    assert.equal(exact.proposals.length, 5);
+    assert.equal(exact.next, null);
+  });
+
+  it('상태 필터와 함께 쓸 수 있다', async () => {
+    const first = (await list('status=open&limit=2')).json();
+    assert.deepEqual(first.proposals.map((p: { number: number }) => p.number), [5, 3]);
+    assert.deepEqual(first.next, { before: 3 });
+    const second = (await list(`status=open&limit=2&before=3`)).json();
+    assert.deepEqual(second.proposals.map((p: { number: number }) => p.number), [1]);
+    assert.equal(second.next, null);
+  });
+
+  it('잘못된 커서는 400 이다', async () => {
+    assert.equal((await list('limit=2&before=abc')).statusCode, 400);
+    assert.equal((await list('limit=2&before=0')).statusCode, 400);
+  });
 });
 
 describe('용량 한도', () => {

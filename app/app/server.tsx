@@ -81,6 +81,8 @@ export default function ServerFormScreen() {
       const problem = describeCheck(result, normalized);
       setVerified(problem ? null : normalized);
       setError(problem);
+      // 이름을 비워 뒀으면 서버가 알려준 이름을 채운다. 사용자가 적은 이름은 건드리지 않는다.
+      if (result.status === 'ok' && result.name && !label.trim()) setLabel(result.name);
       // 앱이 이 서버보다 오래됐다 — 업데이트가 꼭 필요하므로 릴리즈 페이지를 바로 연다.
       if (result.status === 'app-older' && updateChecksEnabled()) void openReleasePage();
     } finally {
@@ -147,7 +149,7 @@ export default function ServerFormScreen() {
         </View>
 
         <Card style={{ gap: spacing.lg }}>
-          <Field label="이름" hint="비워 두면 주소가 이름 자리에 보입니다.">
+          <Field label="이름" hint="비워 두면 주소가 이름 자리에 보입니다. 서버가 이름을 알려주면 연결 확인 때 채워집니다.">
             <Input
               value={label}
               onChangeText={setLabel}

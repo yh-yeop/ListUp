@@ -1,4 +1,5 @@
 import { Alert, Platform } from 'react-native';
+import { showToast } from './toast';
 
 /**
  * 확인 대화상자. react-native-web 의 Alert 는 버튼을 지원하지 않으므로
@@ -31,13 +32,26 @@ export function confirmAction(options: {
   });
 }
 
-/** 짧은 안내. 웹에서는 alert, 네이티브에서는 Alert. */
+/**
+ * 짧은 안내. 화면 아래에 토스트로 잠시 띄운다(`ToastHost`) — 모달로 흐름을 끊지 않는다.
+ * 대답이 필요한 물음은 {@link confirmAction} 을 쓴다.
+ */
 export function notify(title: string, message?: string): void {
   if (!title && !message) return;
-  if (Platform.OS === 'web') {
-    const text = message ? `${title}\n\n${message}` : title;
-    if (typeof globalThis.alert === 'function') globalThis.alert(text);
-    return;
-  }
-  Alert.alert(title, message);
+  showToast(title || message!, title ? message : undefined, 'info');
+}
+
+/** 끝났다는 안내(올림·복사·저장). */
+export function notifySuccess(title: string, message?: string): void {
+  showToast(title, message, 'success');
+}
+
+/** 일부만 됐거나 건너뛴 것이 있다는 안내. */
+export function notifyWarning(title: string, message?: string): void {
+  showToast(title, message, 'warning');
+}
+
+/** 실패 안내. 조금 더 오래 보인다. */
+export function notifyError(title: string, message?: string): void {
+  showToast(title, message, 'error');
 }

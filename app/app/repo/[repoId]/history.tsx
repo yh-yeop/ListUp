@@ -19,7 +19,7 @@ import {
 } from '../../../src/components/ui';
 import { RepoNav } from '../../../src/components/RepoNav';
 import { ApiError, api } from '../../../src/api/client';
-import { notify } from '../../../src/lib/dialogs';
+import { notifyError } from '../../../src/lib/dialogs';
 import { useAsync } from '../../../src/lib/useAsync';
 import { spacing, useTheme } from '../../../src/theme';
 
@@ -70,7 +70,7 @@ export default function HistoryScreen() {
         next: page.next,
       }));
     } catch (err) {
-      notify(err instanceof ApiError ? err.message : '더 불러오지 못했습니다.');
+      notifyError(err instanceof ApiError ? err.message : '더 불러오지 못했습니다.');
     } finally {
       setLoadingMore(false);
     }

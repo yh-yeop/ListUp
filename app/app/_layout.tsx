@@ -3,6 +3,7 @@ import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
 import { View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { ToastHost } from '../src/components/ToastHost';
 import { Loading } from '../src/components/ui';
 import { suggestUpdateOnce } from '../src/lib/updates';
 import { AuthProvider, useAuth } from '../src/state/auth';
@@ -93,6 +94,8 @@ export default function RootLayout() {
       <AuthProvider>
         <StatusBar style={dark ? 'light' : 'dark'} />
         <RootNavigator />
+        {/* 화면을 옮겨도 남도록 스택 위에 겹쳐 둔다. */}
+        <ToastHost />
       </AuthProvider>
     </SafeAreaProvider>
   );

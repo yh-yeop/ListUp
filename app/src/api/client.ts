@@ -242,6 +242,14 @@ export type UploadSource =
   /** PC 앱에서 고른 폴더 안의 파일 — 창은 직접 못 읽고 PC 앱(main)이 조각을 읽어 준다. 나눠 올리기로만. */
   | { kind: 'desktop'; root: string; relativePath: string; name: string; size: number };
 
+/** 사용자가 올리기를 멈춰 보내던 요청을 끊었을 때. 연결 오류(ApiError status 0)와 구별한다. */
+export class UploadAbortedError extends Error {
+  constructor() {
+    super('올리기를 멈췄습니다.');
+    this.name = 'UploadAbortedError';
+  }
+}
+
 /** 조각 하나를 보내는 동안 기다리는 최대 시간. 느린 모바일 망에서 8MB 가 넉넉히 들어가게. */
 const CHUNK_TIMEOUT_MS = 120_000;
 
@@ -255,19 +263,34 @@ function sendBytes<T>(
   path: string,
   bytes: Blob | Uint8Array,
   onProgress?: (loaded: number) => void,
+  signal?: AbortSignal,
 ): Promise<T> {
   if (apiBaseUrl === null) return Promise.reject(new ApiError(0, 'internal', '들어갈 서버를 먼저 골라 주세요.'));
+  if (signal?.aborted) return Promise.reject(new UploadAbortedError());
   const usedBaseUrl = apiBaseUrl;
   const usedToken = authToken;
   return new Promise<T>((resolve, reject) => {
     const xhr = new XMLHttpRequest();
+    // 멈추면 보내던 조각도 바로 끊는다 — 조각 하나(8MB)가 다 갈 때까지 기다리지 않게.
+    const onAbort = () => xhr.abort();
+    signal?.addEventListener('abort', onAbort, { once: true });
+    xhr.onabort = () => reject(new UploadAbortedError());
+    xhr.onloadend = () => {
+      signal?.removeEventListener('abort', onAbort);
+      // RN 의 XMLHttpRequest 는 abort 이벤트를 주지 않을 때가 있어 끝날 때 한 번 더 본다(이미 정해졌으면 무시된다).
+      if (signal?.aborted) reject(new UploadAbortedError());
+    };
     xhr.open(method, `${usedBaseUrl}${path}`);
     xhr.timeout = CHUNK_TIMEOUT_MS;
     xhr.setRequestHeader('Content-Type', 'application/octet-stream');
     if (usedToken) xhr.setRequestHeader('Authorization', `Bearer ${usedToken}`);
     if (onProgress) xhr.upload.onprogress = (event) => onProgress(event.loaded);
     const networkError = () =>
-      reject(new ApiError(0, 'internal', `서버에 연결할 수 없습니다. (${usedBaseUrl})\n연결을 확인해 주세요.`));
+      reject(
+        signal?.aborted
+          ? new UploadAbortedError()
+          : new ApiError(0, 'internal', `서버에 연결할 수 없습니다. (${usedBaseUrl})\n연결을 확인해 주세요.`),
+      );
     xhr.onerror = networkError;
     xhr.ontimeout = networkError;
     xhr.onload = () => {
@@ -328,6 +351,9 @@ function toFormData(source: UploadSource): FormData {
   }
   return form;
 }
+
+/** 제안 목록 한 페이지의 개수. */
+const PROPOSAL_PAGE_SIZE = 30;
 
 export const api = {
   // 인증 ------------------------------------------------------------------
@@ -430,8 +456,14 @@ export const api = {
 
   getUpload: (uploadId: string) => request<{ upload: UploadSession }>(`/api/uploads/${uploadId}`),
 
-  putChunk: (uploadId: string, offset: number, bytes: Blob | Uint8Array, onProgress?: (loaded: number) => void) =>
-    sendBytes<{ upload: UploadSession }>('PUT', `/api/uploads/${uploadId}?offset=${offset}`, bytes, onProgress),
+  putChunk: (
+    uploadId: string,
+    offset: number,
+    bytes: Blob | Uint8Array,
+    onProgress?: (loaded: number) => void,
+    signal?: AbortSignal,
+  ) =>
+    sendBytes<{ upload: UploadSession }>('PUT', `/api/uploads/${uploadId}?offset=${offset}`, bytes, onProgress, signal),
 
   completeUpload: (uploadId: string) =>
     request<{ blob: UploadedBlob }>(`/api/uploads/${uploadId}/complete`, { method: 'POST' }),
@@ -489,10 +521,25 @@ export const api = {
     ),
 
   // 변경 제안 --------------------------------------------------------------
-  listProposals: (repoId: string, status?: 'open' | 'merged' | 'closed') =>
-    request<{ proposals: Proposal[] }>(
-      `/api/repos/${repoId}/proposals${status ? `?status=${status}` : ''}`,
-    ),
+  /**
+   * 제안 목록을 새것부터 `limit` 개씩. `cursor` 는 이전 응답의 `next` 를 그대로 넘긴다 (더 보기).
+   * 1.3.0 까지의 서버는 `limit` 을 모르고 전부를 주며 `next` 가 없다 — 없으면 null 로 맞춘다.
+   */
+  listProposals: async (
+    repoId: string,
+    status?: 'open' | 'merged' | 'closed',
+    cursor?: { before: number } | null,
+    limit = PROPOSAL_PAGE_SIZE,
+  ) => {
+    const params = new URLSearchParams();
+    if (status) params.set('status', status);
+    params.set('limit', String(limit));
+    if (cursor) params.set('before', String(cursor.before));
+    const page = await request<{ proposals: Proposal[]; next?: { before: number } | null }>(
+      `/api/repos/${repoId}/proposals?${params.toString()}`,
+    );
+    return { proposals: page.proposals, next: page.next ?? null };
+  },
 
   createProposal: (
     repoId: string,

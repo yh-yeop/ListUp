@@ -390,11 +390,12 @@ export const API_VERSION = 1;
  * 서버에는 들어가지 않는다. 이 필드가 없는 서버(1.1.0 까지)는 1 이다.
  *
  * - 2 (1.2.0): 나눠 올리기, 여러 파일 커밋, 다운로드 링크·폴더 zip, Range, 비밀번호 재설정
+ * - 3 (1.4.0): health 의 serverName, 제안 목록 페이지(`limit`·`before`). 앱은 둘 다 없어도 쓴다.
  *
  * API_VERSION 을 올리지 않은 이유: 옛 앱(1.1.0)은 API_VERSION 이 같아야만 들어가서, 올리면 멀쩡히
  * 쓸 수 있는 새 서버에서 옛 앱이 모두 막힌다.
  */
-export const API_LEVEL = 2;
+export const API_LEVEL = 3;
 
 /** 이 앱이 쓰는 기능이 있는 가장 낮은 서버 API_LEVEL. 앱의 업로드·내려받기가 수준 2 를 쓴다. */
 export const REQUIRED_SERVER_API_LEVEL = 2;
@@ -411,6 +412,11 @@ export interface HealthResponse {
   apiLevel: number;
   /** 서버 버전(package.json). 사람에게 보여주는 용도다 — 호환 판단은 apiVersion 으로 한다. */
   version: string;
+  /**
+   * 서버 주인이 붙인 이름(`LISTUP_SERVER_NAME`). 정하지 않았으면 null.
+   * 1.3.0 까지의 서버에는 이 필드가 없다 — 없으면 null 로 본다.
+   */
+  serverName: string | null;
 }
 
 // ---------------------------------------------------------------------------

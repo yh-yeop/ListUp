@@ -21,7 +21,7 @@ import {
   Subtitle,
   Title,
 } from '../src/components/ui';
-import { notify } from '../src/lib/dialogs';
+import { notifySuccess } from '../src/lib/dialogs';
 import { desktopBridge, desktopErrorMessage, useHostStatus } from '../src/lib/desktop';
 import { fontSize, monoFont, spacing, useTheme } from '../src/theme';
 
@@ -141,7 +141,7 @@ function CopyLine({ label, value }: { label: string; value: string }) {
         icon="copy-outline"
         label={`${label} 복사`}
         onPress={() => {
-          void Clipboard.setStringAsync(value).then(() => notify('주소를 복사했습니다.'));
+          void Clipboard.setStringAsync(value).then(() => notifySuccess('주소를 복사했습니다.'));
         }}
       />
     </Row>
@@ -445,7 +445,7 @@ function DataCard({ status, stopped, act, busy }: { status: HostStatus; stopped:
           onPress={() =>
             void act('backup', async () => {
               const dir = await host.backup();
-              if (dir) notify('백업했습니다.', `${dir}\n\nDB 사본과 blobs 폴더를 담았습니다. 같은 폴더에 다시 백업하면 새 파일만 더해집니다.`);
+              if (dir) notifySuccess('백업했습니다.', `${dir}\n\nDB 사본과 blobs 폴더를 담았습니다. 같은 폴더에 다시 백업하면 새 파일만 더해집니다.`);
             })
           }
         />

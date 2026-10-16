@@ -70,12 +70,15 @@ export default function JoinScreen() {
       }
       setBusy(true);
       try {
-        const problem = existing ? null : describeCheck(await checkServer(target), target);
+        const result = existing ? null : await checkServer(target);
+        const problem = result ? describeCheck(result, target) : null;
         if (problem) {
           setError(problem);
           return;
         }
-        const id = existing?.id ?? (await saveServer({ url: target, label: null }));
+        // 서버가 이름을 알려주면 그 이름으로 목록에 더한다.
+        const label = result?.status === 'ok' ? result.name : null;
+        const id = existing?.id ?? (await saveServer({ url: target, label }));
         // 들어가면 화면이 처음부터 다시 그려진다 — 코드를 들고 가서 로그인 뒤 여기로 돌아온다.
         setPendingInvite(linkCode);
         await switchServer(id);

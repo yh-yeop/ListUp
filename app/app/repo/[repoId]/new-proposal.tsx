@@ -22,7 +22,8 @@ import {
 } from '../../../src/components/ui';
 import { ApiError, api, getMaxUploadBytes } from '../../../src/api/client';
 import { TransferProgress } from '../../../src/components/TransferProgress';
-import { confirmAction, notify } from '../../../src/lib/dialogs';
+import { useAbortable } from '../../../src/lib/useAbortable';
+import { confirmAction, notify, notifyError, notifyWarning } from '../../../src/lib/dialogs';
 import { pickFiles } from '../../../src/lib/files';
 import { uploadMany, type UploadProgress } from '../../../src/lib/transfer';
 import { useAsync } from '../../../src/lib/useAsync';
@@ -47,6 +48,7 @@ export default function NewProposalScreen() {
   const [description, setDescription] = useState('');
   const [staged, setStaged] = useState<StagedChange[]>([]);
   const [progress, setProgress] = useState<UploadProgress | null>(null);
+  const uploadControl = useAbortable();
   const uploading = progress !== null;
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -86,7 +88,7 @@ export default function NewProposalScreen() {
     try {
       sources = await pickFiles(true);
     } catch {
-      notify('파일을 선택하지 못했습니다.');
+      notifyError('파일을 선택하지 못했습니다.');
       return;
     }
     if (sources.length === 0) return;
@@ -102,14 +104,19 @@ export default function NewProposalScreen() {
     if (accepted.length > 0) {
       setProgress({ sentBytes: 0, totalBytes: 0, doneFiles: 0, totalFiles: accepted.length, current: '' });
       // 제안용 blob 은 미리 나눠 올려 둔다. 저장소 내용은 아직 그대로다.
-      const { uploaded, failures } = await uploadMany(
+      const signal = uploadControl.start();
+      const { uploaded, failures, cancelled } = await uploadMany(
         repoId,
         accepted.map((source) => ({
           source,
           path: targetFolder ? `${targetFolder}/${source.name}` : source.name,
         })),
         setProgress,
+        signal,
       );
+      uploadControl.finish();
+      // 멈추기 전에 다 올린 파일은 그대로 담는다 — 제안은 아직 만들지 않았으니 빼고 싶으면 목록에서 뺀다.
+      if (cancelled) notify('담기를 멈췄습니다.', uploaded.length > 0 ? `멈추기 전에 올린 ${uploaded.length}개는 담았습니다.` : undefined);
       for (const { item, blob } of uploaded) {
         keySeq.current += 1;
         added.push({
@@ -125,7 +132,7 @@ export default function NewProposalScreen() {
     }
     setStaged((prev) => [...prev, ...added]);
     if (tooLarge.length > 0) {
-      notify(
+      notifyWarning(
         '너무 큰 파일은 건너뛰었습니다.',
         `파일 하나는 ${formatBytes(maxBytes)}까지 담을 수 있습니다: ${tooLarge.join(', ')}`,
       );
@@ -250,7 +257,14 @@ export default function NewProposalScreen() {
           현재 폴더: {browsePath === '' ? '최상위 폴더' : browsePath} — 새로 담는 파일은 이
           폴더에 저장됩니다. 아래 목록에서 다른 폴더를 열면 바뀝니다.
         </Caption>
-        {progress ? <TransferProgress progress={progress} label="담는 중" /> : null}
+        {progress ? (
+          <TransferProgress
+            progress={progress}
+            label="담는 중"
+            onCancel={uploadControl.cancel}
+            cancelling={uploadControl.cancelling}
+          />
+        ) : null}
 
         {staged.length === 0 ? (
           <Caption>

@@ -11,7 +11,7 @@
  * 이 프로세스 안에 띄운다 → 스펙을 차례로 돌린다. 쓰고 있는 서버(4000 등)와 포트가 겹치지 않는다.
  *
  * 브라우저: E2E_BROWSER_CHANNEL (Windows 기본 msedge — 설치돼 있다. 그 밖에는 `npx playwright-core
- * install chromium` 으로 받은 Chromium).
+ * install chromium` 으로 받은 Chromium). E2E_BROWSER_PATH 를 주면 그 실행 파일을 쓴다.
  */
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -216,11 +216,17 @@ try {
   const LEGACY = await startMockHealth({ ok: true, time: 0, maxUploadBytes: 1 });
   const V110 = await startMockHealth({ ok: true, time: 0, maxUploadBytes: 1, apiVersion: 1, version: '1.1.0' });
   const OLDER = await startMockHealth({ ok: true, time: 0, maxUploadBytes: 1, apiVersion: 0, version: '0.9.0' });
-  stops.push(C.stop, NEWER.stop, LEGACY.stop, V110.stop, OLDER.stop);
+  // 서버 주인이 이름을 붙인 서버(LISTUP_SERVER_NAME) — 서버 추가 폼이 이름 칸을 채우는지.
+  const NAMED = await startMockHealth({
+    ok: true, time: 0, maxUploadBytes: 1, apiVersion: 1, apiLevel: 3, version: '1.4.0', serverName: '우리집 음악서버',
+  });
+  stops.push(C.stop, NEWER.stop, LEGACY.stop, V110.stop, OLDER.stop, NAMED.stop);
   const DEAD = `http://localhost:${await freePort()}`;
 
   const channel = process.env.E2E_BROWSER_CHANNEL ?? (process.platform === 'win32' ? 'msedge' : undefined);
-  const browser = await chromium.launch({ channel, headless: true });
+  // E2E_BROWSER_PATH: 받아 둔 Chromium 실행 파일을 그대로 쓴다(playwright-core 가 기대하는 버전과 달라도).
+  const executablePath = process.env.E2E_BROWSER_PATH || undefined;
+  const browser = await chromium.launch({ channel: executablePath ? undefined : channel, executablePath, headless: true });
   stops.push(() => browser.close());
 
   for (const file of specFiles) {
@@ -278,6 +284,7 @@ try {
       LEGACY: LEGACY.url,
       V110: V110.url,
       OLDER: OLDER.url,
+      NAMED: NAMED.url,
       DEAD,
       leaks,
       appVersion: APP_VERSION,

@@ -11,7 +11,7 @@ import type { AppContext } from '../context.ts';
 import { badRequest, conflict, forbidden, notFound } from '../lib/errors.ts';
 import { mimeForPath } from '../lib/mime.ts';
 import { newId } from '../lib/ids.ts';
-import { body, optionalString, queryString, requireUser, requiredString } from '../lib/request.ts';
+import { body, optionalString, queryInt, queryString, requireUser, requiredString } from '../lib/request.ts';
 import { getRepoRow, requireAccess } from '../services/repos.ts';
 import { readManifest, writeSnapshot } from '../services/snapshots.ts';
 import {
@@ -188,15 +188,40 @@ export async function registerProposalRoutes(app: FastifyInstance, ctx: AppConte
       throw badRequest('status 값이 올바르지 않습니다.');
     }
 
-    const rows = (
-      statusFilter
-        ? db
-            .prepare(`SELECT * FROM proposals WHERE repo_id = ? AND status = ? ORDER BY number DESC`)
-            .all(repoId, statusFilter)
-        : db.prepare(`SELECT * FROM proposals WHERE repo_id = ? ORDER BY number DESC`).all(repoId)
-    ) as ProposalRow[];
+    // 페이지는 `limit` 을 줄 때만 나눈다 — 주지 않는 옛 앱(1.3.0 까지)은 전부를 받던 그대로다.
+    // 커서는 제안 번호다. 저장소 안에서 겹치지 않고 늘기만 하므로 그것 하나로 충분하다.
+    const limit = queryString(req, 'limit') === undefined ? null : queryInt(req, 'limit', 30, 100);
+    const beforeRaw = queryString(req, 'before');
+    const before = beforeRaw === undefined ? Number.NaN : Number.parseInt(beforeRaw, 10);
+    if (beforeRaw !== undefined && !(Number.isSafeInteger(before) && before > 0)) {
+      throw badRequest('before 값이 올바르지 않습니다.');
+    }
 
-    return { proposals: rows.map((row) => toProposal(db, row)) };
+    const where = ['repo_id = ?'];
+    const params: (string | number)[] = [repoId];
+    if (statusFilter) {
+      where.push('status = ?');
+      params.push(statusFilter);
+    }
+    if (beforeRaw !== undefined) {
+      where.push('number < ?');
+      params.push(before);
+    }
+    // 하나 더 읽어 다음 페이지가 있는지 안다 — 딱 limit 개로 끝날 때 빈 페이지를 한 번 더 부르지 않게.
+    if (limit !== null) params.push(limit + 1);
+    const rows = db
+      .prepare(
+        `SELECT * FROM proposals WHERE ${where.join(' AND ')} ORDER BY number DESC` +
+          (limit !== null ? ' LIMIT ?' : ''),
+      )
+      .all(...params) as ProposalRow[];
+
+    const hasMore = limit !== null && rows.length > limit;
+    const page = hasMore ? rows.slice(0, limit) : rows;
+    return {
+      proposals: page.map((row) => toProposal(db, row)),
+      next: hasMore ? { before: page[page.length - 1].number } : null,
+    };
   });
 
   app.get('/proposals/:proposalId', async (req) => {

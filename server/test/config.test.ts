@@ -31,3 +31,31 @@ describe('LISTUP_TRUST_PROXY', () => {
     assert.throws(() => trustProxyFor('10.0.0.1/8/2'));
   });
 });
+
+function serverNameFor(value: string | undefined) {
+  const before = process.env.LISTUP_SERVER_NAME;
+  if (value === undefined) delete process.env.LISTUP_SERVER_NAME;
+  else process.env.LISTUP_SERVER_NAME = value;
+  try {
+    return loadConfig().serverName;
+  } finally {
+    if (before === undefined) delete process.env.LISTUP_SERVER_NAME;
+    else process.env.LISTUP_SERVER_NAME = before;
+  }
+}
+
+describe('LISTUP_SERVER_NAME', () => {
+  it('없거나 공백뿐이면 null', () => {
+    assert.equal(serverNameFor(undefined), null);
+    assert.equal(serverNameFor('   '), null);
+  });
+
+  it('앞뒤 공백을 떼고 읽는다', () => {
+    assert.equal(serverNameFor('  우리집 서버 '), '우리집 서버');
+  });
+
+  it('60자를 넘으면 뜨지 않는다', () => {
+    assert.equal(serverNameFor('가'.repeat(60)), '가'.repeat(60));
+    assert.throws(() => serverNameFor('가'.repeat(61)));
+  });
+});

@@ -30,10 +30,11 @@ import {
 import { Breadcrumb, RepoNav } from '../../../src/components/RepoNav';
 import { TransferProgress } from '../../../src/components/TransferProgress';
 import { ApiError, api, getMaxUploadBytes, type UploadSource } from '../../../src/api/client';
-import { confirmAction, notify } from '../../../src/lib/dialogs';
+import { confirmAction, notify, notifyError, notifySuccess, notifyWarning } from '../../../src/lib/dialogs';
 import { downloadFromRepo, pickFiles, pickFolder } from '../../../src/lib/files';
 import { localFolderSupported } from '../../../src/lib/local-folder';
 import { uploadAndCommit, type UploadItem, type UploadProgress } from '../../../src/lib/transfer';
+import { useAbortable } from '../../../src/lib/useAbortable';
 import { useAsync } from '../../../src/lib/useAsync';
 import { fontSize, monoFont, radius, spacing, useTheme } from '../../../src/theme';
 
@@ -66,6 +67,7 @@ export default function RepoFilesScreen() {
   const [path, setPath] = useState('');
   const [progress, setProgress] = useState<UploadProgress | null>(null);
   const uploading = progress !== null;
+  const uploadControl = useAbortable();
   const [busyPath, setBusyPath] = useState<string | null>(null);
   const [editing, setEditing] = useState<Editing | null>(null);
   const [renaming, setRenaming] = useState(false);
@@ -119,7 +121,7 @@ export default function RepoFilesScreen() {
     if (tooLarge.length > 0) {
       const names = tooLarge.slice(0, MAX_FAILURES_SHOWN).map((source) => source.name).join(', ');
       const more = tooLarge.length > MAX_FAILURES_SHOWN ? ` 외 ${tooLarge.length - MAX_FAILURES_SHOWN}개` : '';
-      notify(`${names}${more} 은(는) ${formatBytes(maxBytes)} 를 넘어 올릴 수 없습니다.`);
+      notifyWarning(`${names}${more} 은(는) ${formatBytes(maxBytes)} 를 넘어 올릴 수 없습니다.`);
     }
     return sources.filter((source) => source.size <= maxBytes);
   }
@@ -127,13 +129,16 @@ export default function RepoFilesScreen() {
   /** 조각으로 나눠 올리고 커밋 하나로 반영한 뒤, 결과를 알려 준다. */
   async function runUpload(items: UploadItem[]) {
     setProgress({ sentBytes: 0, totalBytes: 0, doneFiles: 0, totalFiles: items.length, current: '' });
+    const signal = uploadControl.start();
     try {
-      const result = await uploadAndCommit(repoId, items, setProgress);
+      const result = await uploadAndCommit(repoId, items, setProgress, signal);
       const { failures, commit } = result;
-      if (failures.length > 0) {
+      if (result.cancelled) {
+        notify('올리기를 멈췄습니다.', '아무것도 반영하지 않았습니다. 저장소는 그대로입니다.');
+      } else if (failures.length > 0) {
         const shown = failures.slice(0, MAX_FAILURES_SHOWN).map((f) => `${f.item.source.name}: ${f.message}`);
         const more = failures.length - shown.length;
-        notify(
+        notifyWarning(
           `${result.uploaded.length}개 올렸습니다.`,
           `${failures.length}개는 올리지 못했습니다.\n${shown.join('\n')}${more > 0 ? `\n외 ${more}건 더` : ''}`,
         );
@@ -142,11 +147,13 @@ export default function RepoFilesScreen() {
           commit.added ? `추가 ${commit.added}` : '',
           commit.updated ? `수정 ${commit.updated}` : '',
         ].filter(Boolean);
-        notify(parts.length > 0 ? `${items.length}개 올렸습니다 — ${parts.join(' · ')}` : '바뀐 파일이 없습니다.');
+        if (parts.length > 0) notifySuccess(`${items.length}개 올렸습니다 — ${parts.join(' · ')}`);
+        else notify('바뀐 파일이 없습니다.');
       }
     } catch (err) {
-      notify('반영하지 못했습니다.', err instanceof ApiError ? err.message : undefined);
+      notifyError('반영하지 못했습니다.', err instanceof ApiError ? err.message : undefined);
     } finally {
+      uploadControl.finish();
       setProgress(null);
       state.refresh();
     }
@@ -158,7 +165,7 @@ export default function RepoFilesScreen() {
     try {
       sources = await pickFiles(true);
     } catch {
-      notify('파일을 선택하지 못했습니다.');
+      notifyError('파일을 선택하지 못했습니다.');
       return;
     }
     if (sources.length === 0) return;
@@ -189,7 +196,7 @@ export default function RepoFilesScreen() {
     try {
       sources = await pickFolder();
     } catch {
-      notify('폴더를 선택하지 못했습니다.');
+      notifyError('폴더를 선택하지 못했습니다.');
       return;
     }
     if (sources.length === 0) return;
@@ -219,9 +226,9 @@ export default function RepoFilesScreen() {
     setBusyPath(targetPath);
     try {
       const result = await downloadFromRepo(repoId, { path: targetPath, snapshotId, archive, fileName });
-      if (result.message) notify(result.message);
+      if (result.message) (result.ok ? notifySuccess : notifyError)(result.message);
     } catch (err) {
-      notify('내려받지 못했습니다.', err instanceof ApiError ? err.message : undefined);
+      notifyError('내려받지 못했습니다.', err instanceof ApiError ? err.message : undefined);
     } finally {
       setBusyPath(null);
     }
@@ -243,7 +250,7 @@ export default function RepoFilesScreen() {
       await api.deletePath(repoId, targetPath);
       state.refresh();
     } catch (err) {
-      notify(err instanceof ApiError ? err.message : '삭제하지 못했습니다.');
+      notifyError(err instanceof ApiError ? err.message : '삭제하지 못했습니다.');
     } finally {
       setBusyPath(null);
     }
@@ -257,7 +264,7 @@ export default function RepoFilesScreen() {
     if (!editing || renaming) return;
     const to = normalizePath(editing.value);
     if (!to) {
-      notify('경로가 올바르지 않습니다.', '빈 이름이나 . / .. 은 쓸 수 없습니다.');
+      notifyError('경로가 올바르지 않습니다.', '빈 이름이나 . / .. 은 쓸 수 없습니다.');
       return;
     }
     if (to === editing.path) {
@@ -270,7 +277,7 @@ export default function RepoFilesScreen() {
       setEditing(null);
       state.refresh();
     } catch (err) {
-      notify(err instanceof ApiError ? err.message : '이름을 바꾸지 못했습니다.');
+      notifyError(err instanceof ApiError ? err.message : '이름을 바꾸지 못했습니다.');
     } finally {
       setRenaming(false);
     }
@@ -378,7 +385,9 @@ export default function RepoFilesScreen() {
             </Row>
           )}
 
-          {progress ? <TransferProgress progress={progress} /> : null}
+          {progress ? (
+            <TransferProgress progress={progress} onCancel={uploadControl.cancel} cancelling={uploadControl.cancelling} />
+          ) : null}
 
           {!isEditor && !snapshotId ? (
             <Caption>

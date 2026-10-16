@@ -33,6 +33,11 @@ export interface Config {
   trustProxy: boolean | string[];
   /** 로그 레벨 (pino). */
   logLevel: string;
+  /**
+   * 서버 주인이 붙인 이름. health 로 알려 주면 앱의 서버 추가 폼이 이름 칸 기본값으로 쓴다.
+   * null 이면 알려 주지 않는다(앱은 주소를 이름 자리에 보여준다).
+   */
+  serverName: string | null;
   /** 이 횟수만큼 로그인에 실패하면 잠시 막는다 (IP 기준·이메일 기준을 따로 센다). */
   loginFailureLimit: number;
   /** 마지막 실패로부터 이 시간이 지나면 실패 횟수를 잊는다(ms). */
@@ -70,6 +75,7 @@ const KNOWN_ENV = new Set([
   'LISTUP_LOGIN_BLOCK_MIN',
   'LISTUP_GC_MIN_AGE_HOURS',
   'LISTUP_GC_INTERVAL_HOURS',
+  'LISTUP_SERVER_NAME',
 ]);
 
 const LOG_LEVELS = ['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'];
@@ -121,6 +127,19 @@ function envTrustProxy(): boolean | string[] {
   return entries;
 }
 
+/** 앱의 서버 이름 칸(`app/app/server.tsx`)과 같은 길이. */
+export const SERVER_NAME_MAX_LENGTH = 60;
+
+/** `LISTUP_SERVER_NAME` — 앞뒤 공백을 떼고, 비어 있으면 null. 너무 길면 뜨지 않는다. */
+function envServerName(): string | null {
+  const value = process.env.LISTUP_SERVER_NAME?.trim();
+  if (!value) return null;
+  if ([...value].length > SERVER_NAME_MAX_LENGTH) {
+    throw new Error(`LISTUP_SERVER_NAME 은(는) ${SERVER_NAME_MAX_LENGTH}자 이하여야 합니다: "${value}"`);
+  }
+  return value;
+}
+
 const warnedUnknownEnv = new Set<string>();
 
 /** 이름을 잘못 쓴 `LISTUP_*` 변수는 무시되므로, 한 번씩 경고로 알려준다. */
@@ -164,6 +183,7 @@ export function loadConfig(overrides: Partial<Config> = {}): Config {
     webDir: process.env.LISTUP_WEB_DIR ?? path.resolve(process.cwd(), '../app/dist'),
     trustProxy: envTrustProxy(),
     logLevel,
+    serverName: envServerName(),
     loginFailureLimit: envInt('LISTUP_LOGIN_FAILURE_LIMIT', 10, { min: 1 }),
     loginFailureWindowMs: envInt('LISTUP_LOGIN_FAILURE_WINDOW_MIN', 15, { min: 1 }) * MINUTE,
     loginBlockMs: envInt('LISTUP_LOGIN_BLOCK_MIN', 15, { min: 1 }) * MINUTE,

@@ -38,10 +38,10 @@ Authorization: Bearer <token>
 
 | 메서드 | 경로 | 설명 |
 | --- | --- | --- |
-| GET | `/health` | 로그인 없이. `{ok, time, maxUploadBytes, apiVersion, apiLevel, version}` |
+| GET | `/health` | 로그인 없이. `{ok, time, maxUploadBytes, apiVersion, apiLevel, version, serverName}` |
 
 ```json
-{ "ok": true, "time": 1789355589634, "maxUploadBytes": 2147483648, "apiVersion": 1, "apiLevel": 2, "version": "1.2.0" }
+{ "ok": true, "time": 1789355589634, "maxUploadBytes": 2147483648, "apiVersion": 1, "apiLevel": 3, "version": "1.4.0", "serverName": "우리집 음악서버" }
 ```
 
 - **`apiVersion`** — API 호환 버전(`shared` 의 `API_VERSION`). 서버와 앱이 서로 알아듣지 못하게
@@ -49,10 +49,13 @@ Authorization: Bearer <token>
   값과 견주고 다르면 들어가지 않습니다. **이 필드가 없는 서버(1.0.0)는 `1` 로 봅니다.**
 - **`apiLevel`** — 기능 수준(`API_LEVEL`). 호환을 깨지 않고 기능을 더할 때 올립니다(옛 앱은 무시).
   앱은 자기가 쓰는 기능이 있는 수준(`REQUIRED_SERVER_API_LEVEL`) 미만 서버에는 "서버가 오래됨"으로
-  들어가지 않습니다. 2 = 1.2.0 (나눠 올리기·여러 파일 커밋·다운로드 링크·zip·Range·재설정).
+  들어가지 않습니다. 2 = 1.2.0 (나눠 올리기·여러 파일 커밋·다운로드 링크·zip·Range·재설정),
+  3 = 1.4.0 (`serverName`·제안 목록 페이지 — 앱은 없어도 쓰므로 들어가는 조건은 그대로 2).
   **필드가 없는 서버(1.1.0 까지)는 `1`** 입니다.
 - `version` — 서버 버전(`server/package.json`). 사람에게 보여주는 용도이고 호환 판단에는 쓰지 않습니다.
 - `maxUploadBytes` — 파일 하나의 업로드 한도. 앱이 올리기 전에 검사합니다.
+- `serverName` — 서버 주인이 `LISTUP_SERVER_NAME` 으로 붙인 이름, 없으면 `null`. 앱은 서버를 목록에
+  더할 때 이름 칸에 미리 채웁니다. **필드가 없는 서버(1.3.0 까지)는 `null`** 로 봅니다.
 
 ---
 
@@ -255,7 +258,7 @@ POST /api/repos/:repoId/files/commit
 
 | 메서드 | 경로 | 최소 권한 | 설명 |
 | --- | --- | --- | --- |
-| GET | `/repos/:repoId/proposals?status=` | viewer | 목록 (`open`/`merged`/`closed`) |
+| GET | `/repos/:repoId/proposals?status=&limit=&before=` | viewer | 목록 (`open`/`merged`/`closed`). 아래 *제안 목록 페이지* |
 | POST | `/repos/:repoId/proposals` | **viewer** | 제안 만들기 |
 | GET | `/proposals/:proposalId` | viewer | 상세 + 충돌 여부 |
 | PATCH | `/proposals/:proposalId` | 작성자 | `{title?, description?}` — `open` 상태에서만 |
@@ -264,6 +267,14 @@ POST /api/repos/:repoId/files/commit
 | POST | `/proposals/:proposalId/merge` | **editor** | 저장소에 반영 |
 | POST | `/proposals/:proposalId/close` | 작성자 또는 editor | 닫기 |
 | POST | `/proposals/:proposalId/reopen` | 작성자 또는 editor | 다시 열기 |
+
+**제안 목록 페이지.** 응답은 `{proposals, next}` 이고 새 제안(번호가 큰 것)부터 옵니다.
+
+- `limit` 을 주면(최대 100) 그만큼만 주고, 더 있으면 `next` 에 `{before: <이 페이지 마지막 번호>}` 를 줍니다.
+  다음 페이지는 `?limit=30&before=<next.before>` 로 부릅니다. 더 없으면 `next: null`.
+- 커서가 제안 번호라 그 사이에 새 제안이 올라와도 페이지가 밀리거나 겹치지 않습니다.
+- `limit` 이 없으면 예전처럼 전부를 한 번에 주고 `next: null` 입니다 (1.3.0 까지의 앱).
+- `before` 가 양의 정수가 아니면 400.
 
 ### 제안 만들기
 

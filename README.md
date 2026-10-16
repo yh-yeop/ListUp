@@ -138,6 +138,7 @@ npm run server        # http://localhost:4000
 | `LISTUP_LOGIN_BLOCK_MIN` | `15` | 막아 두는 시간(분) |
 | `LISTUP_GC_MIN_AGE_HOURS` | `24` | 참조되지 않는 파일을 지우기 전 유예 시간 |
 | `LISTUP_GC_INTERVAL_HOURS` | `6` | 정리 작업을 도는 주기 (`0` 이면 끔) |
+| `LISTUP_SERVER_NAME` | (없음) | 서버 이름(60자까지). 앱에서 이 서버를 목록에 더할 때 이름 칸에 미리 채워집니다 |
 
 값이 잘못되면(정수가 아니거나 범위를 벗어나면) 기본값으로 넘어가지 않고 서버가 뜨지 않습니다.
 이름을 잘못 쓴 `LISTUP_*` 변수는 경고로 알려줍니다.
