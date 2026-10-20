@@ -41,6 +41,8 @@ const dist = argv.includes('--dist');
 const rebuildWeb = (dist && !argv.includes('--no-web')) || argv.includes('--web');
 
 const version = JSON.parse(fs.readFileSync(path.join(DESKTOP, 'package.json'), 'utf8')).version;
+/** 릴리즈를 올리는 GitHub 저장소 — 앱의 업데이트 확인과 같은 값(app.json 의 extra.updateRepo). */
+const updateRepo = JSON.parse(fs.readFileSync(path.join(ROOT, 'app', 'app.json'), 'utf8')).expo.extra?.updateRepo ?? 'yh-yeop/ListUp';
 const serverPkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'server', 'package.json'), 'utf8'));
 /**
  * 서버를 돌리는 데 필요한 npm 의존성 — 우리 워크스페이스(shared)와 tsx(묶었으니 필요 없음)는 뺀다.
@@ -226,7 +228,9 @@ if (argv.includes('--no-launch')) {
       artifactName: `listup-${version}-windows-setup.\${ext}`,
       shortcutName: 'ListUp',
     },
-    publish: null,
+    // 자동 업데이트(desktop/src/updater.ts) — 올리기는 릴리즈 스크립트가 하고(--publish never), 여기서는
+    // 앱에 넣을 app-update.yml 과 릴리즈에 함께 올릴 latest.yml·blockmap 만 만든다.
+    publish: { provider: 'github', owner: updateRepo.split('/')[0], repo: updateRepo.split('/')[1], releaseType: 'release' },
   };
   // electron-builder 는 extraResources 에서도 node_modules 를 거른다 — 패키징 직후(설치 파일로 묶기 전)에 직접 넣는다.
   const afterPack = path.join(STAGE, 'after-pack.cjs');
@@ -250,14 +254,18 @@ const path = require('node:path');
   const builderCli = path.join(ROOT, 'node_modules', 'electron-builder', 'cli.js');
   const env = { ...process.env };
   delete env.ELECTRON_RUN_AS_NODE;
-  await run(process.execPath, [builderCli, '--win', '--x64', '--config', configFile, '--projectDir', appDir], {
+  await run(process.execPath, [builderCli, '--win', '--x64', '--config', configFile, '--projectDir', appDir, '--publish', 'never'], {
     cwd: STAGE,
     env,
   });
 
   const setupName = `listup-${version}-windows-setup.exe`;
   fs.mkdirSync(RELEASE, { recursive: true });
-  fs.copyFileSync(path.join(outDir, setupName), path.join(RELEASE, setupName));
+  // 자동 업데이트가 읽는 것: latest.yml(버전·파일 이름·sha512)과 차분 받기용 blockmap. 설치 파일과 함께 올린다.
+  for (const name of [setupName, `${setupName}.blockmap`, 'latest.yml']) {
+    if (!fs.existsSync(path.join(outDir, name))) throw new Error(`electron-builder 결과에 ${name} 이 없습니다.`);
+    fs.copyFileSync(path.join(outDir, name), path.join(RELEASE, name === 'latest.yml' ? `listup-${version}-latest.yml` : name));
+  }
   const size = (fs.statSync(path.join(RELEASE, setupName)).size / 1024 / 1024).toFixed(1);
   say(`\n완료: release/${setupName} (${size}MB)`);
 }

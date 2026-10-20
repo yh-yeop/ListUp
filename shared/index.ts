@@ -628,10 +628,38 @@ export interface DesktopFolders {
   save(root: string, relativePath: string, url: string): Promise<string>;
 }
 
+/**
+ * PC 앱 자동 업데이트 상태 (desktop/src/updater.ts).
+ * - disabled: 업데이트를 하지 않는 실행(개발 묶음 등) — 앱은 GitHub 릴리즈 페이지 안내로 돌아간다
+ * - idle: 아직 확인하지 않았다 / checking: 확인 중 / none: 최신이다
+ * - downloading: 새 버전을 받는 중 / ready: 받아 두었다 — 다시 시작하거나 끝낼 때 설치된다
+ * - error: 확인·받기에 실패했다
+ */
+export interface DesktopUpdateState {
+  status: 'disabled' | 'idle' | 'checking' | 'none' | 'downloading' | 'ready' | 'error';
+  /** 받는 중이거나 받아 둔 새 버전. */
+  version: string | null;
+  /** 받는 중일 때 0~100. */
+  percent: number | null;
+  error: string | null;
+}
+
+export interface DesktopUpdates {
+  getState(): Promise<DesktopUpdateState>;
+  /** 상태가 바뀔 때마다 부른다. 돌려준 함수로 그만 듣는다. */
+  subscribe(listener: (state: DesktopUpdateState) => void): () => void;
+  /** 지금 확인한다. 새 버전이 있으면 바로 받기 시작한다. */
+  check(): Promise<DesktopUpdateState>;
+  /** 받아 둔 새 버전을 설치하고 다시 켠다. 켜 둔 서버는 다시 켜진다. */
+  install(): Promise<void>;
+}
+
 export interface DesktopBridge {
   /** PC 앱 버전. */
   version: string;
   credentials: DesktopCredentials;
   host: DesktopHost;
   folders: DesktopFolders;
+  /** 1.7.0 부터. */
+  updates?: DesktopUpdates;
 }

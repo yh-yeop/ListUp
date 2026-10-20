@@ -297,7 +297,8 @@ Tailscale 을 쓴다면 `tailscale up` 으로 로그인만 해두고
 npm test          # 서버 테스트 (HTTP 수준)
 npm run typecheck # 서버 + 앱 타입 검사
 npm run test:e2e  # 웹 흐름 테스트 (웹을 두 모드로 빌드하고 브라우저로)
-npm run test:desktop  # PC 앱 흐름 테스트 (Electron 으로 이 PC 서버 켜기·들어가기·재설정 코드·백업)
+npm run test:desktop  # PC 앱 흐름 테스트 (Electron 으로 이 PC 서버 켜기·들어가기·재설정 코드·백업·자동 업데이트)
+npm run test:android  # 안드로이드 흐름 테스트 (에뮬레이터에 시험용 APK — 앱 안 업데이트·가입·대화상자·토스트)
 ```
 
 PC 앱을 고칠 때는 `npm run desktop` 으로 띄우고(앱 화면을 고쳤으면 `-- --web`), 설치 파일은

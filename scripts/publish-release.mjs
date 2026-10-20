@@ -16,6 +16,7 @@
  */
 import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PIN_FILE, missingKeyMessage, readPin, readSigning } from './android-signing.mjs';
@@ -30,6 +31,9 @@ const isWindows = process.platform === 'win32';
 const ARCHIVE = path.join(ROOT, 'release', `listup-${VERSION}.${isWindows ? 'zip' : 'tar.gz'}`);
 const APK = path.join(ROOT, 'release', `listup-${VERSION}-android.apk`);
 const SETUP = path.join(ROOT, 'release', `listup-${VERSION}-windows-setup.exe`);
+// PC 앱 자동 업데이트(desktop/src/updater.ts)가 읽는 것. latest.yml 은 GitHub 에 그 이름 그대로 올라가야 한다.
+const BLOCKMAP = `${SETUP}.blockmap`;
+const LATEST_YML = path.join(ROOT, 'release', `listup-${VERSION}-latest.yml`);
 
 const say = (m) => console.log(m);
 const fail = (m) => {
@@ -109,6 +113,14 @@ await runNpm(['run', 'build:android']);
 if (!fs.existsSync(APK)) fail(`APK 가 없습니다: ${APK}`);
 await runNpm(['run', 'build:desktop']);
 if (!fs.existsSync(SETUP)) fail(`PC 설치 파일이 없습니다: ${SETUP}`);
+for (const file of [BLOCKMAP, LATEST_YML]) if (!fs.existsSync(file)) fail(`PC 앱 업데이트 정보가 없습니다: ${file}`);
+// latest.yml 이 가리키는 설치 파일이 이번 것인지 — 이름이 어긋나면 자동 업데이트가 받을 파일을 못 찾는다.
+if (!fs.readFileSync(LATEST_YML, 'utf8').includes(`path: ${path.basename(SETUP)}`)) {
+  fail(`latest.yml 이 ${path.basename(SETUP)} 를 가리키지 않습니다.`);
+}
+const uploadDir = fs.mkdtempSync(path.join(os.tmpdir(), `listup-release-${VERSION}-`));
+const LATEST_UPLOAD = path.join(uploadDir, 'latest.yml');
+fs.copyFileSync(LATEST_YML, LATEST_UPLOAD);
 // 빌드가 추적 중인 파일을 바꿨다면(되돌리지 못한 prebuild 변경 등) 태그와 코드가 어긋난다.
 if (git('status', '--porcelain')) fail('빌드가 추적 중인 파일을 바꿨습니다. git status 를 확인하세요.');
 
@@ -118,6 +130,6 @@ if (git('status', '--porcelain')) fail('빌드가 추적 중인 파일을 바꿨
 say(`\n태그 ${TAG} 를 달고 올립니다…`);
 git('tag', '-a', TAG, '-m', `ListUp ${VERSION}`);
 git('push', 'origin', TAG);
-await run('gh', ['release', 'create', TAG, ARCHIVE, APK, SETUP, '--title', `ListUp ${VERSION}`, '--notes-file', NOTES]);
+await run('gh', ['release', 'create', TAG, ARCHIVE, APK, SETUP, BLOCKMAP, LATEST_UPLOAD, '--title', `ListUp ${VERSION}`, '--notes-file', NOTES]);
 
 say(`\n완료: https://github.com/${git('remote', 'get-url', 'origin').replace(/^.*github\.com[:/]/, '').replace(/\.git$/, '')}/releases/tag/${TAG}`);

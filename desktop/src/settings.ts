@@ -15,6 +15,8 @@ export interface Settings {
   trayNoticeShown: boolean;
   /** 서버 이름(LISTUP_SERVER_NAME 으로 넘긴다). null 이면 정하지 않음. */
   serverName: string | null;
+  /** 업데이트를 설치하려고 끌 때 서버가 켜져 있었다 — 다시 켜지면 서버도 켠다. */
+  resumeServerAfterUpdate: boolean;
 }
 
 const DEFAULTS: Settings = {
@@ -25,6 +27,7 @@ const DEFAULTS: Settings = {
   dataDir: null,
   trayNoticeShown: false,
   serverName: null,
+  resumeServerAfterUpdate: false,
 };
 
 /** 서버 이름의 최대 길이 — 서버(config.ts)와 앱의 이름 칸과 같다. */
@@ -60,6 +63,7 @@ export function readSettings(): Settings {
     dataDir: typeof raw.dataDir === 'string' && raw.dataDir ? raw.dataDir : null,
     trayNoticeShown: raw.trayNoticeShown === true,
     serverName: cleanServerName(raw.serverName),
+    resumeServerAfterUpdate: raw.resumeServerAfterUpdate === true,
   };
   return cached;
 }

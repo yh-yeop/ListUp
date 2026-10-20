@@ -1,6 +1,6 @@
 {
   "name": "listup",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "private": true,
   "license": "AGPL-3.0-only",
   "description": "초대코드로 참여하는 파일 공유 협업 플랫폼 (모바일/PC 크로스플랫폼)",
@@ -30,6 +30,7 @@
     "test": "npm run test --workspace @listup/server",
     "test:e2e": "node e2e/run.mjs",
     "test:desktop": "node e2e/desktop.mjs",
+    "test:android": "node e2e/android.mjs",
     "typecheck": "npm run typecheck --workspace @listup/server && npm run typecheck --workspace @listup/app && npm run typecheck --workspace @listup/desktop"
   },
   "engines": {
@@ -45,6 +46,7 @@
     "qrcode-terminal": "^0.12.0"
   },
   "devDependencies": {
-    "playwright-core": "^1.63.0"
+    "playwright-core": "^1.63.0",
+    "yauzl": "3.4.0"
   }
 }

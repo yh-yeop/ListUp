@@ -21,13 +21,14 @@ import {
   shell,
   Tray,
 } from 'electron';
-import type { HostSettingsPatch, HostStatus } from '@listup/shared';
+import type { DesktopUpdateState, HostSettingsPatch, HostStatus } from '@listup/shared';
 import { allowRoot, readChunk, saveUrl, scanFolder } from './folders.ts';
 import { credentialsAvailable, getCredential, removeCredential, setCredential } from './credentials.ts';
 import { Host } from './host.ts';
 import { IPC } from './protocol.ts';
 import { readSettings, writeSettings } from './settings.ts';
 import { inspectTools } from './tunnel.ts';
+import { Updater } from './updater.ts';
 
 const ORIGIN = 'app://listup';
 
@@ -62,6 +63,7 @@ if (!app.requestSingleInstanceLock()) {
 }
 
 const host = new Host({ serverEntry: paths.serverEntry, serverWeb: paths.webServer });
+const updater = new Updater();
 let win: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let quitting = false;
@@ -176,7 +178,20 @@ async function quit(): Promise<void> {
   app.quit();
 }
 
-function trayMenu(status: HostStatus): Menu {
+/** 받아 둔 새 버전을 설치한다 — 서버를 먼저 깔끔히 끄고, 켜 있었으면 다시 켜지게 적어 둔다. */
+async function installUpdate(): Promise<void> {
+  if (updater.getState().status !== 'ready' || quitting) return;
+  if (host.running) writeSettings({ resumeServerAfterUpdate: true });
+  quitting = true;
+  await host.stop();
+  if (!updater.install()) {
+    // 설치를 시작하지 못했다 — 앱은 그대로 둔다.
+    quitting = false;
+    writeSettings({ resumeServerAfterUpdate: false });
+  }
+}
+
+function trayMenu(status: HostStatus, update: DesktopUpdateState = updater.getState()): Menu {
   const label: Record<HostStatus['state'], string> = {
     stopped: '서버 꺼짐',
     starting: '서버 켜는 중…',
@@ -192,6 +207,9 @@ function trayMenu(status: HostStatus): Menu {
       ? { label: '서버 끄기', click: () => void host.stop() }
       : { label: '서버 켜기', click: () => void host.start(), enabled: status.state !== 'stopping' },
     { type: 'separator' },
+    ...(update.status === 'ready'
+      ? [{ label: `다시 시작해 v${update.version} 설치`, click: () => void installUpdate() }, { type: 'separator' as const }]
+      : []),
     { label: '끝내기', click: () => void quit() },
   ]);
 }
@@ -243,6 +261,10 @@ function registerIpc(): void {
   });
   ipcMain.handle(IPC.hostLogs, () => host.logs());
 
+  ipcMain.handle(IPC.updatesState, () => updater.getState());
+  ipcMain.handle(IPC.updatesCheck, () => updater.check());
+  ipcMain.handle(IPC.updatesInstall, () => installUpdate());
+
   ipcMain.handle(IPC.foldersPick, async () => {
     const picked = await pickFolder({ title: '저장소와 견줄 내 폴더' });
     const root = picked.canceled ? undefined : picked.filePaths[0];
@@ -281,9 +303,17 @@ void app.whenReady().then(() => {
     tray?.setContextMenu(trayMenu(status));
     for (const window of BrowserWindow.getAllWindows()) window.webContents.send(IPC.hostChanged, status);
   });
+  updater.onChange((state) => {
+    tray?.setContextMenu(trayMenu(host.status(), state));
+    for (const window of BrowserWindow.getAllWindows()) window.webContents.send(IPC.updatesChanged, state);
+  });
+  updater.start();
 
   const settings = readSettings();
   const hidden = process.argv.includes('--hidden');
-  if (settings.autoStart || hidden) void host.start();
+  // 업데이트를 설치하느라 껐다 켜졌다 — 그때 켜져 있던 서버를 다시 켠다.
+  const resume = settings.resumeServerAfterUpdate;
+  if (resume) writeSettings({ resumeServerAfterUpdate: false });
+  if (settings.autoStart || hidden || resume) void host.start();
   if (!hidden) showWindow(appUrlFromDeepLink(process.argv));
 });

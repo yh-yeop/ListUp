@@ -2,8 +2,10 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import { Linking, Platform } from 'react-native';
 import { IS_CLIENT_BUILD } from '../api/client';
+import type { DesktopUpdates, DesktopUpdateState } from '@listup/shared';
+import { apkInstallSupported, downloadAndInstallApk } from './apk-update';
 import { desktopBridge } from './desktop';
-import { confirmAction } from './dialogs';
+import { confirmAction, notify, notifyError } from './dialogs';
 
 /**
  * 설치형 클라이언트의 업데이트 확인. 새 버전(APK 등)은 GitHub 릴리즈에 올린다.
@@ -24,7 +26,11 @@ export const SOURCE_URL = `https://github.com/${REPO}`;
 export const LATEST_RELEASE_URL = `${SOURCE_URL}/releases/latest`;
 export const APP_VERSION = Constants.expoConfig?.version ?? '0.0.0';
 
-const LATEST_API = `https://api.github.com/repos/${REPO}/releases/latest`;
+/**
+ * 최신 릴리즈를 묻는 주소. EXPO_PUBLIC_LISTUP_UPDATE_API 는 시험 빌드용 — 에뮬레이터 흐름 테스트가 가짜 릴리즈를
+ * 내주는 로컬 서버를 가리킨다(e2e/android.mjs). 정식 빌드에는 넣지 않는다.
+ */
+const LATEST_API = process.env.EXPO_PUBLIC_LISTUP_UPDATE_API || `https://api.github.com/repos/${REPO}/releases/latest`;
 const CACHE_KEY = 'listup.update';
 /**
  * 최신 릴리즈를 다시 묻는 간격. 로그인 없는 GitHub API 는 IP 당 시간에 60번까지라,
@@ -209,19 +215,89 @@ export async function openReleasePage(url: string = LATEST_RELEASE_URL): Promise
 
 let promptedThisSession = false;
 
+/** 이 버전을 이미 제안했는지 적어 둔다. 처음이면 true — 그때만 묻는다. */
+async function markPrompted(version: string): Promise<boolean> {
+  const cache = await readCache();
+  if (cache.promptedVersion === version) return false;
+  // 묻기 전에 기록한다 — 대화상자를 닫거나 앱이 꺼져도 같은 버전을 계속 묻지 않게.
+  await writeCache({ ...cache, promptedVersion: version });
+  return true;
+}
+
+/** 자동 업데이트가 도는 PC 앱인지(1.7 부터, 설치본). */
+async function activeDesktopUpdates(): Promise<DesktopUpdates | null> {
+  const updates = desktopBridge()?.updates;
+  if (!updates) return null;
+  return (await updates.getState()).status === 'disabled' ? null : updates;
+}
+
+/** PC 앱 — 새 버전을 받아 두면 한 번, 다시 시작해 설치할지 묻는다. */
+function watchDesktopUpdate(updates: DesktopUpdates): void {
+  let asking = false;
+  const handle = async (state: DesktopUpdateState) => {
+    if (state.status !== 'ready' || !state.version || asking) return;
+    asking = true;
+    try {
+      if (!(await markPrompted(state.version))) return;
+      const ok = await confirmAction({
+        title: '새 버전을 받아 두었습니다',
+        message:
+          `ListUp v${state.version} (지금 v${APP_VERSION}). 지금 다시 시작해 설치할까요?
+` +
+          '나중에 해도 ListUp 을 끝낼 때 설치됩니다. 켜 둔 서버는 설치 뒤 다시 켜집니다.',
+        confirmLabel: '다시 시작해 설치',
+      });
+      if (ok) await updates.install();
+    } finally {
+      asking = false;
+    }
+  };
+  updates.subscribe((state) => void handle(state));
+  void updates.getState().then(handle);
+}
+
+/** 안드로이드 — APK 를 받아 설치 화면을 띄운다. 받는 동안은 토스트로 알린다. */
+export async function installApkUpdate(latest: LatestRelease, onProgress?: (fraction: number) => void): Promise<boolean> {
+  if (!latest.asset) return false;
+  try {
+    await downloadAndInstallApk(latest.asset, onProgress);
+    return true;
+  } catch (err) {
+    notifyError('새 버전을 설치하지 못했습니다.', err instanceof Error ? err.message : undefined);
+    return false;
+  }
+}
+
 /**
- * 앱을 열 때 한 번 — 새 버전이 있고 그 버전을 아직 제안한 적이 없으면 받으러 갈지 묻는다.
- * 같은 버전은 다시 묻지 않는다(설정 화면에서는 계속 받을 수 있다).
+ * 앱을 열 때 한 번 — 새 버전이 있고 그 버전을 아직 제안한 적이 없으면 묻는다.
+ * - PC 앱(자동 업데이트): 백그라운드로 받아 두면 다시 시작해 설치할지
+ * - 안드로이드: 받아서 설치할지 → 설치 화면
+ * - 그 밖: 릴리즈 페이지로 받으러 갈지
+ * 같은 버전은 다시 묻지 않는다(서버 목록·내 정보에서는 계속 받을 수 있다).
  */
 export async function suggestUpdateOnce(): Promise<void> {
   if (promptedThisSession || !updateChecksEnabled()) return;
   promptedThisSession = true;
+  const desktopUpdates = await activeDesktopUpdates();
+  if (desktopUpdates) {
+    watchDesktopUpdate(desktopUpdates);
+    return;
+  }
   const latest = await checkForUpdate();
   if (!latest) return;
-  const cache = await readCache();
-  if (cache.promptedVersion === latest.version) return;
-  // 묻기 전에 기록한다 — 대화상자를 닫거나 앱이 꺼져도 같은 버전을 계속 묻지 않게.
-  await writeCache({ ...cache, promptedVersion: latest.version });
+  if (!(await markPrompted(latest.version))) return;
+  if (apkInstallSupported && latest.asset) {
+    const install = await confirmAction({
+      title: '새 버전이 있습니다',
+      message: `ListUp v${latest.version} 이 나왔습니다 (지금 v${APP_VERSION}).
+받아서 설치할까요? (${latest.asset.name})`,
+      confirmLabel: '받아서 설치',
+    });
+    if (!install) return;
+    notify(`v${latest.version} 을 받는 중입니다…`, '다 받으면 설치 화면이 뜹니다.');
+    await installApkUpdate(latest);
+    return;
+  }
   const ok = await confirmAction({
     title: '새 버전이 있습니다',
     message:

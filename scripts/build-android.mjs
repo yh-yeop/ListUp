@@ -17,6 +17,9 @@
  *                                               (--check-key 를 함께 주면 빌드하지 않고 키만 만든다)
  *   npm run build:android -- --pin-from <apk>   이미 내보낸 APK 의 서명으로 지문을 고정만 하고 끝낸다
  *   npm run build:android -- --check-key        빌드하지 않고 키가 정식 키와 같은지만 본다(옮겨 온 키 확인)
+ *   npm run build:android -- --test-update-api <url>
+ *       에뮬레이터 흐름 테스트용 APK(…-android-test.apk) — 업데이트 확인이 GitHub 대신 <url> 을 본다.
+ *       에뮬레이터(x86_64)에서도 돌게 x86_64 도 넣는다. 정식 APK 에는 이 주소가 들어가지 않는지 빌드 뒤에 확인한다.
  *
  * 환경변수
  *   JAVA_HOME          JDK 17 (없으면 기본 설치 위치에서 찾는다)
@@ -29,6 +32,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import yauzl from 'yauzl';
 import {
   PIN_FILE,
   SIGNING_FILE,
@@ -45,7 +49,12 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const APP_DIR = path.join(ROOT, 'app');
 const ANDROID_DIR = path.join(APP_DIR, 'android');
 const VERSION = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version;
-const OUT = path.join(ROOT, 'release', `listup-${VERSION}-android.apk`);
+/** 시험용 APK 의 업데이트 확인 주소(e2e/android.mjs). 없으면 정식 APK. */
+const TEST_UPDATE_API = (() => {
+  const index = process.argv.indexOf('--test-update-api');
+  return index === -1 ? null : (process.argv[index + 1] ?? null);
+})();
+const OUT = path.join(ROOT, 'release', `listup-${VERSION}-android${TEST_UPDATE_API ? '-test' : ''}.apk`);
 const isWindows = process.platform === 'win32';
 
 const say = (m) => console.log(m);
@@ -119,6 +128,9 @@ const androidHome = findAndroidHome();
 if (!androidHome) fail('Android SDK 를 찾지 못했습니다. 설치한 뒤 ANDROID_HOME 을 지정하세요.');
 
 const env = { ...process.env, JAVA_HOME: javaHome, ANDROID_HOME: androidHome, ANDROID_SDK_ROOT: androidHome };
+// 업데이트 확인 주소는 시험용 APK 에만 — 셸에 남아 있던 값이 정식 APK 에 들어가지 않게 지운다.
+delete env.EXPO_PUBLIC_LISTUP_UPDATE_API;
+if (TEST_UPDATE_API) env.EXPO_PUBLIC_LISTUP_UPDATE_API = TEST_UPDATE_API;
 say(`JDK: ${javaHome}`);
 say(`Android SDK: ${androidHome}\n`);
 
@@ -261,6 +273,9 @@ const appPackageJson = path.join(APP_DIR, 'package.json');
 // prebuild 는 android/ 를 처음 만들 때 package.json 의 android·ios 스크립트를 `expo run:*` 으로
 // 바꾼다. android/ 를 커밋하지 않고 매번 새로 만드는 이 프로젝트에는 필요 없는 변경이라 되돌린다.
 const appPackageBefore = fs.readFileSync(appPackageJson);
+// EXPO_PUBLIC_* 은 JS 를 묶을 때 박힌다. 지난 빌드(시험용)의 Metro 캐시가 남아 있으면 그 값이 정식 APK 에 섞일 수
+// 있어 매번 비운다(빌드 뒤에도 묶음을 읽어 확인한다).
+fs.rmSync(path.join(os.tmpdir(), 'metro-cache'), { recursive: true, force: true });
 say('android/ 를 새로 만듭니다 (expo prebuild)…');
 try {
   await run(process.execPath, [expoCli, 'prebuild', '--platform', 'android', '--clean', '--no-install'], {
@@ -275,7 +290,7 @@ try {
 // ---------------------------------------------------------------------------
 // 4. 빌드 — 릴리스 서명은 gradle 에 주입한다(android/ 를 고치지 않고)
 // ---------------------------------------------------------------------------
-const abis = process.env.LISTUP_ANDROID_ABIS ?? 'arm64-v8a';
+const abis = process.env.LISTUP_ANDROID_ABIS ?? (TEST_UPDATE_API ? 'arm64-v8a,x86_64' : 'arm64-v8a');
 const gradleArgs = [
   'assembleRelease',
   `-PreactNativeArchitectures=${abis}`,
@@ -316,8 +331,41 @@ try {
 } catch (err) {
   fail(err.message);
 }
+// 묶은 JS 에 시험용 업데이트 주소가 들어 있는지 — 정식 APK 에는 없어야 하고, 시험용에는 있어야 한다.
+{
+  const bundle = await readZipEntry(built, 'assets/index.android.bundle');
+  if (!bundle) fail('APK 에서 JS 묶음(assets/index.android.bundle)을 찾지 못했습니다.');
+  const text = bundle.toString('latin1');
+  if (TEST_UPDATE_API && !text.includes(TEST_UPDATE_API)) fail(`시험용 APK 에 업데이트 주소가 들어가지 않았습니다: ${TEST_UPDATE_API}`);
+  if (!TEST_UPDATE_API && /10\.0\.2\.2:|127\.0\.0\.1:\d+\/latest/.test(text)) {
+    fail('정식 APK 의 JS 묶음에 시험용 업데이트 주소가 들어 있습니다 — 내보내지 않습니다. Metro 캐시를 비우고 다시 빌드하세요.');
+  }
+}
 fs.mkdirSync(path.dirname(OUT), { recursive: true });
 fs.copyFileSync(built, OUT);
 const mb = (fs.statSync(OUT).size / 1024 / 1024).toFixed(1);
 say(`\n완료: ${OUT} (${mb}MB)`);
 say('폰에서 이 파일을 열어 설치하세요. "출처를 알 수 없는 앱" 설치를 허용해야 할 수 있습니다.');
+
+/** zip(APK) 안 파일 하나를 읽는다. 없으면 null. */
+function readZipEntry(zipFile, entryName) {
+  return new Promise((resolve, reject) => {
+    yauzl.open(zipFile, { lazyEntries: true }, (err, zip) => {
+      if (err) return reject(err);
+      zip.on('entry', (entry) => {
+        if (entry.fileName !== entryName) return zip.readEntry();
+        zip.openReadStream(entry, (e, stream) => {
+          if (e) return reject(e);
+          const chunks = [];
+          stream.on('data', (c) => chunks.push(c));
+          stream.on('end', () => {
+            zip.close();
+            resolve(Buffer.concat(chunks));
+          });
+        });
+      });
+      zip.on('end', () => resolve(null));
+      zip.readEntry();
+    });
+  });
+}

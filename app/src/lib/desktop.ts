@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Platform } from 'react-native';
-import type { DesktopBridge, HostStatus } from '@listup/shared';
+import type { DesktopBridge, DesktopUpdateState, HostStatus } from '@listup/shared';
 
 /**
  * PC 앱(Electron)이 창에 넣어 주는 `window.listupDesktop`. 브라우저·폰에서는 null.
@@ -35,6 +35,30 @@ export function useHostStatus(): HostStatus | null {
     };
   }, []);
   return status;
+}
+
+/**
+ * PC 앱 자동 업데이트 상태. 바뀔 때마다 다시 그린다. 자동 업데이트를 하지 않는 실행(PC 앱이 아님, 개발 묶음,
+ * 1.6 까지의 PC 앱)이면 null — 그때는 GitHub 릴리즈 페이지 안내로 돌아간다.
+ */
+export function useDesktopUpdate(): DesktopUpdateState | null {
+  const [state, setState] = useState<DesktopUpdateState | null>(null);
+  useEffect(() => {
+    const updates = desktopBridge()?.updates;
+    if (!updates) return;
+    let cancelled = false;
+    const unsubscribe = updates.subscribe((next) => {
+      if (!cancelled) setState(next);
+    });
+    void updates.getState().then((next) => {
+      if (!cancelled) setState(next);
+    });
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, []);
+  return state && state.status !== 'disabled' ? state : null;
 }
 
 /** 이 PC 서버에 들어가는 주소인지 (localhost·127.0.0.1 의 그 포트). */

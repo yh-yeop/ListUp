@@ -9,7 +9,9 @@
  * 쓰고 있는 서버(4000)나 PC 앱과 겹치지 않는다. 공개 주소(Tailscale·빠른 터널)는 실제로 켜지 않는다.
  * 폴더 고르기 대화상자는 main 프로세스에서 가짜로 바꿔 둔다.
  */
+import crypto from 'node:crypto';
 import fs from 'node:fs';
+import http from 'node:http';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -311,6 +313,81 @@ try {
       fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });
     } catch {
       say(`  (임시 폴더를 지우지 못했습니다: ${dir})`);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 자동 업데이트 — 가짜 업데이트 서버(latest.yml + 가짜 설치 파일)로 확인·받기·설치 제안까지.
+// 받은 파일을 실행(설치)하지는 않는다(LISTUP_DESKTOP_UPDATE_NO_INSTALL).
+// ---------------------------------------------------------------------------
+{
+  say('\n자동 업데이트');
+  const feedDir = fs.mkdtempSync(path.join(os.tmpdir(), 'listup-desktop-feed-'));
+  const userData2 = fs.mkdtempSync(path.join(os.tmpdir(), 'listup-desktop-update-'));
+  const setupName = 'listup-99.0.0-windows-setup.exe';
+  const fake = crypto.randomBytes(256 * 1024);
+  fs.writeFileSync(path.join(feedDir, setupName), fake);
+  const sha512 = crypto.createHash('sha512').update(fake).digest('base64');
+  fs.writeFileSync(
+    path.join(feedDir, 'latest.yml'),
+    `version: 99.0.0\nfiles:\n  - url: ${setupName}\n    sha512: ${sha512}\n    size: ${fake.length}\npath: ${setupName}\nsha512: ${sha512}\nreleaseDate: '2026-10-20T00:00:00.000Z'\n`,
+  );
+  const requested = [];
+  const feed = http.createServer((req, res) => {
+    const name = decodeURIComponent(new URL(req.url, 'http://x').pathname).replace(/^\/+/, '');
+    requested.push(name);
+    const file = path.join(feedDir, name);
+    if (!name || name.includes('..') || !fs.existsSync(file)) return void res.writeHead(404).end();
+    res.writeHead(200, { 'Content-Length': fs.statSync(file).size }).end(fs.readFileSync(file));
+  });
+  await new Promise((r) => feed.listen(0, '127.0.0.1', r));
+  fs.writeFileSync(path.join(userData2, 'settings.json'), JSON.stringify({ port: await freePort(), trayNoticeShown: true }));
+
+  const env2 = {
+    ...env,
+    LISTUP_DESKTOP_USER_DATA: userData2,
+    LISTUP_DESKTOP_UPDATE_FEED: `http://127.0.0.1:${feed.address().port}/`,
+    LISTUP_DESKTOP_UPDATE_NO_INSTALL: '1',
+  };
+  const app2 = await _electron.launch(
+    packagedExe ? { executablePath: packagedExe, args: [], env: env2 } : { executablePath, args: [path.join(ROOT, 'desktop')], env: env2 },
+  );
+  const page2 = await app2.firstWindow();
+  const dialogs = [];
+  // 설치 제안은 기록만 하고 "나중에" — 설치는 이 시험의 몫이 아니다.
+  page2.on('dialog', (d) => {
+    dialogs.push(d.message());
+    void d.dismiss();
+  });
+  try {
+    await screen(page2).listIntro().waitFor();
+    await page2.getByRole('button', { name: '업데이트 확인' }).click();
+    await page2.getByRole('button', { name: '다시 시작해 v99.0.0 설치' }).waitFor({ timeout: 60_000 });
+    t.must(requested.includes('latest.yml') && requested.includes(setupName), '업데이트 확인 → latest.yml 을 보고 새 설치 파일을 받는다');
+    const until = Date.now() + 10_000;
+    while (Date.now() < until && !dialogs.some((m) => m.includes('새 버전을 받아 두었습니다'))) {
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    t.must(dialogs.some((m) => m.includes('v99.0.0') && m.includes('다시 시작해 설치')), '다 받으면 다시 시작해 설치할지 한 번 묻는다');
+    t.must(
+      (await page2.getByText('켜 둔 서버는 설치 뒤 다시 켜집니다', { exact: false }).count()) > 0,
+      '서버 목록에 "다시 시작해 설치"와 켜 둔 서버 안내',
+    );
+  } catch (err) {
+    failed += 1;
+    say(`  ✗ 중단: ${err instanceof Error ? err.message : err}`);
+    fs.mkdirSync(FAILURES, { recursive: true });
+    await page2.screenshot({ path: path.join(FAILURES, 'desktop-update.png') }).catch(() => {});
+  } finally {
+    await app2.evaluate(({ app: electronApp }) => electronApp.exit(0)).catch(() => {});
+    await app2.close().catch(() => {});
+    feed.close();
+    for (const dir of [userData2, feedDir]) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });
+    // 업데이트가 받아 둔 가짜 설치 파일과 개발 묶음용 설정(desktop/src/updater.ts).
+    if (process.env.LOCALAPPDATA) fs.rmSync(path.join(process.env.LOCALAPPDATA, 'listup-updater-test'), { recursive: true, force: true });
+    for (const name of fs.readdirSync(os.tmpdir()).filter((n) => /^listup-dev-app-update-\d+\.yml$/.test(n))) {
+      fs.rmSync(path.join(os.tmpdir(), name), { force: true });
     }
   }
 }

@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { DesktopBridge, HostStatus } from '@listup/shared';
+import type { DesktopBridge, DesktopUpdateState, HostStatus } from '@listup/shared';
 import { IPC } from './protocol.ts';
 
 /** 창(앱 웹 빌드)에 `window.listupDesktop` 을 넣는다. 계약은 shared 의 DesktopBridge. */
@@ -28,6 +28,18 @@ const bridge: DesktopBridge = {
     chooseDataFolder: () => ipcRenderer.invoke(IPC.hostChooseData),
     openDataFolder: () => ipcRenderer.invoke(IPC.hostOpenData),
     logs: () => ipcRenderer.invoke(IPC.hostLogs),
+  },
+  updates: {
+    getState: () => ipcRenderer.invoke(IPC.updatesState),
+    subscribe(listener) {
+      const handler = (_event: unknown, state: DesktopUpdateState) => listener(state);
+      ipcRenderer.on(IPC.updatesChanged, handler);
+      return () => {
+        ipcRenderer.removeListener(IPC.updatesChanged, handler);
+      };
+    },
+    check: () => ipcRenderer.invoke(IPC.updatesCheck),
+    install: () => ipcRenderer.invoke(IPC.updatesInstall),
   },
   folders: {
     pick: () => ipcRenderer.invoke(IPC.foldersPick),

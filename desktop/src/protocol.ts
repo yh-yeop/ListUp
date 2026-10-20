@@ -31,6 +31,11 @@ export const IPC = {
   foldersScan: 'folders:scan',
   foldersRead: 'folders:read',
   foldersSave: 'folders:save',
+  updatesState: 'updates:state',
+  updatesCheck: 'updates:check',
+  updatesInstall: 'updates:install',
   /** main → 창: 상태가 바뀌었다. */
   hostChanged: 'host:changed',
+  /** main → 창: 업데이트 상태가 바뀌었다. */
+  updatesChanged: 'updates:changed',
 } as const;
