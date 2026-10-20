@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import { Link, router } from 'expo-router';
+import { router } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { Pressable, View } from 'react-native';
 import {
@@ -16,21 +16,15 @@ import {
   Title,
 } from '../src/components/ui';
 import { ApiError } from '../src/api/client';
+import { AppVersion } from '../src/components/AppVersion';
 import { credentialsSupported, loadLogin, removeLogin } from '../src/lib/credentials';
 import { hostSupported } from '../src/lib/desktop';
-import {
-  APP_VERSION,
-  SOURCE_URL,
-  checkForUpdate,
-  openReleasePage,
-  type LatestRelease,
-} from '../src/lib/updates';
 import { confirmAction, notifySuccess } from '../src/lib/dialogs';
 import { chooseSaveFolder, getSaveFolder, saveFolderLabel, saveFolderSupported } from '../src/lib/save-folder';
 import { useAuth } from '../src/state/auth';
 import { openServerList } from '../src/lib/server-list';
 import { serverTitle } from '../src/state/servers';
-import { fontSize, spacing, useTheme } from '../src/theme';
+import { spacing, useTheme } from '../src/theme';
 
 
 export default function SettingsScreen() {
@@ -43,7 +37,6 @@ export default function SettingsScreen() {
   const [savingName, setSavingName] = useState(false);
   const [savingPassword, setSavingPassword] = useState(false);
   const [hasSavedLogin, setHasSavedLogin] = useState(false);
-  const [update, setUpdate] = useState<LatestRelease | null>(null);
   const [saveFolder, setSaveFolder] = useState<string | null>(null);
 
   // 안드로이드: 받은 파일을 두는 폴더.
@@ -62,17 +55,6 @@ export default function SettingsScreen() {
     const dir = await chooseSaveFolder();
     if (dir) setSaveFolder(saveFolderLabel(dir));
   };
-
-  // 새 버전이 있으면 받을 수 있게 보여 준다(설치형 클라이언트만 확인한다).
-  useEffect(() => {
-    let cancelled = false;
-    void checkForUpdate().then((latest) => {
-      if (!cancelled) setUpdate(latest);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   const activeId = activeServer?.id;
   useEffect(() => {
@@ -244,29 +226,8 @@ export default function SettingsScreen() {
           </Pressable>
         ) : null}
 
-        {/*
-          AGPL-3.0 §13 — 네트워크로 이 프로그램을 쓰는 사람에게 소스를 받을 길을 알려야 한다.
-          그래서 이 줄은 장식이 아니라 라이선스 조건을 지키는 부분이다.
-        */}
-        <Row style={{ justifyContent: 'space-between' }}>
-          <Caption>ListUp {APP_VERSION} · AGPL-3.0</Caption>
-          <Link
-            href={SOURCE_URL}
-            style={{ color: colors.accent, fontSize: fontSize.sm }}
-            accessibilityLabel="소스 코드 보기"
-          >
-            소스 코드
-          </Link>
-        </Row>
-
-        {update ? (
-          <Button
-            label={`새 버전 v${update.version} 받기`}
-            icon="download-outline"
-            onPress={() => void openReleasePage(update.url)}
-            full
-          />
-        ) : null}
+        {/* 버전·업데이트, 그리고 AGPL-3.0 §13 의 소스 코드 링크 — 장식이 아니라 라이선스 조건이다. */}
+        <AppVersion />
 
         {hasSavedLogin ? (
           <Button

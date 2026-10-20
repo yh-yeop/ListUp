@@ -28,6 +28,12 @@ export default async function run(t, env) {
     await c.s.listIntro().waitFor();
     await c.page.waitForTimeout(1500);
     t.must(c.ctx.github.calls.length === 1 && c.dialogs.length === 0, '같은 버전 → 확인 1번, 제안 없음');
+    // 서버 목록(로그인 전 첫 화면)에서도 버전이 보이고, 직접 확인하면 기억해 둔 결과를 건너뛰고 다시 묻는다.
+    await c.page.getByText(`ListUp 웹 클라이언트 v${env.appVersion}`, { exact: false }).waitFor();
+    t.ok('서버 목록에 앱 버전');
+    await c.page.getByRole('button', { name: '업데이트 확인' }).click();
+    await c.page.getByText('최신 버전입니다.').waitFor();
+    t.must(c.ctx.github.calls.length === 2, '업데이트 확인 → 12시간 안이어도 GitHub 에 다시 묻는다');
     await c.ctx.close();
   }
 
@@ -88,6 +94,9 @@ export default async function run(t, env) {
     await c.s.listIntro().waitFor();
     await c.page.waitForTimeout(1500);
     t.must(c.ctx.github.calls.length === 1 && c.dialogs.length === 0 && c.ctx.github.opened.length === 0, 'GitHub 오류 → 제안 없음');
+    await c.page.getByRole('button', { name: '업데이트 확인' }).click();
+    await c.page.getByText('확인하지 못했습니다', { exact: false }).waitFor();
+    t.ok('직접 확인했는데 닿지 못하면 "최신"이 아니라 확인하지 못했다고');
     await c.ctx.close();
   }
 
@@ -126,6 +135,12 @@ export default async function run(t, env) {
     await c.page.getByRole('button', { name: '로그인' }).waitFor();
     await c.page.waitForTimeout(1500);
     t.must(c.ctx.github.calls.length === 0 && c.dialogs.length === 0, '서버가 주는 웹 → GitHub 에 묻지 않음');
+    await c.page.goto(A + '/servers');
+    await c.page.getByText(`ListUp 웹 v${env.appVersion}`, { exact: false }).waitFor();
+    t.must(
+      (await c.page.getByRole('button', { name: '업데이트 확인' }).count()) === 0 && c.ctx.github.calls.length === 0,
+      '서버가 주는 웹 → 버전만 보이고 업데이트 확인은 없다',
+    );
     await c.ctx.close();
   }
 }

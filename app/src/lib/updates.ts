@@ -1,7 +1,8 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
-import { Linking } from 'react-native';
+import { Linking, Platform } from 'react-native';
 import { IS_CLIENT_BUILD } from '../api/client';
+import { desktopBridge } from './desktop';
 import { confirmAction } from './dialogs';
 
 /**
@@ -35,6 +36,34 @@ const REQUEST_TIMEOUT_MS = 8_000;
 export interface LatestRelease {
   version: string;
   url: string;
+  /** 이 기기에 맞는 설치 파일(안드로이드 APK·PC 설치 파일). 릴리즈에 없거나 웹이면 null. */
+  asset?: { name: string; url: string } | null;
+}
+
+/**
+ * 확인 결과.
+ * - update: 새 버전이 있다
+ * - current: 최신이다
+ * - unknown: GitHub 에 닿지 못했고 기억해 둔 결과도 없다(또는 지금 확인하라고 했는데 닿지 못했다)
+ */
+export type UpdateStatus =
+  | { status: 'update'; latest: LatestRelease }
+  | { status: 'current'; latest: LatestRelease }
+  | { status: 'unknown' };
+
+/** 이 앱이 무엇인지 — 버전 옆에 보여 준다. */
+export function clientKind(): string {
+  if (desktopBridge()) return 'PC 앱';
+  if (Platform.OS === 'android') return '안드로이드 앱';
+  if (Platform.OS === 'ios') return 'iOS 앱';
+  return IS_CLIENT_BUILD ? '웹 클라이언트' : '웹';
+}
+
+/** 릴리즈 파일 중 이 기기에 맞는 것의 이름 모양. 릴리즈 스크립트가 붙이는 이름이다(scripts/publish-release.mjs). */
+function assetPattern(): RegExp | null {
+  if (desktopBridge()) return /-windows-setup\.exe$/i;
+  if (Platform.OS === 'android') return /-android\.apk$/i;
+  return null;
 }
 
 interface UpdateCache {
@@ -70,10 +99,17 @@ async function readCache(): Promise<UpdateCache> {
     const raw = await AsyncStorage.getItem(CACHE_KEY);
     const parsed = raw ? (JSON.parse(raw) as Partial<UpdateCache>) : {};
     const latest = parsed.latest;
+    const asset = latest?.asset;
     return {
       checkedAt: typeof parsed.checkedAt === 'number' ? parsed.checkedAt : 0,
       latest:
-        latest && typeof latest.version === 'string' && typeof latest.url === 'string' ? latest : null,
+        latest && typeof latest.version === 'string' && typeof latest.url === 'string'
+          ? {
+              version: latest.version,
+              url: latest.url,
+              asset: asset && typeof asset.name === 'string' && typeof asset.url === 'string' ? asset : null,
+            }
+          : null,
       promptedVersion: typeof parsed.promptedVersion === 'string' ? parsed.promptedVersion : null,
     };
   } catch {
@@ -98,11 +134,23 @@ async function fetchLatestRelease(): Promise<LatestRelease | null> {
       signal: controller.signal,
     });
     if (!response.ok) return null;
-    const body = (await response.json()) as { tag_name?: unknown; html_url?: unknown } | null;
+    const body = (await response.json()) as {
+      tag_name?: unknown;
+      html_url?: unknown;
+      assets?: { name?: unknown; browser_download_url?: unknown }[];
+    } | null;
     if (typeof body?.tag_name !== 'string') return null;
+    const pattern = assetPattern();
+    const match = pattern && Array.isArray(body.assets)
+      ? body.assets.find((a) => typeof a?.name === 'string' && pattern.test(a.name))
+      : undefined;
     return {
       version: body.tag_name.replace(/^v/i, ''),
       url: typeof body.html_url === 'string' ? body.html_url : LATEST_RELEASE_URL,
+      asset:
+        match && typeof match.name === 'string' && typeof match.browser_download_url === 'string'
+          ? { name: match.name, url: match.browser_download_url }
+          : null,
     };
   } catch {
     return null;
@@ -111,22 +159,43 @@ async function fetchLatestRelease(): Promise<LatestRelease | null> {
   }
 }
 
+/** 지금 GitHub 에 묻는 중인 요청 — 앱을 열 때의 확인과 화면의 버전 표시가 따로 묻지 않게 함께 쓴다. */
+let inflight: Promise<LatestRelease | null> | null = null;
+
+async function refreshLatest(): Promise<LatestRelease | null> {
+  if (!inflight) {
+    inflight = (async () => {
+      const fetched = await fetchLatestRelease();
+      if (fetched) await writeCache({ ...(await readCache()), checkedAt: Date.now(), latest: fetched });
+      return fetched;
+    })().finally(() => {
+      inflight = null;
+    });
+  }
+  return inflight;
+}
+
 /**
- * 최신 릴리즈가 이 앱보다 새 버전이면 그 릴리즈를, 아니면 null.
- * 최근에 확인했으면 GitHub 에 다시 묻지 않고 기억해 둔 결과를 쓴다. 닿지 못하면 조용히 null.
+ * 최신 릴리즈와 견준다. 최근(CHECK_INTERVAL_MS 안)에 확인했으면 GitHub 에 다시 묻지 않고 기억해 둔 결과를 쓴다.
+ * force 면 늘 묻는다 — 사용자가 "업데이트 확인"을 눌렀을 때. 그때 닿지 못하면 unknown(오래된 결과로 최신이라고 하지 않는다).
  */
-export async function checkForUpdate(): Promise<LatestRelease | null> {
-  if (!updateChecksEnabled()) return null;
+export async function checkUpdate({ force = false }: { force?: boolean } = {}): Promise<UpdateStatus> {
+  if (!updateChecksEnabled()) return { status: 'unknown' };
   const cache = await readCache();
   let latest = cache.latest;
-  if (Date.now() - cache.checkedAt >= CHECK_INTERVAL_MS) {
-    const fetched = await fetchLatestRelease();
-    if (fetched) {
-      latest = fetched;
-      await writeCache({ ...cache, checkedAt: Date.now(), latest });
-    }
+  if (force || Date.now() - cache.checkedAt >= CHECK_INTERVAL_MS) {
+    const fetched = await refreshLatest();
+    if (fetched) latest = fetched;
+    else if (force) return { status: 'unknown' };
   }
-  return latest && compareVersions(latest.version, APP_VERSION) > 0 ? latest : null;
+  if (!latest) return { status: 'unknown' };
+  return compareVersions(latest.version, APP_VERSION) > 0 ? { status: 'update', latest } : { status: 'current', latest };
+}
+
+/** 최신 릴리즈가 이 앱보다 새 버전이면 그 릴리즈를, 아니면 null. 닿지 못하면 조용히 null. */
+export async function checkForUpdate(): Promise<LatestRelease | null> {
+  const result = await checkUpdate();
+  return result.status === 'update' ? result.latest : null;
 }
 
 /** 릴리즈 페이지를 연다 (브라우저). */
@@ -155,7 +224,9 @@ export async function suggestUpdateOnce(): Promise<void> {
   await writeCache({ ...cache, promptedVersion: latest.version });
   const ok = await confirmAction({
     title: '새 버전이 있습니다',
-    message: `ListUp v${latest.version} 이 나왔습니다 (지금 v${APP_VERSION}).\n릴리즈 페이지에서 받아 설치할까요?`,
+    message:
+      `ListUp v${latest.version} 이 나왔습니다 (지금 v${APP_VERSION}).\n` +
+      (latest.asset ? `릴리즈 페이지에서 ${latest.asset.name} 을(를) 받아 설치하세요.` : '릴리즈 페이지에서 받아 설치할까요?'),
     confirmLabel: '받으러 가기',
   });
   if (ok) await openReleasePage(latest.url);

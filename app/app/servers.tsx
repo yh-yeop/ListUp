@@ -16,6 +16,7 @@ import {
   Subtitle,
   Title,
 } from '../src/components/ui';
+import { AppVersion } from '../src/components/AppVersion';
 import { HostCard } from '../src/components/HostCard';
 import { credentialsSupported, loadLogin } from '../src/lib/credentials';
 import { useHostStatus } from '../src/lib/desktop';
@@ -104,6 +105,9 @@ export default function ServersScreen() {
         onPress={() => router.push('/server')}
         disabled={switchingId !== null}
       />
+
+      {/* 로그인 전에도 이 앱의 버전과 업데이트를 볼 수 있게 — 설치형 클라이언트의 첫 화면이다. */}
+      <AppVersion />
     </Screen>
   );
 }

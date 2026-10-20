@@ -100,6 +100,40 @@ try {
   t.must(page.url().startsWith('app://listup/'), '창은 app://listup 에 뜬다');
   t.must((await page.getByText('꺼짐', { exact: true }).count()) > 0, '처음에는 꺼짐');
 
+  // 1-1. 버전과 업데이트 — 서버 목록에 PC 앱 버전, 새 릴리즈의 파일 중 PC 설치 파일을 골라 알려 준다.
+  //      GitHub 는 가짜로. 이미 제안한 버전으로 적어 두어 제안 대화상자(진짜 브라우저를 연다)는 뜨지 않게.
+  const appVersion = JSON.parse(fs.readFileSync(path.join(ROOT, 'app', 'app.json'), 'utf8')).expo.version;
+  await page.getByText(`ListUp PC 앱 v${appVersion}`, { exact: false }).waitFor();
+  t.must(true, `서버 목록에 PC 앱 버전 (v${appVersion})`);
+  await app.context().route('https://api.github.com/**', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      headers: { 'Access-Control-Allow-Origin': '*' },
+      body: JSON.stringify({
+        tag_name: 'v99.0.0',
+        html_url: 'https://github.com/yh-yeop/ListUp/releases/tag/v99.0.0',
+        assets: ['listup-99.0.0.zip', 'listup-99.0.0-android.apk', 'listup-99.0.0-windows-setup.exe'].map((name) => ({
+          name,
+          browser_download_url: `https://github.com/yh-yeop/ListUp/releases/download/v99.0.0/${name}`,
+        })),
+      }),
+    }),
+  );
+  await page.evaluate(() =>
+    localStorage.setItem('listup.update', JSON.stringify({ checkedAt: 0, latest: null, promptedVersion: '99.0.0' })),
+  );
+  await page.reload();
+  await page.getByRole('button', { name: '새 버전 v99.0.0 받기' }).waitFor();
+  t.must(
+    (await page.getByText('받을 파일: listup-99.0.0-windows-setup.exe').count()) === 1,
+    '새 릴리즈 → PC 설치 파일을 골라 알려 준다',
+  );
+  await app.context().unroute('https://api.github.com/**');
+  await page.evaluate(() => localStorage.removeItem('listup.update'));
+  await page.reload();
+  await s.listIntro().waitFor();
+
   // 2. 켜기 → 실행 중, 서버와 브라우저용 웹이 이 포트에서
   await page.getByRole('button', { name: '서버 켜기' }).click();
   await page.getByRole('button', { name: '들어가기' }).waitFor({ timeout: 60_000 });
