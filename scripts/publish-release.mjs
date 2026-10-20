@@ -18,6 +18,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { PIN_FILE, missingKeyMessage, readPin, readSigning } from './android-signing.mjs';
 import { spawnNpm } from './run-npm.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -71,6 +72,21 @@ if (git('tag', '--list', TAG)) fail(`태그 ${TAG} 가 이미 있습니다. 버�
 if (!fs.existsSync(NOTES)) fail(`릴리즈 노트가 없습니다: ${path.relative(ROOT, NOTES)}`);
 // PC 설치 파일은 Windows 에서만 만든다(electron-builder NSIS).
 if (!isWindows) fail('PC 설치 파일(Windows)을 만들 수 없는 OS 입니다. Windows 에서 올려 주세요.');
+
+// 안드로이드 서명 키 — 오래 걸리는 빌드 전에 본다. 지문이 맞는지는 build:android 가 다시 확인한다.
+// 릴리즈는 늘 고정된 정식 키로만 낸다(새 키로 낸 APK 는 폰의 기존 앱 위에 덮어 설치되지 않는다).
+try {
+  const pin = readPin();
+  if (!pin) {
+    fail(
+      `정식 서명 키의 지문이 고정돼 있지 않습니다 (${path.relative(ROOT, PIN_FILE)}).\n` +
+        '지난 릴리즈의 APK 로 고정하세요: npm run build:android -- --pin-from <APK>',
+    );
+  }
+  if (!readSigning()) fail(missingKeyMessage(pin));
+} catch (err) {
+  fail(err.message);
+}
 
 const versions = {
   'app/package.json': readJson('app/package.json').version,
