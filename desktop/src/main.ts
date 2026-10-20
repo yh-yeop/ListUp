@@ -303,9 +303,23 @@ void app.whenReady().then(() => {
     tray?.setContextMenu(trayMenu(status));
     for (const window of BrowserWindow.getAllWindows()) window.webContents.send(IPC.hostChanged, status);
   });
+  let notifiedVersion: string | null = null;
   updater.onChange((state) => {
     tray?.setContextMenu(trayMenu(host.status(), state));
     for (const window of BrowserWindow.getAllWindows()) window.webContents.send(IPC.updatesChanged, state);
+    // 서버 PC 는 창을 닫고 트레이에 둔 채 쓰는 일이 많아 창 안의 제안을 못 본다 — 다 받으면 Windows 알림도 한 번.
+    if (state.status === 'ready' && state.version && state.version !== notifiedVersion && Notification.isSupported()) {
+      notifiedVersion = state.version;
+      const notice = new Notification({
+        title: `ListUp v${state.version} 을 받아 두었습니다`,
+        body: host.running
+          ? '눌러서 다시 시작해 설치하세요. 켜 둔 서버는 설치 뒤 다시 켜집니다. 미뤄도 끝낼 때 설치됩니다.'
+          : '눌러서 다시 시작해 설치하세요. 미뤄도 끝낼 때 설치됩니다.',
+        icon: paths.icon,
+      });
+      notice.on('click', () => showWindow());
+      notice.show();
+    }
   });
   updater.start();
 

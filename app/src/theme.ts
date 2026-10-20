@@ -30,7 +30,9 @@ const light: Palette = {
   // textMuted/textFaint 는 bg·surface·surfaceAlt 위에서 WCAG AA(4.5:1) 를 넘긴다.
   textMuted: '#535b65',
   textFaint: '#686e76',
-  accent: '#2f6df6',
+  // accentSoft·bg·surface·surfaceAlt 위의 글자, 흰 글자를 올린 버튼 모두 WCAG AA(4.5:1) 이상 — 최저 4.89(accentSoft).
+  // 전에는 #2f6df6 이라 활성 탭·필터 칩 글자가 3.95 였다.
+  accent: '#2660d8',
   accentText: '#ffffff',
   accentSoft: '#e8f0ff',
   danger: '#d4363c',
