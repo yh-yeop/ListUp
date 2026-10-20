@@ -1,0 +1,6 @@
+{
+  "note": "안드로이드 APK 정식 서명 인증서의 SHA-256 지문. 공개해도 되는 값이다. scripts/android-signing.mjs 참고.",
+  "sha256": "3E:AB:5E:7E:B8:23:CF:60:64:6C:42:18:9F:B7:13:BB:CE:0B:10:DB:C0:09:DD:F1:8E:75:65:EA:A5:44:72:C1",
+  "from": "v1.5.0 에서 새로 만든 키",
+  "pinnedAt": "2026-10-20"
+}

@@ -14,6 +14,7 @@
  * 없거나 다르면 새로 만들지 않고 멈춘다(scripts/android-signing.mjs).
  *
  *   npm run build:android -- --new-key          지문이 고정되지 않은 처음 한 번(포크 등)만 — 키를 만들고 지문을 고정
+ *                                               (--check-key 를 함께 주면 빌드하지 않고 키만 만든다)
  *   npm run build:android -- --pin-from <apk>   이미 내보낸 APK 의 서명으로 지문을 고정만 하고 끝낸다
  *   npm run build:android -- --check-key        빌드하지 않고 키가 정식 키와 같은지만 본다(옮겨 온 키 확인)
  *
@@ -186,6 +187,7 @@ function createSigning() {
 
 let pin;
 let signing;
+let createdKey = false;
 try {
   pin = readPin();
   signing = readSigning();
@@ -205,6 +207,7 @@ if (!signing) {
     );
   }
   signing = createSigning();
+  createdKey = true;
 }
 
 // 쓰려는 키가 고정된 정식 키인지. 고정된 지문이 없으면(처음) 이 키를 정식 키로 고정한다.
@@ -219,6 +222,13 @@ if (pin && pin.sha256 !== keyFingerprint) {
     `서명 키가 정식 키와 다릅니다.\n  정식: ${formatFingerprint(pin.sha256)} (${pin.from})\n  지금: ${formatFingerprint(keyFingerprint)}\n` +
       `  ${SIGNING_FILE}\n\n이 키로 빌드하면 폰의 기존 앱 위에 덮어 설치되지 않습니다. 지난 릴리즈의 키를 옮겨 오세요.`,
   );
+}
+// 방금 만든 키는 바로 정식 키로 고정한다(--check-key 와 함께 주면 빌드 없이 키만 만든다).
+if (!pin && createdKey) {
+  writePin({ sha256: keyFingerprint, from: `v${VERSION} 에서 새로 만든 키` });
+  pin = readPin();
+  say(`새 키를 정식 서명 키로 고정했습니다: ${formatFingerprint(keyFingerprint)}`);
+  say(`  ${relative(PIN_FILE)} 를 커밋하세요.\n`);
 }
 if (argv.includes('--check-key')) {
   // 키만 확인하고 끝낸다 — 옮겨 온 키가 맞는지 볼 때.
