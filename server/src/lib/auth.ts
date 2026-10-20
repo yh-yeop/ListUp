@@ -1,4 +1,5 @@
 import { createHmac, randomBytes, scrypt, timingSafeEqual, type ScryptOptions } from 'node:crypto';
+import { MAX_LOGIN_ID_LENGTH, MIN_LOGIN_ID_LENGTH } from '@listup/shared';
 
 const SCRYPT_KEYLEN = 64;
 const SCRYPT_PARAMS = { N: 16384, r: 8, p: 1 } as const;
@@ -111,13 +112,35 @@ export function verifyToken(
 // 입력 검증
 // ---------------------------------------------------------------------------
 
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-export function normalizeEmail(input: unknown): string | null {
+/**
+ * 로그인 아이디. 1.5 까지는 "이메일"이라고 불렀지만 메일을 보낸 적이 없다 — 서버마다 따로인 계정의
+ * 아이디일 뿐이다. DB 의 칸(users.email)과 API 의 필드 이름(`email`)은 1.5 까지의 앱이 그 이름으로
+ * 보내므로 그대로 두고, 뜻만 "로그인 아이디"로 바꿨다.
+ *
+ * 정리는 앞뒤 공백을 떼고, 유니코드 NFC(맥·안드로이드가 분해형으로 주는 한글), 소문자. 예전 이메일
+ * 계정은 이 정리를 거쳐도 같은 값이라 그대로 로그인된다.
+ */
+export function normalizeLoginId(input: unknown): string | null {
   if (typeof input !== 'string') return null;
-  const email = input.trim().toLowerCase();
-  if (email.length < 5 || email.length > 254 || !EMAIL_RE.test(email)) return null;
-  return email;
+  const id = input.trim().normalize('NFC').toLowerCase();
+  // 로그인·재설정에서는 예전에 받아 준 모양(이메일 254자까지)도 찾아야 하므로 넉넉하게.
+  if (id.length < 1 || id.length > 254 || /[\s\p{Cc}]/u.test(id)) return null;
+  return id;
+}
+
+/** 예전 가입 규칙 — 이메일 모양. 이렇게 만든 계정도 계속 새로 만들 수 있다. */
+const EMAIL_SHAPE_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+/** 새 아이디 — 글자·숫자로 시작하고 글자·숫자와 `. _ - @ +` 만. */
+const LOGIN_ID_RE = /^[\p{L}\p{N}][\p{L}\p{N}._@+-]*$/u;
+
+/** 가입할 때의 아이디. 규칙에 맞지 않으면 null. */
+export function validateNewLoginId(input: unknown): string | null {
+  const id = normalizeLoginId(input);
+  if (!id) return null;
+  const length = [...id].length;
+  const asId = length >= MIN_LOGIN_ID_LENGTH && length <= MAX_LOGIN_ID_LENGTH && LOGIN_ID_RE.test(id);
+  const asEmail = id.length >= 5 && EMAIL_SHAPE_RE.test(id);
+  return asId || asEmail ? id : null;
 }
 
 export const MIN_PASSWORD_LENGTH = 8;

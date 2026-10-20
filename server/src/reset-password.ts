@@ -1,19 +1,19 @@
 /**
  * 비밀번호 재설정 코드 발급 — 서버를 돌리는 사람이 쓴다.
  *
- *   npm run reset-password -- <이메일>
+ *   npm run reset-password -- <아이디>
  *
  * 나온 코드를 본인에게 전해 주면, 앱 로그인 화면의 "비밀번호를 잊었나요?" 에서 새 비밀번호를 정한다.
  * 코드는 30분 뒤 만료되고 한 번만 쓸 수 있다. 서버가 켜져 있어도 된다.
  */
 import { loadConfig } from './config.ts';
 import { openDb } from './db/index.ts';
-import { normalizeEmail } from './lib/auth.ts';
+import { normalizeLoginId } from './lib/auth.ts';
 import { issueResetCode } from './services/password-reset.ts';
 
-const email = normalizeEmail(process.argv[2] ?? '');
+const email = normalizeLoginId(process.argv[2] ?? '');
 if (!email) {
-  console.error('사용법: npm run reset-password -- <이메일>');
+  console.error('사용법: npm run reset-password -- <아이디>');
   process.exit(1);
 }
 

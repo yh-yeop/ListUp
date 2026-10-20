@@ -246,7 +246,7 @@ export default function MembersScreen() {
                         <Body style={{ fontWeight: '600' }}>{member.displayName}</Body>
                         {member.userId === user?.id ? <Caption>(나)</Caption> : null}
                       </Row>
-                      {member.email ? <Caption>{member.email}</Caption> : null}
+                      {member.email ? <Caption>아이디 {member.email}</Caption> : null}
                       <Caption>{formatRelativeTime(member.joinedAt)} 참여</Caption>
                     </View>
                     <Badge

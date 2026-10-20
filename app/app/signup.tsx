@@ -6,7 +6,7 @@ import { ApiError } from '../src/api/client';
 import { RememberLogin } from '../src/components/RememberLogin';
 import { credentialsSupported } from '../src/lib/credentials';
 import { peekPendingInvite } from '../src/lib/invite-link';
-import { formatInviteCode } from '@listup/shared';
+import { LOGIN_ID_RULE, MAX_LOGIN_ID_LENGTH, formatInviteCode } from '@listup/shared';
 import { useAuth } from '../src/state/auth';
 import { spacing } from '../src/theme';
 
@@ -60,15 +60,15 @@ export default function SignupScreen() {
               autoComplete="name"
             />
           </Field>
-          <Field label="이메일">
+          <Field label="아이디" hint={`로그인할 때 씁니다. ${LOGIN_ID_RULE}. 이 서버에서만 쓰는 아이디입니다.`}>
             <Input
               value={email}
               onChangeText={setEmail}
               autoCapitalize="none"
-              keyboardType="email-address"
-              inputMode="email"
-              autoComplete="email"
-              placeholder="you@example.com"
+              autoCorrect={false}
+              autoComplete="username"
+              placeholder="예: hong"
+              maxLength={MAX_LOGIN_ID_LENGTH}
             />
           </Field>
           <Field label="비밀번호" hint="8자 이상">

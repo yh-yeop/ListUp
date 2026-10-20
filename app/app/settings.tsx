@@ -72,7 +72,7 @@ export default function SettingsScreen() {
     if (!activeId) return;
     const ok = await confirmAction({
       title: '저장된 로그인 정보를 지울까요?',
-      message: '이 서버에 저장한 이메일과 비밀번호를 이 기기에서 지웁니다. 지금 로그인은 그대로입니다.',
+      message: '이 서버에 저장한 아이디와 비밀번호를 이 기기에서 지웁니다. 지금 로그인은 그대로입니다.',
       confirmLabel: '지우기',
       destructive: true,
     });
@@ -129,7 +129,7 @@ export default function SettingsScreen() {
     <Screen>
       <View style={{ gap: spacing.sm }}>
         <Title>내 정보</Title>
-        <Subtitle>{user?.email}</Subtitle>
+        <Subtitle>{user ? `아이디 ${user.email}` : ''}</Subtitle>
       </View>
 
       {error ? <ErrorNotice message={error} /> : null}

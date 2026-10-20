@@ -47,6 +47,7 @@ export const ROLE_DESCRIPTION: Record<Role, string> = {
 
 export interface User {
   id: string;
+  /** 로그인 아이디. 1.5 까지 "이메일"이라 부르던 칸이라 이름만 email 이다(메일은 보내지 않는다). */
   email: string;
   displayName: string;
   createdAt: number;
@@ -81,6 +82,7 @@ export interface RepoSummary extends Repo {
 export interface Member {
   userId: string;
   displayName: string;
+  /** 로그인 아이디(필드 이름만 email). 저장소 소유자에게만 보인다. */
   email: string | null;
   role: Role;
   joinedAt: number;
@@ -406,6 +408,15 @@ export const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB
 export const MAX_FILES_PER_REPO = 5000;
 export const MAX_NAME_LENGTH = 80;
 export const MAX_DESCRIPTION_LENGTH = 500;
+
+/**
+ * 로그인 아이디 — 서버마다 따로인 계정의 아이디. 글자·숫자로 시작하고 글자·숫자와 `. _ - @ +` 만.
+ * 1.5 까지는 이메일 모양만 받았고(메일은 보낸 적 없다) 그렇게 만든 계정도 그대로 쓴다.
+ * API·DB 의 필드 이름은 호환을 위해 `email` 그대로다.
+ */
+export const MIN_LOGIN_ID_LENGTH = 3;
+export const MAX_LOGIN_ID_LENGTH = 64;
+export const LOGIN_ID_RULE = `${MIN_LOGIN_ID_LENGTH}~${MAX_LOGIN_ID_LENGTH}자, 글자·숫자와 . _ - @ + (글자나 숫자로 시작)`;
 
 // ---------------------------------------------------------------------------
 // API 에러

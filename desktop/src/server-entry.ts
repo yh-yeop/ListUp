@@ -10,7 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { loadConfig } from '../../server/src/config.ts';
 import { openDb, type Db } from '../../server/src/db/index.ts';
-import { normalizeEmail } from '../../server/src/lib/auth.ts';
+import { normalizeLoginId } from '../../server/src/lib/auth.ts';
 import { issueResetCode } from '../../server/src/services/password-reset.ts';
 import { startServer, type RunningServer } from '../../server/src/start.ts';
 import type { ServerRequest, ServerReply } from './protocol.ts';
@@ -63,8 +63,8 @@ async function backup(dir: string): Promise<string> {
 async function handle(request: ServerRequest): Promise<unknown> {
   switch (request.type) {
     case 'reset-code': {
-      const email = normalizeEmail(request.email);
-      if (!email) throw new Error('이메일 형식이 올바르지 않습니다.');
+      const email = normalizeLoginId(request.email);
+      if (!email) throw new Error('아이디가 올바르지 않습니다.');
       return issueResetCode(db(), email);
     }
     case 'backup':

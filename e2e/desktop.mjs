@@ -231,7 +231,7 @@ try {
   t.must((await page.getByRole('radio', { name: '공개하지 않음' }).getAttribute('aria-checked')) === 'true', '공개 방식은 처음에 "공개하지 않음"');
 
   // 6. 재설정 코드 발급
-  const resetInput = page.getByPlaceholder('그사람@example.com');
+  const resetInput = page.getByPlaceholder('그 사람의 아이디');
   await resetInput.fill('nobody@a.test');
   await page.getByRole('button', { name: '재설정 코드 발급' }).click();
   await page.getByText('계정이 없습니다', { exact: false }).waitFor();

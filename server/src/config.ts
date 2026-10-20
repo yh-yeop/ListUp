@@ -33,7 +33,7 @@ export interface Config {
   trustProxy: boolean | string[];
   /** 로그 레벨 (pino). */
   logLevel: string;
-  /** 이 횟수만큼 로그인에 실패하면 잠시 막는다 (IP 기준·이메일 기준을 따로 센다). */
+  /** 이 횟수만큼 로그인에 실패하면 잠시 막는다 (IP 기준·아이디 기준을 따로 센다). */
   loginFailureLimit: number;
   /** 마지막 실패로부터 이 시간이 지나면 실패 횟수를 잊는다(ms). */
   loginFailureWindowMs: number;

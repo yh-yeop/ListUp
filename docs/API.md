@@ -64,18 +64,28 @@ Authorization: Bearer <token>
 
 | 메서드 | 경로 | 설명 |
 | --- | --- | --- |
-| POST | `/auth/signup` | `{email, password, displayName}` → `{token, user}` (201) |
+| POST | `/auth/signup` | `{email, password, displayName}` → `{token, user}` (201). `email` 은 **로그인 아이디**(아래) |
 | POST | `/auth/login` | `{email, password}` → `{token, user}` |
 | GET | `/auth/me` | 현재 사용자 |
 | PATCH | `/auth/me` | `{displayName}` |
 | POST | `/auth/password` | `{currentPassword, newPassword}` |
 | POST | `/auth/reset` | `{email, code, newPassword}` → `{token, user}` — 로그인 없이 |
 
-비밀번호는 8자 이상. 로그인 실패 메시지는 이메일 존재 여부와 무관하게 동일하고, 응답 시간도
+### 로그인 아이디 (필드 이름은 `email`)
+
+계정은 서버마다 따로이고 메일을 보낸 적이 없어, `email` 은 1.6.0 부터 **로그인 아이디**로 다룹니다. 필드
+이름은 1.5 까지의 앱이 그 이름으로 보내므로 그대로이고, 새 앱은 같은 값을 `username` 으로 보내도 됩니다
+(둘 다 있으면 `username`). 응답의 `user.email` 도 아이디입니다.
+
+- 가입: 3~64자, 글자·숫자로 시작하고 글자·숫자와 `. _ - @ +` 만. 예전처럼 이메일 모양(254자까지)도 받습니다.
+- 정리: 앞뒤 공백 제거, 유니코드 NFC, 소문자 — `Hong` 과 `hong` 은 같은 아이디입니다. 이메일로 가입한 예전
+  계정은 정리해도 같은 값이라 그대로 로그인됩니다.
+
+비밀번호는 8자 이상. 로그인 실패 메시지는 아이디 존재 여부와 무관하게 동일하고, 응답 시간도
 같게 맞춥니다. `/auth/password` 에서 현재 비밀번호가 틀리면 `401` 이 아니라 **`400`** 입니다 —
 `401` 은 "토큰이 무효"라는 뜻이라 앱이 로그아웃해 버리기 때문입니다.
 
-- **로그인 실패는 횟수를 셉니다.** 같은 이메일 기준과 같은 IP 기준을 따로 세고, 한도를 넘으면
+- **로그인 실패는 횟수를 셉니다.** 같은 아이디 기준과 같은 IP 기준을 따로 세고, 한도를 넘으면
   `429` 로 잠시 막습니다(막힌 동안은 올바른 비밀번호도 막힙니다). 성공하면 기록이 지워집니다.
 - **`/auth/password` 는 성공 시 새 `token` 을 함께 줍니다.** 비밀번호를 바꾸면 그 사용자의
   기존 토큰이 **모두** 무효가 되므로(다른 기기 로그아웃), 요청을 보낸 기기는 이 새 토큰으로
@@ -87,7 +97,7 @@ Authorization: Bearer <token>
 이메일을 보낼 수단이 없는 자가호스팅 도구라서입니다.
 
 ```bash
-npm run reset-password -- me@example.com     # 서버가 켜져 있어도 됩니다
+npm run reset-password -- hong     # 아이디. 서버가 켜져 있어도 됩니다
 ```
 
 - 코드는 초대 코드와 같은 모양(`ABCDE-12345`)이고 **30분 동안 한 번** 씁니다. 새로 발급하면 그 사람의
@@ -107,7 +117,7 @@ npm run reset-password -- me@example.com     # 서버가 켜져 있어도 됩니
 | GET | `/repos/:repoId` | viewer | 요약(파일 수, 용량, 멤버 수, 열린 제안 수, 내 역할) |
 | PATCH | `/repos/:repoId` | owner | `{name?, description?}` |
 | DELETE | `/repos/:repoId` | owner | 저장소 삭제 |
-| GET | `/repos/:repoId/members` | viewer | 멤버 목록 (이메일은 owner 에게만) |
+| GET | `/repos/:repoId/members` | viewer | 멤버 목록 (아이디는 owner 에게만 — 필드 이름 `email`) |
 | PATCH | `/repos/:repoId/members/:userId` | owner | `{role}` — `viewer` 또는 `editor` |
 | DELETE | `/repos/:repoId/members/:userId` | 본인 또는 owner | 내보내기/나가기. owner 는 나갈 수 없음 |
 | POST | `/repos/:repoId/transfer` | owner | `{userId}` — 넘긴 사람은 editor 로 남음 |

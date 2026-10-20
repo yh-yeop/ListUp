@@ -15,7 +15,7 @@ import { desktopBridge as desktopApp } from './desktop';
 
 export interface SavedLogin {
   email: string;
-  /** 자동 로그인이 비밀번호 오류로 실패하면 지우고 이메일만 남긴다. */
+  /** 자동 로그인이 비밀번호 오류로 실패하면 지우고 아이디만 남긴다. */
   password: string | null;
 }
 

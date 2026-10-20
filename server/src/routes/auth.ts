@@ -1,13 +1,14 @@
 import { randomBytes } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import type { User } from '@listup/shared';
-import { MAX_NAME_LENGTH } from '@listup/shared';
+import { LOGIN_ID_RULE, MAX_NAME_LENGTH } from '@listup/shared';
 import type { AppContext } from '../context.ts';
 import {
   MIN_PASSWORD_LENGTH,
   hashPassword,
   issueToken,
-  normalizeEmail,
+  normalizeLoginId,
+  validateNewLoginId,
   validatePassword,
   verifyPassword,
 } from '../lib/auth.ts';
@@ -64,8 +65,9 @@ export async function registerAuthRoutes(app: FastifyInstance, ctx: AppContext):
 
   app.post('/auth/signup', async (req, reply) => {
     const input = body(req);
-    const email = normalizeEmail(input.email);
-    if (!email) throw badRequest('이메일 형식이 올바르지 않습니다.');
+    // 필드 이름은 호환을 위해 email 이지만 로그인 아이디다(lib/auth.ts). 새 앱은 username 으로도 보낼 수 있다.
+    const email = validateNewLoginId(input.username ?? input.email);
+    if (!email) throw badRequest(`아이디는 ${LOGIN_ID_RULE} 으로 정해 주세요.`);
     const password = validatePassword(input.password);
     if (!password) {
       throw badRequest(`비밀번호는 ${MIN_PASSWORD_LENGTH}자 이상이어야 합니다.`);
@@ -78,7 +80,7 @@ export async function registerAuthRoutes(app: FastifyInstance, ctx: AppContext):
     const existing = db
       .prepare<[string], { id: string }>(`SELECT id FROM users WHERE email = ?`)
       .get(email);
-    if (existing) throw conflict('이미 가입된 이메일입니다.');
+    if (existing) throw conflict('이미 쓰고 있는 아이디입니다.');
 
     const row: UserRow = {
       id: newId('usr'),
@@ -101,12 +103,12 @@ export async function registerAuthRoutes(app: FastifyInstance, ctx: AppContext):
 
   app.post('/auth/login', async (req) => {
     const input = body(req);
-    const email = normalizeEmail(input.email);
+    const email = normalizeLoginId(input.username ?? input.email);
     const password = typeof input.password === 'string' ? input.password : '';
-    // 이메일 존재 여부를 구분해 알려주지 않는다.
-    const fail = () => unauthorized('이메일 또는 비밀번호가 올바르지 않습니다.');
+    // 아이디 존재 여부를 구분해 알려주지 않는다.
+    const fail = () => unauthorized('아이디 또는 비밀번호가 올바르지 않습니다.');
 
-    // 이메일이 형식조차 아니면 IP 만 센다 — 없는 이메일로 카운터를 늘리게 두지 않는다.
+    // 아이디가 모양조차 아니면 IP 만 센다 — 엉터리 아이디로 카운터를 늘리게 두지 않는다.
     const keys = [`ip:${clientIp(req)}`, ...(email ? [`email:${email}`] : [])];
     assertLoginAllowed(keys);
     if (!email || !password) {
@@ -135,7 +137,7 @@ export async function registerAuthRoutes(app: FastifyInstance, ctx: AppContext):
    */
   app.post('/auth/reset', async (req) => {
     const input = body(req);
-    const email = normalizeEmail(input.email);
+    const email = normalizeLoginId(input.username ?? input.email);
     const code = typeof input.code === 'string' ? input.code : '';
     const fail = () => badRequest('재설정 코드가 올바르지 않거나 만료됐습니다. 서버 운영자에게 다시 받아 주세요.');
 

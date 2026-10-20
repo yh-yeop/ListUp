@@ -111,6 +111,63 @@ describe('회원가입 / 로그인 API', () => {
     assert.equal(parsed.user.displayName, '새 사용자');
   });
 
+  it('이메일이 아닌 아이디로 가입하고, 대소문자·앞뒤 공백·한글 조합형과 상관없이 로그인한다', async () => {
+    const signup = (payload: Record<string, string>) =>
+      h.app.inject({ method: 'POST', url: '/api/auth/signup', payload: { password: 'password1234', displayName: '아이디', ...payload } });
+    const login = (payload: Record<string, string>) =>
+      h.app.inject({ method: 'POST', url: '/api/auth/login', payload: { password: 'password1234', ...payload } });
+
+    const plain = await signup({ email: 'Hong_99' });
+    assert.equal(plain.statusCode, 201, plain.body);
+    assert.equal(plain.json().user.email, 'hong_99');
+    assert.equal((await login({ email: '  HONG_99 ' })).statusCode, 200);
+
+    // 맥·안드로이드가 분해형(NFD)으로 보내도 같은 아이디.
+    const korean = await signup({ email: '홍길동' });
+    assert.equal(korean.statusCode, 201, korean.body);
+    assert.equal((await login({ email: '홍길동'.normalize('NFD') })).statusCode, 200);
+
+    // 새 앱은 username 으로 보낼 수 있다(옛 앱은 email).
+    assert.equal((await signup({ username: 'via-username' })).statusCode, 201);
+    assert.equal((await login({ username: 'via-username' })).statusCode, 200);
+    assert.equal((await login({ email: 'via-username' })).statusCode, 200);
+  });
+
+  it('아이디 규칙에 맞지 않으면 가입을 거절한다', async () => {
+    for (const email of ['ab', 'a b', '-abc', '.abc', 'a/b', 'a'.repeat(65), 'tab\there']) {
+      const res = await h.app.inject({
+        method: 'POST',
+        url: '/api/auth/signup',
+        payload: { email, password: 'password1234', displayName: '거절' },
+      });
+      assert.equal(res.statusCode, 400, email);
+      assert.match(res.json().error.message, /아이디는/);
+    }
+  });
+
+  it('예전처럼 이메일 모양으로 가입한 계정도 그대로 로그인된다', async () => {
+    // 1.5 까지의 가입 규칙으로 만든 계정 — 64자를 넘는 긴 이메일도.
+    const long = `${'x'.repeat(70)}@example.com`;
+    for (const email of ['old.user+tag@example.com', long]) {
+      const signup = await h.app.inject({
+        method: 'POST',
+        url: '/api/auth/signup',
+        payload: { email, password: 'password1234', displayName: '예전' },
+      });
+      assert.equal(signup.statusCode, 201, email);
+      const login = await h.app.inject({ method: 'POST', url: '/api/auth/login', payload: { email, password: 'password1234' } });
+      assert.equal(login.statusCode, 200, email);
+    }
+  });
+
+  it('같은 아이디로 두 번 가입할 수 없다 (대소문자만 다른 것도)', async () => {
+    const first = { email: 'Same-ID', password: 'password1234', displayName: '하나' };
+    assert.equal((await h.app.inject({ method: 'POST', url: '/api/auth/signup', payload: first })).statusCode, 201);
+    const second = await h.app.inject({ method: 'POST', url: '/api/auth/signup', payload: { ...first, email: 'same-id' } });
+    assert.equal(second.statusCode, 409);
+    assert.equal(second.json().error.message, '이미 쓰고 있는 아이디입니다.');
+  });
+
   it('같은 이메일로 두 번 가입할 수 없다', async () => {
     const payload = { email: 'dup@example.com', password: 'password1234', displayName: '중복' };
     assert.equal((await h.app.inject({ method: 'POST', url: '/api/auth/signup', payload })).statusCode, 201);

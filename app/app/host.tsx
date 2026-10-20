@@ -313,13 +313,13 @@ function ResetCodeCard({ running }: { running: boolean }) {
         정합니다. 코드는 30분 동안 한 번 쓸 수 있고, 새 비밀번호를 정하면 그 계정의 다른 기기 로그인은 끊깁니다.
       </Caption>
       {error ? <ErrorNotice message={error} /> : null}
-      <Field label="이메일">
+      <Field label="아이디" hint="그 사람이 로그인할 때 쓰는 아이디(예전에 이메일로 가입했다면 그 이메일)">
         <Input
           value={email}
           onChangeText={setEmail}
           autoCapitalize="none"
-          keyboardType="email-address"
-          placeholder="그사람@example.com"
+          autoCorrect={false}
+          placeholder="그 사람의 아이디"
           onSubmitEditing={() => void issue()}
         />
       </Field>

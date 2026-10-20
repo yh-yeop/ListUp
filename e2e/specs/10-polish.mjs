@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { api, screen } from '../lib.mjs';
 
-export const title = '사용 흐름 — 서버 이름·올리기 멈추기·토스트';
+export const title = '사용 흐름 — 서버 이름·올리기 멈추기·토스트·아이디';
 
 export default async function run(t, env) {
   const { A, C, NAMED } = env;
@@ -110,5 +110,37 @@ export default async function run(t, env) {
     await ctx.close();
   } finally {
     fs.rmSync(work, { recursive: true, force: true });
+  }
+
+  // 아이디 — 이메일이 아닌 아이디로 가입하고, 대소문자가 달라도 로그인된다.
+  {
+    const ctx = await env.newContext();
+    const page = await ctx.newPage();
+    page.on('dialog', (d) => void d.accept());
+    const s = screen(page);
+    const id = `Hong-${env.run}`;
+    await page.goto(A + '/');
+    await page.getByText('회원가입').click();
+    await page.getByText('아이디', { exact: true }).filter({ visible: true }).waitFor();
+    t.must(
+      (await page.getByText('이메일', { exact: true }).filter({ visible: true }).count()) === 0,
+      '가입 화면에 "이메일" 칸이 없고 "아이디"',
+    );
+    await s.inputs().nth(0).fill('홍');
+    await s.inputs().nth(1).fill(id);
+    await s.inputs().nth(2).fill('password-1');
+    await page.getByRole('button', { name: '가입하고 시작하기' }).click();
+    await s.onRepos('홍').waitFor();
+    t.ok('이메일 모양이 아닌 아이디로 가입');
+    await s.openSettings();
+    t.must(await page.getByText(`아이디 ${id.toLowerCase()}`).isVisible(), '내 정보에 아이디(소문자로 정리)');
+    await page.getByRole('button', { name: '로그아웃' }).click();
+    await page.getByRole('button', { name: '로그인' }).waitFor();
+    await s.inputs().nth(0).fill(id.toUpperCase());
+    await s.inputs().nth(1).fill('password-1');
+    await page.getByRole('button', { name: '로그인' }).click();
+    await s.onRepos('홍').waitFor();
+    t.ok('대문자로 넣어도 같은 아이디로 로그인');
+    await ctx.close();
   }
 }

@@ -96,15 +96,14 @@ export default function LoginScreen() {
                 로그인하면 초대 코드 {formatInviteCode(peekPendingInvite()!)} 로 참여를 이어 갑니다.
               </Body>
             ) : null}
-            <Field label="이메일">
+            <Field label="아이디">
               <Input
                 value={email}
                 onChangeText={setEmail}
                 autoCapitalize="none"
-                autoComplete="email"
-                keyboardType="email-address"
-                placeholder="you@example.com"
-                inputMode="email"
+                autoCorrect={false}
+                autoComplete="username"
+                placeholder="아이디 (예전에 이메일로 가입했다면 그 이메일)"
                 onSubmitEditing={submit}
               />
             </Field>

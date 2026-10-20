@@ -27,7 +27,7 @@ export default function ResetPasswordScreen() {
     if (busy) return;
     setError(null);
     if (!email.trim() || !code.trim()) {
-      setError('이메일과 재설정 코드를 넣어 주세요.');
+      setError('아이디와 재설정 코드를 넣어 주세요.');
       return;
     }
     if (password.length < 8) {
@@ -57,15 +57,14 @@ export default function ResetPasswordScreen() {
         </View>
 
         <Card style={{ gap: spacing.lg }}>
-          <Field label="이메일">
+          <Field label="아이디">
             <Input
               value={email}
               onChangeText={setEmail}
               autoCapitalize="none"
-              keyboardType="email-address"
-              inputMode="email"
-              autoComplete="email"
-              placeholder="you@example.com"
+              autoCorrect={false}
+              autoComplete="username"
+              placeholder="아이디"
             />
           </Field>
           <Field label="재설정 코드">
@@ -95,7 +94,7 @@ export default function ResetPasswordScreen() {
         </Card>
 
         <Body muted style={{ fontSize: 12 }}>
-          서버를 돌리는 사람이라면: 서버 폴더에서 npm run reset-password -- 이메일
+          서버를 돌리는 사람이라면: 서버 폴더에서 npm run reset-password -- 아이디
         </Body>
       </Screen>
     </KeyboardAvoidingView>

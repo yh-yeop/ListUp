@@ -19,7 +19,7 @@ export const RESET_CODE_TTL_MS = 30 * 60 * 1000;
 
 const hashCode = (code: string) => createHash('sha256').update(code).digest();
 
-/** 코드를 발급한다. 없는 이메일이면 null. */
+/** 코드를 발급한다. 없는 아이디면 null. */
 export function issueResetCode(db: Db, email: string, now = Date.now()): { code: string; expiresAt: number } | null {
   const user = db.prepare<[string], { id: string }>(`SELECT id FROM users WHERE email = ?`).get(email);
   if (!user) return null;
