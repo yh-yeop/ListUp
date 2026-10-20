@@ -28,12 +28,21 @@ import {
   Title,
 } from '../../../src/components/ui';
 import { Breadcrumb, RepoNav } from '../../../src/components/RepoNav';
-import { TransferProgress } from '../../../src/components/TransferProgress';
+import { SearchResults } from '../../../src/components/SearchResults';
+import { TransferProgress, useTransferControl } from '../../../src/components/TransferProgress';
 import { ApiError, api, getMaxUploadBytes, type UploadSource } from '../../../src/api/client';
-import { confirmAction, notify } from '../../../src/lib/dialogs';
+import { confirmAction, notify, notifyError, notifySuccess } from '../../../src/lib/dialogs';
 import { downloadFromRepo, pickFiles, pickFolder } from '../../../src/lib/files';
+import { listRepoFolder } from '../../../src/lib/folder-compare';
 import { localFolderSupported } from '../../../src/lib/local-folder';
-import { uploadAndCommit, type UploadItem, type UploadProgress } from '../../../src/lib/transfer';
+import {
+  remoteFilesOf,
+  splitUnchanged,
+  uploadAndCommit,
+  type RemoteFiles,
+  type UploadItem,
+  type UploadProgress,
+} from '../../../src/lib/transfer';
 import { useAsync } from '../../../src/lib/useAsync';
 import { fontSize, monoFont, radius, spacing, useTheme } from '../../../src/theme';
 
@@ -66,9 +75,12 @@ export default function RepoFilesScreen() {
   const [path, setPath] = useState('');
   const [progress, setProgress] = useState<UploadProgress | null>(null);
   const uploading = progress !== null;
+  const transfer = useTransferControl('올리던 파일은 끊고, 그때까지 다 올린 파일만 저장소에 반영합니다.');
   const [busyPath, setBusyPath] = useState<string | null>(null);
   const [editing, setEditing] = useState<Editing | null>(null);
   const [renaming, setRenaming] = useState(false);
+  /** 저장소 전체 파일 이름 검색어. 있으면 폴더 목록 대신 검색 결과를 보인다. */
+  const [query, setQuery] = useState('');
 
   // 변경 이력에서 넘어온 과거 시점. 있으면 그 시점의 목록을 읽기 전용으로 보여준다.
   // 폴더 이동은 path 상태만 바꾸므로 snapshot 파라미터는 그대로 유지된다.
@@ -107,6 +119,10 @@ export default function RepoFilesScreen() {
     setPath(nextPath);
   }
 
+  function openVersions(filePath: string) {
+    router.push(`/repo/${repoId}/versions?path=${encodeURIComponent(filePath)}`);
+  }
+
   /** snapshot 파라미터를 지워 현재 시점으로 돌아간다. 보고 있던 폴더는 유지된다. */
   function backToPresent() {
     router.setParams({ snapshot: undefined, message: undefined, at: undefined });
@@ -119,7 +135,7 @@ export default function RepoFilesScreen() {
     if (tooLarge.length > 0) {
       const names = tooLarge.slice(0, MAX_FAILURES_SHOWN).map((source) => source.name).join(', ');
       const more = tooLarge.length > MAX_FAILURES_SHOWN ? ` 외 ${tooLarge.length - MAX_FAILURES_SHOWN}개` : '';
-      notify(`${names}${more} 은(는) ${formatBytes(maxBytes)} 를 넘어 올릴 수 없습니다.`);
+      notifyError(`${names}${more} 은(는) ${formatBytes(maxBytes)} 를 넘어 올릴 수 없습니다.`);
     }
     return sources.filter((source) => source.size <= maxBytes);
   }
@@ -127,13 +143,20 @@ export default function RepoFilesScreen() {
   /** 조각으로 나눠 올리고 커밋 하나로 반영한 뒤, 결과를 알려 준다. */
   async function runUpload(items: UploadItem[]) {
     setProgress({ sentBytes: 0, totalBytes: 0, doneFiles: 0, totalFiles: items.length, current: '' });
+    const signal = transfer.begin();
     try {
-      const result = await uploadAndCommit(repoId, items, setProgress);
+      const result = await uploadAndCommit(repoId, items, setProgress, signal);
       const { failures, commit } = result;
-      if (failures.length > 0) {
+      if (result.cancelled) {
+        const done = result.uploaded.length;
+        notify(
+          `멈췄습니다 — ${done}/${items.length}개 올림`,
+          done > 0 ? '다 올린 파일은 저장소에 반영했습니다. 나머지는 올리지 않았습니다.' : '저장소는 그대로입니다.',
+        );
+      } else if (failures.length > 0) {
         const shown = failures.slice(0, MAX_FAILURES_SHOWN).map((f) => `${f.item.source.name}: ${f.message}`);
         const more = failures.length - shown.length;
-        notify(
+        notifyError(
           `${result.uploaded.length}개 올렸습니다.`,
           `${failures.length}개는 올리지 못했습니다.\n${shown.join('\n')}${more > 0 ? `\n외 ${more}건 더` : ''}`,
         );
@@ -142,10 +165,11 @@ export default function RepoFilesScreen() {
           commit.added ? `추가 ${commit.added}` : '',
           commit.updated ? `수정 ${commit.updated}` : '',
         ].filter(Boolean);
-        notify(parts.length > 0 ? `${items.length}개 올렸습니다 — ${parts.join(' · ')}` : '바뀐 파일이 없습니다.');
+        if (parts.length > 0) notifySuccess(`${items.length}개 올렸습니다 — ${parts.join(' · ')}`);
+        else notify('바뀐 파일이 없습니다.', '올린 파일이 저장소에 있는 것과 같습니다.');
       }
     } catch (err) {
-      notify('반영하지 못했습니다.', err instanceof ApiError ? err.message : undefined);
+      notifyError('반영하지 못했습니다.', err instanceof ApiError ? err.message : undefined);
     } finally {
       setProgress(null);
       state.refresh();
@@ -158,28 +182,37 @@ export default function RepoFilesScreen() {
     try {
       sources = await pickFiles(true);
     } catch {
-      notify('파일을 선택하지 못했습니다.');
+      notifyError('파일을 선택하지 못했습니다.');
       return;
     }
     if (sources.length === 0) return;
     const accepted = await withinLimit(sources);
     if (accepted.length === 0) return;
 
+    // 이미 올라가 있는 그대로인 파일은 건너뛴다.
+    const { changed, unchanged } = splitUnchanged(
+      accepted.map((source) => ({ source, path: path ? `${path}/${source.name}` : source.name })),
+      remoteFilesOf(tree?.files ?? []),
+    );
+    if (changed.length === 0) {
+      notify('모두 이미 올라가 있습니다.', '같은 크기의 같은 파일이 저장소에 있어 건너뛰었습니다.');
+      return;
+    }
+
     // 현재 폴더에 같은 이름이 있으면 올리기 전에 한 번에 묻는다. 취소하면 아무것도 올리지 않는다.
-    const existing = new Set((tree?.files ?? []).map((file) => file.name));
-    const overwrites = accepted.filter((source) => existing.has(source.name));
+    const existing = new Set((tree?.files ?? []).map((file) => file.name.normalize('NFC')));
+    const overwrites = changed.filter((item) => existing.has(item.source.name.normalize('NFC')));
     if (overwrites.length > 0) {
       const ok = await confirmAction({
         title: '같은 이름의 파일이 있습니다. 덮어쓸까요?',
-        message: `${overwrites.map((source) => source.name).join(', ')}\n\n이전 버전은 변경 이력에 남아 언제든 다시 볼 수 있습니다.`,
+        message: `${overwrites.map((item) => item.source.name).join(', ')}\n\n이전 버전은 변경 이력에 남아 언제든 다시 볼 수 있습니다.`,
         confirmLabel: '덮어쓰기',
       });
       if (!ok) return;
     }
 
-    await runUpload(
-      accepted.map((source) => ({ source, path: path ? `${path}/${source.name}` : source.name })),
-    );
+    if (unchanged.length > 0) notify(`${unchanged.length}개는 이미 올라가 있어 건너뜁니다.`);
+    await runUpload(changed);
   }
 
   /** 폴더를 통째로 — 폴더 구조 그대로 지금 폴더 아래에 올리고 커밋 하나로 반영한다. */
@@ -189,7 +222,7 @@ export default function RepoFilesScreen() {
     try {
       sources = await pickFolder();
     } catch {
-      notify('폴더를 선택하지 못했습니다.');
+      notifyError('폴더를 선택하지 못했습니다.');
       return;
     }
     if (sources.length === 0) return;
@@ -197,21 +230,34 @@ export default function RepoFilesScreen() {
     if (accepted.length === 0) return;
 
     const folderName = (accepted[0].relativePath ?? accepted[0].name).split('/')[0];
-    const totalBytes = accepted.reduce((sum, source) => sum + source.size, 0);
+    const items = accepted.map((source) => {
+      const inner = source.relativePath ?? source.name;
+      return { source, path: path ? `${path}/${inner}` : inner };
+    });
+    // 멈췄다가 같은 폴더를 다시 올리면, 이미 올라간 그대로인 파일은 다시 보내지 않는다.
+    let remote: RemoteFiles = new Map();
+    try {
+      remote = remoteFilesOf(await listRepoFolder(repoId, path ? `${path}/${folderName}` : folderName));
+    } catch {
+      // 못 받으면 전부 올린다 — 서버가 내용이 같은 파일은 반영하지 않는다.
+    }
+    const { changed, unchanged } = splitUnchanged(items, remote);
+    if (changed.length === 0) {
+      notify(`'${folderName}' 은(는) 모두 이미 올라가 있습니다.`, `파일 ${unchanged.length}개가 저장소에 그대로 있습니다.`);
+      return;
+    }
+
+    const totalBytes = changed.reduce((sum, item) => sum + item.source.size, 0);
     const ok = await confirmAction({
       title: `'${folderName}' 폴더를 올릴까요?`,
-      message: `파일 ${accepted.length}개 · ${formatBytes(totalBytes)}\n${
-        path ? `'${path}' 아래에` : '저장소 맨 위에'
-      } 폴더 구조 그대로 올립니다. 같은 경로의 파일은 새 내용으로 바뀌고, 이전 버전은 변경 이력에 남습니다.`,
+      message:
+        `파일 ${changed.length}개 · ${formatBytes(totalBytes)}\n` +
+        (unchanged.length > 0 ? `이미 올라가 있는 ${unchanged.length}개는 건너뜁니다.\n` : '') +
+        `${path ? `'${path}' 아래에` : '저장소 맨 위에'} 폴더 구조 그대로 올립니다. 같은 경로의 파일은 새 내용으로 바뀌고, 이전 버전은 변경 이력에 남습니다.`,
       confirmLabel: '올리기',
     });
     if (!ok) return;
-    await runUpload(
-      accepted.map((source) => {
-        const inner = source.relativePath ?? source.name;
-        return { source, path: path ? `${path}/${inner}` : inner };
-      }),
-    );
+    await runUpload(changed);
   }
 
   /** 파일 하나, 또는 폴더를 zip 으로 받는다. */
@@ -221,7 +267,7 @@ export default function RepoFilesScreen() {
       const result = await downloadFromRepo(repoId, { path: targetPath, snapshotId, archive, fileName });
       if (result.message) notify(result.message);
     } catch (err) {
-      notify('내려받지 못했습니다.', err instanceof ApiError ? err.message : undefined);
+      notifyError('내려받지 못했습니다.', err instanceof ApiError ? err.message : undefined);
     } finally {
       setBusyPath(null);
     }
@@ -231,8 +277,8 @@ export default function RepoFilesScreen() {
     const ok = await confirmAction({
       title: isFolder ? '이 폴더를 지울까요?' : '이 파일을 지울까요?',
       message: isFolder
-        ? `${targetPath} 아래의 파일이 모두 사라집니다. 변경 이력에는 남습니다.`
-        : `${targetPath} 이(가) 목록에서 사라집니다. 변경 이력에는 남습니다.`,
+        ? `${targetPath} 아래의 파일이 모두 사라집니다. 휴지통(변경 이력)에서 되돌릴 수 있습니다.`
+        : `${targetPath} 이(가) 목록에서 사라집니다. 휴지통(변경 이력)에서 되돌릴 수 있습니다.`,
       confirmLabel: '삭제',
       destructive: true,
     });
@@ -241,9 +287,10 @@ export default function RepoFilesScreen() {
     setBusyPath(targetPath);
     try {
       await api.deletePath(repoId, targetPath);
+      notify('지웠습니다.', '변경 이력 → 휴지통에서 되돌릴 수 있습니다.');
       state.refresh();
     } catch (err) {
-      notify(err instanceof ApiError ? err.message : '삭제하지 못했습니다.');
+      notifyError(err instanceof ApiError ? err.message : '삭제하지 못했습니다.');
     } finally {
       setBusyPath(null);
     }
@@ -257,7 +304,7 @@ export default function RepoFilesScreen() {
     if (!editing || renaming) return;
     const to = normalizePath(editing.value);
     if (!to) {
-      notify('경로가 올바르지 않습니다.', '빈 이름이나 . / .. 은 쓸 수 없습니다.');
+      notifyError('경로가 올바르지 않습니다.', '빈 이름이나 . / .. 은 쓸 수 없습니다.');
       return;
     }
     if (to === editing.path) {
@@ -270,7 +317,7 @@ export default function RepoFilesScreen() {
       setEditing(null);
       state.refresh();
     } catch (err) {
-      notify(err instanceof ApiError ? err.message : '이름을 바꾸지 못했습니다.');
+      notifyError(err instanceof ApiError ? err.message : '이름을 바꾸지 못했습니다.');
     } finally {
       setRenaming(false);
     }
@@ -359,7 +406,7 @@ export default function RepoFilesScreen() {
                 />
               ) : null}
               <Button
-                label="변경 제안하기"
+                label="변경 제안 만들기"
                 icon="git-pull-request-outline"
                 variant={canEdit ? 'secondary' : 'primary'}
                 onPress={() =>
@@ -378,7 +425,7 @@ export default function RepoFilesScreen() {
             </Row>
           )}
 
-          {progress ? <TransferProgress progress={progress} /> : null}
+          {progress ? <TransferProgress progress={progress} control={transfer} /> : null}
 
           {!isEditor && !snapshotId ? (
             <Caption>
@@ -387,179 +434,215 @@ export default function RepoFilesScreen() {
             </Caption>
           ) : null}
 
-          <Breadcrumb path={path} onNavigate={openFolder} />
+          <Input
+            value={query}
+            onChangeText={setQuery}
+            placeholder="저장소 전체에서 파일 찾기"
+            accessibilityLabel="파일 찾기"
+            autoCapitalize="none"
+            autoCorrect={false}
+            clearButtonMode="while-editing"
+            inputMode="search"
+          />
 
-          {state.loading ? (
-            // 폴더를 옮기는 동안 이전 폴더 목록이 새 브레드크럼 아래 남지 않게 한다.
-            <Loading label="목록 불러오는 중…" />
+          {query.trim() ? (
+            <SearchResults
+              repoId={repoId}
+              query={query}
+              snapshotId={snapshotId}
+              headId={repo.headSnapshotId}
+              busyPath={busyPath}
+              onDownload={(filePath, name) => void download(filePath, name)}
+              onOpenFolder={(folder) => {
+                setQuery('');
+                openFolder(folder);
+              }}
+              onVersions={snapshotId ? undefined : openVersions}
+            />
           ) : (
-            <Card padded={false}>
-              {tree.dirs.length === 0 && tree.files.length === 0 ? (
-                <EmptyState
-                  icon="folder-open-outline"
-                  title={
-                    path !== ''
-                      ? '빈 폴더입니다'
-                      : snapshotId
-                        ? '이 시점에는 파일이 없습니다'
-                        : '아직 파일이 없습니다'
-                  }
-                  description={
-                    snapshotId
-                      ? undefined
-                      : canEdit
-                        ? '파일을 올리면 여기에 표시됩니다.'
-                        : '편집 권한이 있는 멤버가 파일을 올리면 여기에 표시됩니다.'
-                  }
-                />
-              ) : (
-                <>
-                  {tree.dirs.map((dir, index) => (
-                    <View key={dir.path}>
-                      {index > 0 ? <Divider /> : null}
-                      {editing?.path === dir.path ? (
-                        <RenameRow
-                          icon="folder"
-                          value={editing.value}
-                          busy={renaming}
-                          hint="폴더 경로를 바꾸면 안의 파일이 모두 함께 옮겨집니다."
-                          onChange={(value) => setEditing({ ...editing, value })}
-                          onConfirm={() => void confirmRename()}
-                          onCancel={() => setEditing(null)}
-                        />
-                      ) : (
-                        <Pressable
-                          onPress={() => openFolder(dir.path)}
-                          accessibilityRole="button"
-                          accessibilityLabel={`${dir.name} 폴더 열기`}
-                          style={({ pressed }) => ({
-                            flexDirection: 'row',
-                            alignItems: 'center',
-                            gap: spacing.md,
-                            paddingVertical: spacing.md,
-                            paddingHorizontal: spacing.lg,
-                            backgroundColor: pressed ? colors.surfaceAlt : 'transparent',
-                          })}
-                        >
-                          <Ionicons name="folder" size={20} color={colors.accent} />
-                          <View style={{ flex: 1 }}>
-                            <Text
-                              numberOfLines={1}
-                              ellipsizeMode="middle"
-                              style={{ color: colors.text, fontSize: fontSize.md, fontWeight: '500' }}
-                            >
-                              {dir.name}
-                            </Text>
-                            <Caption>
-                              파일 {dir.fileCount}개 · {formatBytes(dir.totalSize)}
-                            </Caption>
-                          </View>
-                          {busyPath === dir.path ? (
-                            <ActivityIndicator size="small" color={colors.textMuted} />
-                          ) : (
-                            <IconButton
-                              icon="download-outline"
-                              label={`${dir.name} 폴더를 zip 으로 받기`}
-                              onPress={() => void download(dir.path, `${dir.name}.zip`, true)}
-                            />
-                          )}
-                          {canEdit ? (
-                            <>
-                              <IconButton
-                                icon="create-outline"
-                                label={`${dir.name} 폴더 이름 변경`}
-                                onPress={() => startRename(dir.path, true)}
-                              />
-                              <IconButton
-                                icon="trash-outline"
-                                label={`${dir.name} 폴더 삭제`}
-                                tone="danger"
-                                onPress={() => void remove(dir.path, true)}
-                              />
-                            </>
-                          ) : null}
-                          <Ionicons name="chevron-forward" size={18} color={colors.textFaint} />
-                        </Pressable>
-                      )}
-                    </View>
-                  ))}
+            <>
+              <Breadcrumb path={path} onNavigate={openFolder} />
 
-                  {tree.files.map((file, index) => (
-                    <View key={file.path}>
-                      {index > 0 || tree.dirs.length > 0 ? <Divider /> : null}
-                      {editing?.path === file.path ? (
-                        <RenameRow
-                          icon={iconForMime(file.mimeType)}
-                          value={editing.value}
-                          busy={renaming}
-                          onChange={(value) => setEditing({ ...editing, value })}
-                          onConfirm={() => void confirmRename()}
-                          onCancel={() => setEditing(null)}
-                        />
-                      ) : (
-                        <Pressable
-                          onPress={() => void download(file.path, file.name)}
-                          accessibilityRole="button"
-                          accessibilityLabel={`${file.name} 내려받기`}
-                          style={({ pressed }) => ({
-                            flexDirection: 'row',
-                            alignItems: 'center',
-                            gap: spacing.md,
-                            paddingVertical: spacing.md,
-                            paddingHorizontal: spacing.lg,
-                            backgroundColor: pressed ? colors.surfaceAlt : 'transparent',
-                          })}
-                        >
-                          <Ionicons
-                            name={iconForMime(file.mimeType)}
-                            size={20}
-                            color={colors.textMuted}
-                          />
-                          <View style={{ flex: 1 }}>
-                            <Text
-                              numberOfLines={1}
-                              ellipsizeMode="middle"
-                              style={{ color: colors.text, fontSize: fontSize.md }}
-                            >
-                              {file.name}
-                            </Text>
-                            <Caption>
-                              {formatBytes(file.size)} · {formatRelativeTime(file.updatedAt)}
-                            </Caption>
-                          </View>
-                          {busyPath === file.path ? (
-                            <ActivityIndicator size="small" color={colors.textMuted} />
+              {state.loading ? (
+                // 폴더를 옮기는 동안 이전 폴더 목록이 새 브레드크럼 아래 남지 않게 한다.
+                <Loading label="목록 불러오는 중…" />
+              ) : (
+                <Card padded={false}>
+                  {tree.dirs.length === 0 && tree.files.length === 0 ? (
+                    <EmptyState
+                      icon="folder-open-outline"
+                      title={
+                        path !== ''
+                          ? '빈 폴더입니다'
+                          : snapshotId
+                            ? '이 시점에는 파일이 없습니다'
+                            : '아직 파일이 없습니다'
+                      }
+                      description={
+                        snapshotId
+                          ? undefined
+                          : canEdit
+                            ? '파일을 올리면 여기에 표시됩니다.'
+                            : '편집 권한이 있는 멤버가 파일을 올리면 여기에 표시됩니다.'
+                      }
+                    />
+                  ) : (
+                    <>
+                      {tree.dirs.map((dir, index) => (
+                        <View key={dir.path}>
+                          {index > 0 ? <Divider /> : null}
+                          {editing?.path === dir.path ? (
+                            <RenameRow
+                              icon="folder"
+                              value={editing.value}
+                              busy={renaming}
+                              hint="폴더 경로를 바꾸면 안의 파일이 모두 함께 옮겨집니다."
+                              onChange={(value) => setEditing({ ...editing, value })}
+                              onConfirm={() => void confirmRename()}
+                              onCancel={() => setEditing(null)}
+                            />
                           ) : (
-                            <>
-                              <IconButton
-                                icon="download-outline"
-                                label={`${file.name} 내려받기`}
-                                onPress={() => void download(file.path, file.name)}
-                              />
+                            <Pressable
+                              onPress={() => openFolder(dir.path)}
+                              accessibilityRole="button"
+                              accessibilityLabel={`${dir.name} 폴더 열기`}
+                              style={({ pressed }) => ({
+                                flexDirection: 'row',
+                                alignItems: 'center',
+                                gap: spacing.md,
+                                paddingVertical: spacing.md,
+                                paddingHorizontal: spacing.lg,
+                                backgroundColor: pressed ? colors.surfaceAlt : 'transparent',
+                              })}
+                            >
+                              <Ionicons name="folder" size={20} color={colors.accent} />
+                              <View style={{ flex: 1 }}>
+                                <Text
+                                  numberOfLines={1}
+                                  ellipsizeMode="middle"
+                                  style={{ color: colors.text, fontSize: fontSize.md, fontWeight: '500' }}
+                                >
+                                  {dir.name}
+                                </Text>
+                                <Caption>
+                                  파일 {dir.fileCount}개 · {formatBytes(dir.totalSize)}
+                                </Caption>
+                              </View>
+                              {busyPath === dir.path ? (
+                                <ActivityIndicator size="small" color={colors.textMuted} />
+                              ) : (
+                                <IconButton
+                                  icon="download-outline"
+                                  label={`${dir.name} 폴더를 zip 으로 받기`}
+                                  onPress={() => void download(dir.path, `${dir.name}.zip`, true)}
+                                />
+                              )}
                               {canEdit ? (
                                 <>
                                   <IconButton
                                     icon="create-outline"
-                                    label={`${file.name} 이름 변경`}
-                                    onPress={() => startRename(file.path, false)}
+                                    label={`${dir.name} 폴더 이름 변경`}
+                                    onPress={() => startRename(dir.path, true)}
                                   />
                                   <IconButton
                                     icon="trash-outline"
-                                    label={`${file.name} 삭제`}
+                                    label={`${dir.name} 폴더 삭제`}
                                     tone="danger"
-                                    onPress={() => void remove(file.path, false)}
+                                    onPress={() => void remove(dir.path, true)}
                                   />
                                 </>
                               ) : null}
-                            </>
+                              <Ionicons name="chevron-forward" size={18} color={colors.textFaint} />
+                            </Pressable>
                           )}
-                        </Pressable>
-                      )}
-                    </View>
-                  ))}
-                </>
+                        </View>
+                      ))}
+
+                      {tree.files.map((file, index) => (
+                        <View key={file.path}>
+                          {index > 0 || tree.dirs.length > 0 ? <Divider /> : null}
+                          {editing?.path === file.path ? (
+                            <RenameRow
+                              icon={iconForMime(file.mimeType)}
+                              value={editing.value}
+                              busy={renaming}
+                              onChange={(value) => setEditing({ ...editing, value })}
+                              onConfirm={() => void confirmRename()}
+                              onCancel={() => setEditing(null)}
+                            />
+                          ) : (
+                            <Pressable
+                              onPress={() => void download(file.path, file.name)}
+                              accessibilityRole="button"
+                              accessibilityLabel={`${file.name} 내려받기`}
+                              style={({ pressed }) => ({
+                                flexDirection: 'row',
+                                alignItems: 'center',
+                                gap: spacing.md,
+                                paddingVertical: spacing.md,
+                                paddingHorizontal: spacing.lg,
+                                backgroundColor: pressed ? colors.surfaceAlt : 'transparent',
+                              })}
+                            >
+                              <Ionicons
+                                name={iconForMime(file.mimeType)}
+                                size={20}
+                                color={colors.textMuted}
+                              />
+                              <View style={{ flex: 1 }}>
+                                <Text
+                                  numberOfLines={1}
+                                  ellipsizeMode="middle"
+                                  style={{ color: colors.text, fontSize: fontSize.md }}
+                                >
+                                  {file.name}
+                                </Text>
+                                <Caption>
+                                  {formatBytes(file.size)} · {formatRelativeTime(file.updatedAt)}
+                                </Caption>
+                              </View>
+                              {busyPath === file.path ? (
+                                <ActivityIndicator size="small" color={colors.textMuted} />
+                              ) : (
+                                <>
+                                  <IconButton
+                                    icon="download-outline"
+                                    label={`${file.name} 내려받기`}
+                                    onPress={() => void download(file.path, file.name)}
+                                  />
+                                  {!snapshotId ? (
+                                    <IconButton
+                                      icon="time-outline"
+                                      label={`${file.name} 버전`}
+                                      onPress={() => openVersions(file.path)}
+                                    />
+                                  ) : null}
+                                  {canEdit ? (
+                                    <>
+                                      <IconButton
+                                        icon="create-outline"
+                                        label={`${file.name} 이름 변경`}
+                                        onPress={() => startRename(file.path, false)}
+                                      />
+                                      <IconButton
+                                        icon="trash-outline"
+                                        label={`${file.name} 삭제`}
+                                        tone="danger"
+                                        onPress={() => void remove(file.path, false)}
+                                      />
+                                    </>
+                                  ) : null}
+                                </>
+                              )}
+                            </Pressable>
+                          )}
+                        </View>
+                      ))}
+                    </>
+                  )}
+                </Card>
               )}
-            </Card>
+            </>
           )}
         </>
       ) : null}

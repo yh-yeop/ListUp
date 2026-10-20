@@ -44,7 +44,7 @@ export default function SignupScreen() {
     <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <Screen>
         <View style={{ gap: spacing.sm }}>
-          <Title>계정 만들기</Title>
+          <Title>회원가입</Title>
           <Subtitle>만든 계정으로 모바일과 PC 어디서든 같은 저장소를 볼 수 있습니다.</Subtitle>
         </View>
 

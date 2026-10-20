@@ -3,6 +3,7 @@ import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
 import { View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { ToastHost } from '../src/components/Toast';
 import { Loading } from '../src/components/ui';
 import { suggestUpdateOnce } from '../src/lib/updates';
 import { AuthProvider, useAuth } from '../src/state/auth';
@@ -79,6 +80,8 @@ function RootNavigator() {
         <Stack.Screen name="repo/[repoId]/history" />
         <Stack.Screen name="repo/[repoId]/new-proposal" />
         <Stack.Screen name="repo/[repoId]/compare" />
+        <Stack.Screen name="repo/[repoId]/versions" />
+        <Stack.Screen name="repo/[repoId]/trash" />
         <Stack.Screen name="proposal/[proposalId]" />
       </Stack.Protected>
     </Stack>
@@ -92,7 +95,11 @@ export default function RootLayout() {
     <SafeAreaProvider>
       <AuthProvider>
         <StatusBar style={dark ? 'light' : 'dark'} />
-        <RootNavigator />
+        <View style={{ flex: 1 }}>
+          <RootNavigator />
+          {/* 안내 토스트 — 스택 위에 떠서 화면을 옮겨도 남는다. */}
+          <ToastHost />
+        </View>
       </AuthProvider>
     </SafeAreaProvider>
   );

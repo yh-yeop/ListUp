@@ -124,6 +124,7 @@ npm run server        # http://localhost:4000
 | --- | --- | --- |
 | `LISTUP_PORT` | `4000` | 포트 |
 | `LISTUP_DATA_DIR` | `server/data` | DB·파일 저장 위치 |
+| `LISTUP_SERVER_NAME` | (없음) | 서버 이름. 초대받은 사람이 서버를 더할 때 목록에 이 이름으로 들어갑니다 (60자까지) |
 | `LISTUP_AUTH_SECRET` | (개발 시 자동 생성) | 토큰 서명 키. **운영에서는 반드시 지정** |
 | `LISTUP_TOKEN_TTL_DAYS` | `30` | 로그인 유지 기간 |
 | `LISTUP_MAX_UPLOAD_MB` | `2048` | 파일 하나의 최대 크기 (앱은 조각으로 나눠 올리므로 터널의 100MB 요청 한도에 걸리지 않음) |

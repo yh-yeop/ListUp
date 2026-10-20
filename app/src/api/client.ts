@@ -6,6 +6,8 @@ import type {
   ApiErrorCode,
   CommitResult,
   DownloadLink,
+  FileVersion,
+  TrashEntry,
   UploadSession,
   UploadedBlob,
   Invite,
@@ -235,10 +237,19 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
 /**
  * 업로드용 파일 소스 — 웹에서는 File, 네이티브에서는 uri 기반.
  * relativePath 는 폴더를 통째로 고른 경우 그 폴더 안에서의 경로(맨 위 폴더 이름 포함, 예: `사진/여름/a.jpg`).
+ * lastModified 는 기기에서 마지막으로 고친 때(ms). 모르면 없다 — 이미 올린 파일을 건너뛸 때 쓴다.
  */
 export type UploadSource =
-  | { kind: 'web'; file: File; name: string; size: number; relativePath?: string }
-  | { kind: 'native'; uri: string; name: string; size: number; mimeType: string; relativePath?: string }
+  | { kind: 'web'; file: File; name: string; size: number; relativePath?: string; lastModified?: number }
+  | {
+      kind: 'native';
+      uri: string;
+      name: string;
+      size: number;
+      mimeType: string;
+      relativePath?: string;
+      lastModified?: number;
+    }
   /** PC 앱에서 고른 폴더 안의 파일 — 창은 직접 못 읽고 PC 앱(main)이 조각을 읽어 준다. 나눠 올리기로만. */
   | { kind: 'desktop'; root: string; relativePath: string; name: string; size: number };
 
@@ -255,22 +266,35 @@ function sendBytes<T>(
   path: string,
   bytes: Blob | Uint8Array,
   onProgress?: (loaded: number) => void,
+  signal?: AbortSignal,
 ): Promise<T> {
   if (apiBaseUrl === null) return Promise.reject(new ApiError(0, 'internal', '들어갈 서버를 먼저 골라 주세요.'));
+  if (signal?.aborted) return Promise.reject(new ApiError(0, 'internal', '멈췄습니다.'));
   const usedBaseUrl = apiBaseUrl;
   const usedToken = authToken;
   return new Promise<T>((resolve, reject) => {
     const xhr = new XMLHttpRequest();
+    // 멈추면 보내던 조각을 바로 끊는다. 부른 쪽이 signal.aborted 로 멈춘 것을 알아본다.
+    const onAbort = () => xhr.abort();
+    signal?.addEventListener('abort', onAbort);
+    const settle = () => signal?.removeEventListener('abort', onAbort);
+    xhr.onabort = () => {
+      settle();
+      reject(new ApiError(0, 'internal', '멈췄습니다.'));
+    };
     xhr.open(method, `${usedBaseUrl}${path}`);
     xhr.timeout = CHUNK_TIMEOUT_MS;
     xhr.setRequestHeader('Content-Type', 'application/octet-stream');
     if (usedToken) xhr.setRequestHeader('Authorization', `Bearer ${usedToken}`);
     if (onProgress) xhr.upload.onprogress = (event) => onProgress(event.loaded);
-    const networkError = () =>
+    const networkError = () => {
+      settle();
       reject(new ApiError(0, 'internal', `서버에 연결할 수 없습니다. (${usedBaseUrl})\n연결을 확인해 주세요.`));
+    };
     xhr.onerror = networkError;
     xhr.ontimeout = networkError;
     xhr.onload = () => {
+      settle();
       if (xhr.status === 401 && usedToken && authToken === usedToken && apiBaseUrl === usedBaseUrl) {
         authToken = null;
         onUnauthorized?.(usedToken);
@@ -396,6 +420,21 @@ export const api = {
     }>(`/api/repos/${repoId}/history${qs ? `?${qs}` : ''}`);
   },
 
+  /** 파일 하나의 버전 (서버 1.5.0+, apiLevel 3). 옛 서버는 404. */
+  fileVersions: (repoId: string, path: string, cursor?: { before: number; beforeId: string } | null) => {
+    const params = new URLSearchParams({ path });
+    if (cursor) {
+      params.set('before', String(cursor.before));
+      params.set('beforeId', cursor.beforeId);
+    }
+    return request<{ versions: FileVersion[]; next: { before: number; beforeId: string } | null }>(
+      `/api/repos/${repoId}/files/versions?${params.toString()}`,
+    );
+  },
+
+  /** 휴지통 (서버 1.5.0+, apiLevel 3). 옛 서버는 404. */
+  trash: (repoId: string) => request<{ entries: TrashEntry[] }>(`/api/repos/${repoId}/trash`),
+
   // 파일 ------------------------------------------------------------------
   listFiles: (repoId: string, path = '', snapshotId?: string, options: { recursive?: boolean } = {}) => {
     const params = new URLSearchParams();
@@ -430,8 +469,13 @@ export const api = {
 
   getUpload: (uploadId: string) => request<{ upload: UploadSession }>(`/api/uploads/${uploadId}`),
 
-  putChunk: (uploadId: string, offset: number, bytes: Blob | Uint8Array, onProgress?: (loaded: number) => void) =>
-    sendBytes<{ upload: UploadSession }>('PUT', `/api/uploads/${uploadId}?offset=${offset}`, bytes, onProgress),
+  putChunk: (
+    uploadId: string,
+    offset: number,
+    bytes: Blob | Uint8Array,
+    onProgress?: (loaded: number) => void,
+    signal?: AbortSignal,
+  ) => sendBytes<{ upload: UploadSession }>('PUT', `/api/uploads/${uploadId}?offset=${offset}`, bytes, onProgress, signal),
 
   completeUpload: (uploadId: string) =>
     request<{ blob: UploadedBlob }>(`/api/uploads/${uploadId}/complete`, { method: 'POST' }),

@@ -27,7 +27,7 @@ import {
 } from '../../../src/components/ui';
 import { RepoNav } from '../../../src/components/RepoNav';
 import { ApiError, api } from '../../../src/api/client';
-import { confirmAction, notify } from '../../../src/lib/dialogs';
+import { confirmAction, notifyError, notifySuccess } from '../../../src/lib/dialogs';
 import { useAsync } from '../../../src/lib/useAsync';
 import { useAuth } from '../../../src/state/auth';
 import { fontSize, spacing, useTheme } from '../../../src/theme';
@@ -79,9 +79,9 @@ export default function MembersScreen() {
     try {
       await api.updateRepo(repoId, { name: trimmedName, description: trimmedDescription });
       state.refresh();
-      notify('저장소 정보를 저장했습니다.');
+      notifySuccess('저장소 정보를 저장했습니다.');
     } catch (err) {
-      notify(err instanceof ApiError ? err.message : '저장소 정보를 저장하지 못했습니다.');
+      notifyError(err instanceof ApiError ? err.message : '저장소 정보를 저장하지 못했습니다.');
     } finally {
       setSaving(false);
     }
@@ -101,7 +101,7 @@ export default function MembersScreen() {
       await api.setMemberRole(repoId, member.userId, next);
       state.refresh();
     } catch (err) {
-      notify(err instanceof ApiError ? err.message : '권한을 바꾸지 못했습니다.');
+      notifyError(err instanceof ApiError ? err.message : '권한을 바꾸지 못했습니다.');
     } finally {
       setBusy(null);
     }
@@ -121,9 +121,9 @@ export default function MembersScreen() {
     try {
       await api.transferOwnership(repoId, member.userId);
       state.refresh();
-      notify(`${member.displayName} 님이 새 소유자가 되었습니다.`);
+      notifySuccess(`${member.displayName} 님이 새 소유자가 되었습니다.`);
     } catch (err) {
-      notify(err instanceof ApiError ? err.message : '소유권을 넘기지 못했습니다.');
+      notifyError(err instanceof ApiError ? err.message : '소유권을 넘기지 못했습니다.');
     } finally {
       setBusy(null);
     }
@@ -143,7 +143,7 @@ export default function MembersScreen() {
       await api.removeMember(repoId, member.userId);
       state.refresh();
     } catch (err) {
-      notify(err instanceof ApiError ? err.message : '내보내지 못했습니다.');
+      notifyError(err instanceof ApiError ? err.message : '내보내지 못했습니다.');
     } finally {
       setBusy(null);
     }
@@ -163,7 +163,7 @@ export default function MembersScreen() {
       await api.removeMember(repoId, user.id);
       router.replace('/repos');
     } catch (err) {
-      notify(err instanceof ApiError ? err.message : '나가지 못했습니다.');
+      notifyError(err instanceof ApiError ? err.message : '나가지 못했습니다.');
     }
   }
 
@@ -180,7 +180,7 @@ export default function MembersScreen() {
       await api.deleteRepo(repoId);
       router.replace('/repos');
     } catch (err) {
-      notify(err instanceof ApiError ? err.message : '삭제하지 못했습니다.');
+      notifyError(err instanceof ApiError ? err.message : '삭제하지 못했습니다.');
     }
   }
 

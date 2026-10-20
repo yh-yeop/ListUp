@@ -38,10 +38,10 @@ Authorization: Bearer <token>
 
 | 메서드 | 경로 | 설명 |
 | --- | --- | --- |
-| GET | `/health` | 로그인 없이. `{ok, time, maxUploadBytes, apiVersion, apiLevel, version}` |
+| GET | `/health` | 로그인 없이. `{ok, time, maxUploadBytes, apiVersion, apiLevel, version, serverName}` |
 
 ```json
-{ "ok": true, "time": 1789355589634, "maxUploadBytes": 2147483648, "apiVersion": 1, "apiLevel": 2, "version": "1.2.0" }
+{ "ok": true, "time": 1789355589634, "maxUploadBytes": 2147483648, "apiVersion": 1, "apiLevel": 2, "version": "1.4.0", "serverName": "우리집 음악서버" }
 ```
 
 - **`apiVersion`** — API 호환 버전(`shared` 의 `API_VERSION`). 서버와 앱이 서로 알아듣지 못하게
@@ -49,10 +49,14 @@ Authorization: Bearer <token>
   값과 견주고 다르면 들어가지 않습니다. **이 필드가 없는 서버(1.0.0)는 `1` 로 봅니다.**
 - **`apiLevel`** — 기능 수준(`API_LEVEL`). 호환을 깨지 않고 기능을 더할 때 올립니다(옛 앱은 무시).
   앱은 자기가 쓰는 기능이 있는 수준(`REQUIRED_SERVER_API_LEVEL`) 미만 서버에는 "서버가 오래됨"으로
-  들어가지 않습니다. 2 = 1.2.0 (나눠 올리기·여러 파일 커밋·다운로드 링크·zip·Range·재설정).
+  들어가지 않습니다. 2 = 1.2.0 (나눠 올리기·여러 파일 커밋·다운로드 링크·zip·Range·재설정),
+  3 = 1.5.0 (파일 버전·휴지통 — 수준 2 서버에서는 앱이 그 화면에서만 "서버 업데이트 필요"를 보인다).
   **필드가 없는 서버(1.1.0 까지)는 `1`** 입니다.
 - `version` — 서버 버전(`server/package.json`). 사람에게 보여주는 용도이고 호환 판단에는 쓰지 않습니다.
 - `maxUploadBytes` — 파일 하나의 업로드 한도. 앱이 올리기 전에 검사합니다.
+- `serverName` — 서버 주인이 붙인 이름(`LISTUP_SERVER_NAME`, PC 앱은 관리 화면의 *서버 이름*). 정하지
+  않았으면 `null`. 앱은 서버를 더할 때(연결 확인·초대 링크) 비어 있는 이름 칸에 넣습니다. 1.3.0 까지의
+  서버에는 이 필드가 없습니다. 기능이 아니라 표시용이라 `apiLevel` 은 그대로입니다.
 
 ---
 
@@ -108,6 +112,8 @@ npm run reset-password -- me@example.com     # 서버가 켜져 있어도 됩니
 | DELETE | `/repos/:repoId/members/:userId` | 본인 또는 owner | 내보내기/나가기. owner 는 나갈 수 없음 |
 | POST | `/repos/:repoId/transfer` | owner | `{userId}` — 넘긴 사람은 editor 로 남음 |
 | GET | `/repos/:repoId/history` | viewer | 스냅샷 목록. 응답 `{snapshots, next}` — `next` 가 있으면 `?before=&beforeId=` 로 이어서 요청 (`limit` 최대 100) |
+| GET | `/repos/:repoId/files/versions?path=` | viewer | 파일 하나를 바꾼 시점들, 최근 것부터. `{versions:[{snapshotId, createdAt, author, message, op, blobHash, size}], next}` — 커서는 history 와 같다. 없는 경로면 빈 목록. **1.5.0+** |
+| GET | `/repos/:repoId/trash` | viewer | 휴지통 — 지워서 지금 없는 파일, 최근 것부터 500개. `{entries:[{path, name, snapshotId, beforeSnapshotId, message, deletedAt, deletedBy, blobHash, size, mimeType}]}`. 이름 바꾸기·옮기기, 다시 생긴 경로는 빠지고 같은 경로는 마지막 삭제만. **1.5.0+** |
 
 - 멤버를 내보내거나 viewer 로 강등하면 **그 사람이 만든 초대는 함께 회수**됩니다.
 
@@ -119,7 +125,7 @@ npm run reset-password -- me@example.com     # 서버가 켜져 있어도 됩니
 | --- | --- | --- | --- |
 | GET | `/repos/:repoId/files?path=&snapshot=&recursive=` | viewer | 폴더 목록. `snapshot` 을 주면 과거 시점, `recursive=1` 이면 하위 폴더 파일까지 모두 `files` 에(`dirs` 는 비고 `recursive: true`) |
 | POST | `/repos/:repoId/files?path=` | editor | multipart 업로드 = 직접 커밋 |
-| POST | `/repos/:repoId/files/commit` | editor | `{changes:[{path, blobHash\|null}], message?}` — 여러 파일을 스냅샷 하나로 |
+| POST | `/repos/:repoId/files/commit` | editor | `{changes:[{path, blobHash\|null}], message?}` — 여러 파일을 스냅샷 하나로. `blobHash` 는 이 저장소에 올렸거나 **이력에 있던** 내용이면 된다 — 되돌리기는 버전·휴지통의 `blobHash` 로 다시 올리지 않고 커밋한다(제안도 같다) |
 | DELETE | `/repos/:repoId/files?path=` | editor | 파일 또는 폴더 삭제 |
 | POST | `/repos/:repoId/files/move` | editor | `{from, to}` — 파일·폴더 이동/이름 변경 |
 | GET | `/repos/:repoId/raw?path=&snapshot=&inline=1` | viewer | 파일 내려받기 (`Range` 지원) |

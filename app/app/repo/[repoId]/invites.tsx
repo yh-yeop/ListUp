@@ -6,6 +6,7 @@ import {
   ROLE_DESCRIPTION,
   ROLE_LABEL,
   formatInviteCode,
+  formatDateTime,
   formatRelativeTime,
   hasRole,
   type Invite,
@@ -29,7 +30,7 @@ import {
 } from '../../../src/components/ui';
 import { RepoNav } from '../../../src/components/RepoNav';
 import { ApiError, api } from '../../../src/api/client';
-import { confirmAction, notify } from '../../../src/lib/dialogs';
+import { confirmAction, notifyError, notifySuccess } from '../../../src/lib/dialogs';
 import { isOwnHostUrl, shareableHostUrl, useHostStatus } from '../../../src/lib/desktop';
 import { inviteLinkFor, isLocalNetworkAddress } from '../../../src/lib/invite-link';
 import { useAsync } from '../../../src/lib/useAsync';
@@ -101,14 +102,14 @@ export default function InvitesScreen() {
 
   async function copy(invite: Invite) {
     await Clipboard.setStringAsync(formatInviteCode(invite.code));
-    notify('초대 코드를 복사했습니다.', '받는 분에게 코드와 서버 주소를 함께 전달해 주세요.');
+    notifySuccess('초대 코드를 복사했습니다.', '받는 분에게 코드와 서버 주소를 함께 전달해 주세요.');
   }
 
   /** 링크 하나에 서버 주소와 코드가 함께 — 받는 사람은 누르기만 하면 된다. */
   async function copyLink(invite: Invite) {
     const link = linkFor(invite);
     await Clipboard.setStringAsync(link);
-    notify('초대 링크를 복사했습니다.', localOnly ? LOCAL_WARNING : '받는 분이 링크를 누르면 가입·로그인 뒤 바로 참여합니다.');
+    notifySuccess('초대 링크를 복사했습니다.', localOnly ? LOCAL_WARNING : '받는 분이 링크를 누르면 가입·로그인 뒤 바로 참여합니다.');
   }
 
   async function shareLink(invite: Invite) {
@@ -132,7 +133,7 @@ export default function InvitesScreen() {
       await api.revokeInvite(invite.id);
       state.refresh();
     } catch (err) {
-      notify(err instanceof ApiError ? err.message : '회수하지 못했습니다.');
+      notifyError(err instanceof ApiError ? err.message : '회수하지 못했습니다.');
     }
   }
 
@@ -258,7 +259,7 @@ export default function InvitesScreen() {
                             ? '기한 없음'
                             : invite.expiresAt <= Date.now()
                               ? '만료됨'
-                              : `${new Date(invite.expiresAt).toLocaleDateString('ko-KR')}까지`}
+                              : `${formatDateTime(invite.expiresAt)}까지`}
                       </Caption>
                       <Caption>{formatRelativeTime(invite.createdAt)} 생성</Caption>
                     </Row>

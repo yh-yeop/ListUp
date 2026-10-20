@@ -30,7 +30,7 @@ import {
   Title,
 } from '../../src/components/ui';
 import { ApiError, api } from '../../src/api/client';
-import { confirmAction, notify } from '../../src/lib/dialogs';
+import { confirmAction, notify, notifyError } from '../../src/lib/dialogs';
 import { downloadFile } from '../../src/lib/files';
 import { useAsync } from '../../src/lib/useAsync';
 import { useAuth } from '../../src/state/auth';
@@ -339,7 +339,7 @@ function ChangeRow({
       const result = await downloadFile(url, kind === 'base' ? baseFileName : `제안-${name}`);
       if (result.message) notify(result.message);
     } catch {
-      notify('내려받지 못했습니다.');
+      notifyError('내려받지 못했습니다.');
     } finally {
       setBusy(null);
     }

@@ -216,7 +216,17 @@ try {
   const LEGACY = await startMockHealth({ ok: true, time: 0, maxUploadBytes: 1 });
   const V110 = await startMockHealth({ ok: true, time: 0, maxUploadBytes: 1, apiVersion: 1, version: '1.1.0' });
   const OLDER = await startMockHealth({ ok: true, time: 0, maxUploadBytes: 1, apiVersion: 0, version: '0.9.0' });
-  stops.push(C.stop, NEWER.stop, LEGACY.stop, V110.stop, OLDER.stop);
+  // 주인이 이름을 정한 서버 — 서버를 더할 때 이름 칸이 채워지는지.
+  const NAMED = await startMockHealth({
+    ok: true,
+    time: 0,
+    maxUploadBytes: 1,
+    apiVersion: 1,
+    apiLevel: 2,
+    version: APP_VERSION,
+    serverName: '우리집 음악서버',
+  });
+  stops.push(C.stop, NEWER.stop, LEGACY.stop, V110.stop, OLDER.stop, NAMED.stop);
   const DEAD = `http://localhost:${await freePort()}`;
 
   const channel = process.env.E2E_BROWSER_CHANNEL ?? (process.platform === 'win32' ? 'msedge' : undefined);
@@ -278,6 +288,7 @@ try {
       LEGACY: LEGACY.url,
       V110: V110.url,
       OLDER: OLDER.url,
+      NAMED: NAMED.url,
       DEAD,
       leaks,
       appVersion: APP_VERSION,

@@ -37,7 +37,9 @@ export default async function run(t, env) {
     await page.waitForTimeout(500);
     const clip = await page.evaluate(() => navigator.clipboard.readText());
     t.must(clip === expected, `링크 복사 → ${expected}`);
-    t.must(dialogs.some((m) => m.includes('같은 공유기(네트워크) 안에서만')), 'localhost 주소면 같은 네트워크에서만 열린다고 경고');
+    // 안내는 모달이 아니라 화면 안 토스트로 뜬다.
+    const toast = page.getByRole('status').filter({ hasText: '같은 공유기(네트워크) 안에서만' });
+    t.must((await toast.count()) === 1 && dialogs.length === 0, 'localhost 주소면 같은 네트워크에서만 열린다고 토스트로 경고');
     await ctx.close();
   }
 

@@ -14,6 +14,30 @@ function trustProxyFor(value: string | undefined) {
   }
 }
 
+function serverNameFor(value: string | undefined) {
+  const before = process.env.LISTUP_SERVER_NAME;
+  if (value === undefined) delete process.env.LISTUP_SERVER_NAME;
+  else process.env.LISTUP_SERVER_NAME = value;
+  try {
+    return loadConfig().serverName;
+  } finally {
+    if (before === undefined) delete process.env.LISTUP_SERVER_NAME;
+    else process.env.LISTUP_SERVER_NAME = before;
+  }
+}
+
+describe('LISTUP_SERVER_NAME', () => {
+  it('없거나 공백뿐이면 null', () => {
+    assert.equal(serverNameFor(undefined), null);
+    assert.equal(serverNameFor('   '), null);
+  });
+
+  it('제어 문자·겹친 공백을 정리하고 60자로 자른다', () => {
+    assert.equal(serverNameFor('  우리집\n\t음악서버  '), '우리집 음악서버');
+    assert.equal(serverNameFor('가'.repeat(80))?.length, 60);
+  });
+});
+
 describe('LISTUP_TRUST_PROXY', () => {
   it('없으면 루프백 프록시만 믿는다', () => {
     assert.deepEqual(trustProxyFor(undefined), ['loopback']);

@@ -60,7 +60,7 @@ const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'listup-desktop-e2e-'));
 const backupDir = fs.mkdtempSync(path.join(os.tmpdir(), 'listup-desktop-backup-'));
 const compareDir = fs.mkdtempSync(path.join(os.tmpdir(), 'listup-desktop-compare-'));
 const PORT = await freePort();
-fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({ port: PORT, trayNoticeShown: true }));
+fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({ port: PORT, trayNoticeShown: true, serverName: '테스트 PC 서버' }));
 
 const env = { ...process.env, LISTUP_DESKTOP_USER_DATA: userData, LISTUP_LOG_LEVEL: 'info' };
 delete env.ELECTRON_RUN_AS_NODE;
@@ -209,7 +209,18 @@ try {
   t.must(reset.status === 200, '발급한 코드로 실제로 비밀번호를 바꿀 수 있다');
 
   // 7. 실행 중에는 포트를 못 바꾼다
-  t.must(await page.getByRole('button', { name: '저장' }).isDisabled(), '실행 중에는 포트 저장이 막힌다');
+  t.must(await page.getByRole('button', { name: '저장', exact: true }).isDisabled(), '실행 중에는 포트 저장이 막힌다');
+
+  // 7-1. 서버 이름 — 설정에 둔 이름을 서버가 알려 주고, 바꾸면 설정에 남는다(다시 켜면 적용)
+  const named = await (await fetch(`http://127.0.0.1:${PORT}/api/health`)).json();
+  t.must(named.serverName === '테스트 PC 서버', '설정의 서버 이름을 health 가 알려 준다');
+  const nameInput = page.getByPlaceholder('예: 우리집 음악서버').filter({ visible: true });
+  t.must((await nameInput.inputValue()) === '테스트 PC 서버', '관리 화면에 지금 서버 이름');
+  await nameInput.fill('  새 이름  ');
+  await page.getByRole('button', { name: '이름 저장' }).click();
+  await page.getByRole('button', { name: '이름 저장' }).and(page.locator('[aria-disabled="true"]')).waitFor();
+  const saved = JSON.parse(fs.readFileSync(path.join(userData, 'settings.json'), 'utf8'));
+  t.must(saved.serverName === '새 이름', '이름 저장 → 앞뒤 공백을 떼고 설정에 남는다');
 
   // 8. 로그가 보인다
   await page.getByText('최근 로그').waitFor({ timeout: 10_000 });

@@ -25,7 +25,7 @@ import {
   openReleasePage,
   type LatestRelease,
 } from '../src/lib/updates';
-import { confirmAction, notify } from '../src/lib/dialogs';
+import { confirmAction, notifySuccess } from '../src/lib/dialogs';
 import { chooseSaveFolder, getSaveFolder, saveFolderLabel, saveFolderSupported } from '../src/lib/save-folder';
 import { useAuth } from '../src/state/auth';
 import { openServerList } from '../src/lib/server-list';
@@ -97,7 +97,7 @@ export default function SettingsScreen() {
     if (!ok) return;
     await removeLogin(activeId);
     setHasSavedLogin(false);
-    notify('저장된 로그인 정보를 지웠습니다.');
+    notifySuccess('저장된 로그인 정보를 지웠습니다.');
   };
 
   const saveName = async () => {
@@ -105,7 +105,7 @@ export default function SettingsScreen() {
     setSavingName(true);
     try {
       await updateProfile(displayName.trim());
-      notify('이름을 바꿨습니다.');
+      notifySuccess('이름을 바꿨습니다.');
     } catch (err) {
       setError(err instanceof ApiError ? err.message : '이름을 바꾸지 못했습니다.');
     } finally {
@@ -124,7 +124,7 @@ export default function SettingsScreen() {
       await changePassword(currentPassword, newPassword);
       setCurrentPassword('');
       setNewPassword('');
-      notify('비밀번호를 바꿨습니다.', '다른 기기에서는 다시 로그인해야 합니다.');
+      notifySuccess('비밀번호를 바꿨습니다.', '다른 기기에서는 다시 로그인해야 합니다.');
     } catch (err) {
       setError(err instanceof ApiError ? err.message : '비밀번호를 바꾸지 못했습니다.');
     } finally {

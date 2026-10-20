@@ -18,9 +18,9 @@ import {
   Subtitle,
   Title,
 } from '../../../src/components/ui';
-import { TransferProgress } from '../../../src/components/TransferProgress';
+import { TransferProgress, useTransferControl } from '../../../src/components/TransferProgress';
 import { ApiError, api, getMaxUploadBytes, resolveApiUrl } from '../../../src/api/client';
-import { confirmAction, notify } from '../../../src/lib/dialogs';
+import { confirmAction, notify, notifyError, notifySuccess } from '../../../src/lib/dialogs';
 import { compareFolder, listRepoFolder, type RepoFile } from '../../../src/lib/folder-compare';
 import { localFolderSupported, pickLocalFolder, type LocalEntry, type LocalFolder } from '../../../src/lib/local-folder';
 import { uploadAndCommit, uploadMany, type UploadProgress } from '../../../src/lib/transfer';
@@ -49,8 +49,12 @@ export default function CompareScreen() {
   const [shown, setShown] = useState(PAGE);
   const [scanning, setScanning] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [progress, setProgress] = useState<{ label: string; value: UploadProgress } | null>(null);
+  const [progress, setProgress] = useState<{ kind: 'upload' | 'download'; label: string; value: UploadProgress } | null>(
+    null,
+  );
   const busy = scanning || progress !== null;
+  const uploadControl = useTransferControl('올리던 파일은 끊고, 그때까지 다 올린 파일만 반영합니다.');
+  const downloadControl = useTransferControl('지금 받는 파일까지 받고 멈춥니다. 받은 파일은 그대로 둡니다.');
 
   const loadRepo = useCallback(async () => {
     const [{ repo: summary }, files] = await Promise.all([api.getRepo(repoId), listRepoFolder(repoId, basePath)]);
@@ -123,9 +127,13 @@ export default function CompareScreen() {
 
     const failures: string[] = [];
     let doneBytes = 0;
+    let received = 0;
+    const signal = downloadControl.begin();
     for (const [index, file] of files.entries()) {
+      if (signal.aborted) break;
       const report = (fraction: number) =>
         setProgress({
+          kind: 'download',
           label: '받는 중',
           value: {
             sentBytes: doneBytes + file.size * fraction,
@@ -151,16 +159,17 @@ export default function CompareScreen() {
           // 브라우저가 연달아 누른 내려받기를 한데 묶어 막지 않게 조금씩 띄운다.
           await new Promise((resolve) => setTimeout(resolve, 400));
         }
+        received += 1;
       } catch (err) {
         failures.push(`${file.relativePath}: ${err instanceof Error ? err.message : '받지 못했습니다'}`);
       }
       doneBytes += file.size;
     }
     setProgress(null);
-    notify(
-      failures.length === 0 ? `${files.length}개를 받았습니다.` : `${files.length - failures.length}개 받음, ${failures.length}개 실패`,
-      failures.slice(0, 3).join('\n') || undefined,
-    );
+    const details = failures.slice(0, 3).join('\n') || undefined;
+    if (signal.aborted) notify(`멈췄습니다 — ${received}/${files.length}개 받음`, details);
+    else if (failures.length === 0) notifySuccess(`${files.length}개를 받았습니다.`);
+    else notifyError(`${received}개 받음, ${failures.length}개 실패`, details);
     if (toFolder) await refresh();
   }
 
@@ -172,7 +181,7 @@ export default function CompareScreen() {
     const valid = items.filter((item): item is { entry: LocalEntry; path: string } => item.path !== null);
     const skipped = entries.length - valid.length;
     if (valid.length === 0) {
-      notify('올릴 수 있는 파일이 없습니다.', `한 파일 ${formatBytes(maxBytes)} 를 넘거나 쓸 수 없는 이름입니다.`);
+      notifyError('올릴 수 있는 파일이 없습니다.', `한 파일 ${formatBytes(maxBytes)} 를 넘거나 쓸 수 없는 이름입니다.`);
       return;
     }
     const totalBytes = valid.reduce((sum, item) => sum + item.entry.size, 0);
@@ -187,16 +196,24 @@ export default function CompareScreen() {
     if (!ok) return;
 
     const uploadItems = valid.map((item) => ({ source: item.entry.source, path: item.path }));
-    const onProgress = (value: UploadProgress) => setProgress({ label: '올리는 중', value });
+    const onProgress = (value: UploadProgress) => setProgress({ label: '올리는 중', value, kind: 'upload' });
+    const signal = uploadControl.begin();
     try {
       if (isEditor) {
-        const { failures } = await uploadAndCommit(repoId, uploadItems, onProgress);
-        notify(
-          failures.length === 0 ? `${uploadItems.length}개를 올렸습니다.` : `${uploadItems.length - failures.length}개 올림, ${failures.length}개 실패`,
-          failures.slice(0, 3).map((f) => `${f.item.path}: ${f.message}`).join('\n') || undefined,
-        );
+        const { uploaded, failures, cancelled } = await uploadAndCommit(repoId, uploadItems, onProgress, signal);
+        const details = failures.slice(0, 3).map((f) => `${f.item.path}: ${f.message}`).join('\n') || undefined;
+        if (cancelled) {
+          notify(
+            `멈췄습니다 — ${uploaded.length}/${uploadItems.length}개 올림`,
+            uploaded.length > 0 ? '다 올린 파일은 저장소에 반영했습니다.' : '저장소는 그대로입니다.',
+          );
+        } else if (failures.length === 0) {
+          notifySuccess(`${uploadItems.length}개를 올렸습니다.`);
+        } else {
+          notifyError(`${uploadItems.length - failures.length}개 올림, ${failures.length}개 실패`, details);
+        }
       } else {
-        const { uploaded, failures } = await uploadMany(repoId, uploadItems, onProgress);
+        const { uploaded, failures, cancelled } = await uploadMany(repoId, uploadItems, onProgress, signal);
         if (uploaded.length > 0) {
           const { proposal } = await api.createProposal(repoId, {
             title: `내 폴더에서 ${uploaded.length}개 추가`,
@@ -204,14 +221,16 @@ export default function CompareScreen() {
             changes: uploaded.map(({ item, blob }) => ({ path: item.path, blobHash: blob.hash })),
           });
           setProgress(null);
-          if (failures.length > 0) notify(`${failures.length}개는 올리지 못했습니다.`);
+          if (failures.length > 0) notifyError(`${failures.length}개는 올리지 못했습니다.`);
+          else if (cancelled) notify(`멈췄습니다 — 다 올린 ${uploaded.length}개로 제안을 만들었습니다.`);
           router.push(`/proposal/${proposal.id}`);
           return;
         }
-        notify('올리지 못했습니다.', failures.slice(0, 3).map((f) => `${f.item.path}: ${f.message}`).join('\n'));
+        if (cancelled) notify('멈췄습니다.', '제안을 만들지 않았습니다.');
+        else notifyError('올리지 못했습니다.', failures.slice(0, 3).map((f) => `${f.item.path}: ${f.message}`).join('\n'));
       }
     } catch (err) {
-      notify('반영하지 못했습니다.', err instanceof ApiError ? err.message : undefined);
+      notifyError('반영하지 못했습니다.', err instanceof ApiError ? err.message : undefined);
     } finally {
       setProgress(null);
     }
@@ -334,7 +353,13 @@ export default function CompareScreen() {
         </Pressable>
       </Card>
 
-      {progress ? <TransferProgress progress={progress.value} label={progress.label} /> : null}
+      {progress ? (
+        <TransferProgress
+          progress={progress.value}
+          label={progress.label}
+          control={progress.kind === 'upload' ? uploadControl : downloadControl}
+        />
+      ) : null}
 
       {!repoFiles && !error ? <Loading label="저장소 목록 불러오는 중…" /> : null}
 

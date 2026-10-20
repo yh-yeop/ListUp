@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import type { Role } from '@listup/shared';
-import { MAX_DESCRIPTION_LENGTH, MAX_NAME_LENGTH, isRole } from '@listup/shared';
+import { MAX_DESCRIPTION_LENGTH, MAX_NAME_LENGTH, MAX_TRASH_ENTRIES, isRole, normalizePath } from '@listup/shared';
 import type { AppContext } from '../context.ts';
 import { badRequest, conflict, forbidden, notFound } from '../lib/errors.ts';
 import { newId } from '../lib/ids.ts';
@@ -20,7 +20,7 @@ import {
   toRepoSummary,
   type RepoRow,
 } from '../services/repos.ts';
-import { listSnapshots } from '../services/snapshots.ts';
+import { listFileVersions, listSnapshots, listTrash, type SnapshotCursor } from '../services/snapshots.ts';
 
 /** 이 사람이 만든 미회수 초대를 모두 회수한다. 추방·강등과 같은 트랜잭션 안에서 부른다. */
 function revokeInvitesBy(db: AppContext['db'], repoId: string, userId: string, now: number): void {
@@ -212,16 +212,43 @@ export async function registerRepoRoutes(app: FastifyInstance, ctx: AppContext):
     const { repoId } = req.params as { repoId: string };
     requireAccess(db, repoId, user.id, 'viewer');
     const limit = queryInt(req, 'limit', 30, 100);
-    // 커서는 (created_at, id) 쌍이다. 같은 밀리초에 만들어진 스냅샷을 건너뛰지 않기 위해서다.
-    const beforeRaw = queryString(req, 'before');
-    const beforeId = queryString(req, 'beforeId');
-    const before = beforeRaw ? Number.parseInt(beforeRaw, 10) : Number.NaN;
-    const cursor = Number.isFinite(before) && beforeId ? { before, beforeId } : undefined;
-    const snapshots = listSnapshots(db, repoId, limit, cursor);
+    const snapshots = listSnapshots(db, repoId, limit, readCursor(req));
     const last = snapshots[snapshots.length - 1];
     return {
       snapshots,
       next: snapshots.length === limit && last ? { before: last.createdAt, beforeId: last.id } : null,
     };
   });
+
+  /** 파일 하나의 버전 — 그 경로를 바꾼 시점들. 변경 이력과 같은 커서. 없는 경로면 빈 목록. */
+  app.get('/repos/:repoId/files/versions', async (req) => {
+    const user = requireUser(req);
+    const { repoId } = req.params as { repoId: string };
+    requireAccess(db, repoId, user.id, 'viewer');
+    const path = normalizePath(queryString(req, 'path') ?? '');
+    if (!path) throw badRequest('경로가 올바르지 않습니다.');
+    const limit = queryInt(req, 'limit', 30, 100);
+    const versions = listFileVersions(db, repoId, path, limit, readCursor(req));
+    const last = versions[versions.length - 1];
+    return {
+      versions,
+      next: versions.length === limit && last ? { before: last.createdAt, beforeId: last.snapshotId } : null,
+    };
+  });
+
+  /** 휴지통 — 지워서 지금 없는 파일, 최근 것부터 MAX_TRASH_ENTRIES 개까지. */
+  app.get('/repos/:repoId/trash', async (req) => {
+    const user = requireUser(req);
+    const { repoId } = req.params as { repoId: string };
+    requireAccess(db, repoId, user.id, 'viewer');
+    return { entries: listTrash(db, repoId, MAX_TRASH_ENTRIES) };
+  });
+}
+
+/** 커서는 (created_at, id) 쌍이다. 같은 밀리초에 만들어진 스냅샷을 건너뛰지 않기 위해서다. */
+function readCursor(req: Parameters<typeof queryString>[0]): SnapshotCursor | undefined {
+  const beforeRaw = queryString(req, 'before');
+  const beforeId = queryString(req, 'beforeId');
+  const before = beforeRaw ? Number.parseInt(beforeRaw, 10) : Number.NaN;
+  return Number.isFinite(before) && beforeId ? { before, beforeId } : undefined;
 }

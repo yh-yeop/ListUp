@@ -112,7 +112,7 @@ export function normalizeServerUrl(raw: string): string | null {
  * - server-older / app-older: 닿았지만 API 버전이 달라, 또는 서버에 이 앱이 쓰는 기능이 없어 들어갈 수 없다
  */
 export type ServerCheck =
-  | { status: 'ok'; version: string | null }
+  | { status: 'ok'; version: string | null; name: string | null }
   | { status: 'unreachable' }
   | { status: 'server-older' | 'app-older'; version: string | null };
 
@@ -136,7 +136,9 @@ export async function checkServer(url: string): Promise<ServerCheck> {
     // apiLevel 이 없는 서버(1.1.0 까지)는 나눠 올리기·다운로드 링크가 없어 이 앱으로는 파일을 주고받지 못한다.
     const apiLevel = typeof body.apiLevel === 'number' ? body.apiLevel : 1;
     if (apiLevel < REQUIRED_SERVER_API_LEVEL) return { status: 'server-older', version };
-    return { status: 'ok', version };
+    // 주인이 정한 서버 이름 — 1.3.0 까지의 서버에는 없다.
+    const name = typeof body.serverName === 'string' && body.serverName.trim() ? body.serverName.trim() : null;
+    return { status: 'ok', version, name };
   } catch {
     return { status: 'unreachable' };
   } finally {

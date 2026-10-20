@@ -6,7 +6,7 @@ import { createSocket } from 'node:dgram';
 import { utilityProcess, type UtilityProcess } from 'electron';
 import type { HostSettingsPatch, HostState, HostStatus } from '@listup/shared';
 import type { ServerReply, ServerRequest } from './protocol.ts';
-import { dataDirOf, readSettings, writeSettings } from './settings.ts';
+import { cleanServerName, dataDirOf, readSettings, writeSettings } from './settings.ts';
 import { Tunnel } from './tunnel.ts';
 
 /** 서버 프로세스를 띄우는 데 필요한 파일 위치. main 이 개발/설치에 맞춰 정한다. */
@@ -124,6 +124,7 @@ export class Host extends EventEmitter {
       dataDir: dataDirOf(settings),
       autoStart: settings.autoStart,
       openAtLogin: settings.openAtLogin,
+      serverName: settings.serverName,
     };
   }
 
@@ -179,6 +180,7 @@ export class Host extends EventEmitter {
         LISTUP_PORT: String(settings.port),
         LISTUP_WEB_DIR: this.paths.serverWeb,
         LISTUP_LOG_LEVEL: process.env.LISTUP_LOG_LEVEL ?? 'info',
+        ...(settings.serverName ? { LISTUP_SERVER_NAME: settings.serverName } : {}),
       },
     });
   }
@@ -313,7 +315,9 @@ export class Host extends EventEmitter {
       }
       if (this.running && patch.port !== before.port) throw new Error('포트는 서버를 끈 뒤에 바꿀 수 있습니다.');
     }
-    const after = writeSettings(patch);
+    const after = writeSettings(
+      patch.serverName !== undefined ? { ...patch, serverName: cleanServerName(patch.serverName) } : patch,
+    );
     if (patch.tunnel !== undefined && patch.tunnel !== before.tunnel) {
       // Funnel 설정은 tailscaled 가 기억하므로, 공개를 그만두면 그것까지 꺼야 밖에서 안 들어온다.
       if (before.tunnel === 'tailscale') await Tunnel.disableTailscale();

@@ -29,6 +29,40 @@ export interface UploadItem {
   path: string;
 }
 
+/** 저장소에 지금 있는 파일 — 경로(NFC) → 크기·마지막으로 바뀐 때. */
+export type RemoteFiles = Map<string, { size: number; updatedAt: number }>;
+
+/** 저장소 목록(FileEntry)을 splitUnchanged 가 견줄 모양으로. */
+export function remoteFilesOf(files: { path: string; size: number; updatedAt: number }[]): RemoteFiles {
+  return new Map(files.map((file) => [file.path.normalize('NFC'), { size: file.size, updatedAt: file.updatedAt }]));
+}
+
+/**
+ * 이미 올라가 있는 파일을 가른다 — 멈췄다가 같은 폴더를 다시 올릴 때 처음부터 다시 보내지 않게.
+ * 같은 경로에 크기가 같고, 기기의 파일이 저장소에 올라간 때 뒤로 고쳐지지 않았으면 같은 파일로 본다.
+ * 크기만 보면 태그만 고친 mp3 처럼 크기가 그대로인 수정을 놓치므로 고친 시각도 본다.
+ * 고친 시각을 모르는 파일은 늘 올린다(서버가 내용이 같으면 반영하지 않는다).
+ */
+export function splitUnchanged(
+  items: UploadItem[],
+  remote: RemoteFiles,
+): { changed: UploadItem[]; unchanged: UploadItem[] } {
+  const changed: UploadItem[] = [];
+  const unchanged: UploadItem[] = [];
+  for (const item of items) {
+    const existing = remote.get(item.path.normalize('NFC'));
+    const modified = item.source.kind === 'desktop' ? undefined : item.source.lastModified;
+    const same =
+      existing !== undefined &&
+      existing.size === item.source.size &&
+      modified !== undefined &&
+      modified > 0 &&
+      modified <= existing.updatedAt;
+    (same ? unchanged : changed).push(item);
+  }
+  return { changed, unchanged };
+}
+
 /** 조각을 다시 보내는 최대 횟수 (연속 실패). */
 const MAX_RETRIES = 5;
 
@@ -64,14 +98,41 @@ function openReader(source: UploadSource): ChunkReader {
   };
 }
 
-const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+/** 사용자가 멈췄다. 실패가 아니므로 실패 목록에 넣지 않는다. */
+export class TransferCancelled extends Error {
+  constructor() {
+    super('멈췄습니다.');
+    this.name = 'TransferCancelled';
+  }
+}
 
-/** 파일 하나를 나눠 올려 blob 을 받는다. onSent 에는 이 파일에서 보낸 바이트를 알려 준다. */
+function throwIfCancelled(signal?: AbortSignal): void {
+  if (signal?.aborted) throw new TransferCancelled();
+}
+
+/** ms 만큼 기다린다. 멈추면 바로 끝난다. */
+const wait = (ms: number, signal?: AbortSignal) =>
+  new Promise<void>((resolve) => {
+    const timer = setTimeout(done, ms);
+    function done() {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', done);
+      resolve();
+    }
+    signal?.addEventListener('abort', done);
+  });
+
+/**
+ * 파일 하나를 나눠 올려 blob 을 받는다. onSent 에는 이 파일에서 보낸 바이트를 알려 준다.
+ * signal 로 멈추면 보내던 조각을 끊고 TransferCancelled 를 던진다(서버의 세션은 치운다).
+ */
 export async function uploadInChunks(
   repoId: string,
   source: UploadSource,
   onSent: (bytes: number) => void,
+  signal?: AbortSignal,
 ): Promise<UploadedBlob> {
+  throwIfCancelled(signal);
   const { upload } = await api.startUpload(repoId, { name: source.name, size: source.size });
   const reader = openReader(source);
   let finished = false;
@@ -79,15 +140,24 @@ export async function uploadInChunks(
     let offset = upload.received;
     let retries = 0;
     while (offset < upload.size) {
+      throwIfCancelled(signal);
       const length = Math.min(upload.chunkSize, upload.size - offset);
       try {
         const bytes = await reader.read(offset, length);
         const base = offset;
-        const { upload: next } = await api.putChunk(upload.id, offset, bytes, (loaded) => onSent(base + loaded));
+        const { upload: next } = await api.putChunk(
+          upload.id,
+          offset,
+          bytes,
+          (loaded) => onSent(base + loaded),
+          signal,
+        );
         offset = next.received;
         retries = 0;
         onSent(offset);
       } catch (err) {
+        // 멈춰서 끊긴 것은 다시 보내지 않는다.
+        throwIfCancelled(signal);
         // 서버가 받은 위치를 알려 주면(앞선 응답을 못 받았거나 조각이 겹침) 거기서 다시.
         const received = (err as ApiError)?.details as { received?: unknown } | undefined;
         if (err instanceof ApiError && err.status === 409 && typeof received?.received === 'number') {
@@ -97,7 +167,8 @@ export async function uploadInChunks(
         // 연결이 끊긴 것이면 잠시 뒤 받은 위치를 물어 이어 간다.
         if (err instanceof ApiError && err.status === 0 && retries < MAX_RETRIES) {
           retries += 1;
-          await wait(Math.min(1000 * 2 ** (retries - 1), 15_000));
+          await wait(Math.min(1000 * 2 ** (retries - 1), 15_000), signal);
+          throwIfCancelled(signal);
           try {
             offset = (await api.getUpload(upload.id)).upload.received;
           } catch {
@@ -108,6 +179,7 @@ export async function uploadInChunks(
         throw err;
       }
     }
+    throwIfCancelled(signal);
     const { blob } = await api.completeUpload(upload.id);
     finished = true;
     return blob;
@@ -123,18 +195,28 @@ export interface UploadOutcome {
   uploaded: { item: UploadItem; blob: UploadedBlob }[];
   /** 올리지 못한 파일과 이유 */
   failures: { item: UploadItem; message: string }[];
+  /** 사용자가 도중에 멈췄다. 멈춘 뒤의 파일은 uploaded 에도 failures 에도 없다. */
+  cancelled: boolean;
 }
 
-/** 파일 여러 개를 차례로 올린다. 권한이 없으면 나머지도 같은 이유로 실패하므로 거기서 멈춘다. */
+/**
+ * 파일 여러 개를 차례로 올린다. 권한이 없으면 나머지도 같은 이유로 실패하므로 거기서 멈춘다.
+ * signal 로 멈추면 올리던 파일을 끊고, 그때까지 다 올린 파일만 돌려준다.
+ */
 export async function uploadMany(
   repoId: string,
   items: UploadItem[],
   onProgress: (progress: UploadProgress) => void,
+  signal?: AbortSignal,
 ): Promise<UploadOutcome> {
   const totalBytes = items.reduce((sum, item) => sum + item.source.size, 0);
-  const outcome: UploadOutcome = { uploaded: [], failures: [] };
+  const outcome: UploadOutcome = { uploaded: [], failures: [], cancelled: false };
   let doneBytes = 0;
   for (const [index, item] of items.entries()) {
+    if (signal?.aborted) {
+      outcome.cancelled = true;
+      break;
+    }
     const report = (sent: number) =>
       onProgress({
         sentBytes: doneBytes + sent,
@@ -145,9 +227,13 @@ export async function uploadMany(
       });
     report(0);
     try {
-      const blob = await uploadInChunks(repoId, item.source, report);
+      const blob = await uploadInChunks(repoId, item.source, report, signal);
       outcome.uploaded.push({ item, blob });
     } catch (err) {
+      if (err instanceof TransferCancelled) {
+        outcome.cancelled = true;
+        break;
+      }
       outcome.failures.push({ item, message: err instanceof ApiError ? err.message : '올리지 못했습니다.' });
       if (err instanceof ApiError && (err.code === 'forbidden' || err.status === 401)) {
         for (const rest of items.slice(index + 1)) outcome.failures.push({ item: rest, message: '권한 없음' });
@@ -160,13 +246,17 @@ export async function uploadMany(
   return outcome;
 }
 
-/** 파일 여러 개를 올려 커밋 하나로 반영한다. 하나도 못 올렸으면 커밋하지 않는다. */
+/**
+ * 파일 여러 개를 올려 커밋 하나로 반영한다. 하나도 못 올렸으면 커밋하지 않는다.
+ * 도중에 멈춰도 그때까지 다 올린 파일은 반영한다 — 큰 폴더를 멈췄을 때 올린 만큼은 남게.
+ */
 export async function uploadAndCommit(
   repoId: string,
   items: UploadItem[],
   onProgress: (progress: UploadProgress) => void,
+  signal?: AbortSignal,
 ): Promise<UploadOutcome & { commit: CommitResult | null }> {
-  const outcome = await uploadMany(repoId, items, onProgress);
+  const outcome = await uploadMany(repoId, items, onProgress, signal);
   if (outcome.uploaded.length === 0) return { ...outcome, commit: null };
   const commit = await api.commitFiles(
     repoId,

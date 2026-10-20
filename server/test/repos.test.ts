@@ -325,5 +325,17 @@ describe('서버 상태', () => {
     assert.equal(body.apiLevel, API_LEVEL);
     const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
     assert.equal(body.version, pkg.version);
+    // 이름을 정하지 않은 서버는 null.
+    assert.equal(body.serverName, null);
+  });
+
+  it('health 는 주인이 정한 서버 이름을 알려준다', async () => {
+    const named = await createHarness({ serverName: '우리집 음악서버' });
+    try {
+      const res = await named.app.inject({ method: 'GET', url: '/api/health' });
+      assert.equal(res.json().serverName, '우리집 음악서버');
+    } finally {
+      await named.close();
+    }
   });
 });

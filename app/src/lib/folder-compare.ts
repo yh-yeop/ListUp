@@ -34,18 +34,21 @@ export interface Comparison {
 
 const nfc = (value: string) => value.normalize('NFC');
 
-/** 저장소 폴더 아래의 모든 파일. 한 번에 주지 않는 서버(1.2 까지)면 폴더마다 물어 모은다. */
-export async function listRepoFolder(repoId: string, basePath: string): Promise<RepoFile[]> {
+/**
+ * 저장소 폴더 아래의 모든 파일. 한 번에 주지 않는 서버(1.2 까지)면 폴더마다 물어 모은다.
+ * snapshotId 를 주면 그 과거 시점의 목록.
+ */
+export async function listRepoFolder(repoId: string, basePath: string, snapshotId?: string): Promise<RepoFile[]> {
   const prefix = basePath ? `${basePath}/` : '';
   const relative = (file: FileEntry): RepoFile => ({ ...file, relativePath: file.path.slice(prefix.length) });
 
-  const { tree } = await api.listFiles(repoId, basePath, undefined, { recursive: true });
+  const { tree } = await api.listFiles(repoId, basePath, snapshotId, { recursive: true });
   if (tree.recursive) return tree.files.map(relative);
 
   const files: FileEntry[] = [...tree.files];
   const pending = tree.dirs.map((dir) => dir.path);
   while (pending.length > 0) {
-    const { tree: sub } = await api.listFiles(repoId, pending.shift()!);
+    const { tree: sub } = await api.listFiles(repoId, pending.shift()!, snapshotId);
     files.push(...sub.files);
     pending.push(...sub.dirs.map((dir) => dir.path));
   }

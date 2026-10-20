@@ -327,4 +327,11 @@ export const MIGRATIONS: {
       CREATE INDEX idx_password_resets_user ON password_resets(user_id, used_at);
     `,
   },
+  {
+    // 파일 하나의 버전 목록·휴지통은 경로로 변경을 찾는다. 기본 키(snapshot_id, path)로는 경로만으로 못 찾는다.
+    version: 8,
+    up: `
+      CREATE INDEX idx_snapchanges_path ON snapshot_changes(path);
+    `,
+  },
 ];

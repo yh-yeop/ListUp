@@ -28,14 +28,17 @@ export async function pickFiles(multiple = true): Promise<UploadSource[]> {
         file: asset.file,
         name: asset.name,
         size: asset.size ?? asset.file.size,
+        lastModified: asset.file.lastModified,
       };
     }
+    // 네이티브 선택기는 캐시로 복사한 시각을 줄 수 있다 — 그러면 늘 "고친 뒤"로 보여 다시 올린다(안전한 쪽).
     return {
       kind: 'native' as const,
       uri: asset.uri,
       name: asset.name,
       size: asset.size ?? 0,
       mimeType: asset.mimeType ?? 'application/octet-stream',
+      lastModified: asset.lastModified,
     };
   });
 }
@@ -62,13 +65,15 @@ export async function pickFolder(): Promise<UploadSource[]> {
       if (entry instanceof Directory) {
         walk(entry, `${prefix}/${entry.name}`);
       } else {
+        const info = entry.info();
         sources.push({
           kind: 'native',
           uri: entry.uri,
           name: entry.name,
-          size: entry.info().size ?? 0,
+          size: info.size ?? 0,
           mimeType: 'application/octet-stream',
           relativePath: `${prefix}/${entry.name}`,
+          lastModified: info.modificationTime,
         });
       }
     }
@@ -98,6 +103,7 @@ function pickFolderOnWeb(): Promise<UploadSource[]> {
           name: file.name,
           size: file.size,
           relativePath: (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name,
+          lastModified: file.lastModified,
         })),
       );
     });

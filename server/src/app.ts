@@ -186,6 +186,8 @@ export async function buildApp(ctx: AppContext, options: BuildOptions = {}): Pro
     apiVersion: API_VERSION,
     apiLevel: API_LEVEL,
     version: SERVER_VERSION,
+    // 앱이 서버를 더할 때 이름 칸에 미리 넣는다. 주인이 정하지 않았으면 null.
+    serverName: ctx.config.serverName,
   }));
 
   await app.register(async (api) => {

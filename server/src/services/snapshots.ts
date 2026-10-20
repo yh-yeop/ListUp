@@ -1,4 +1,4 @@
-import type { DirEntry, FileEntry, Snapshot, TreeListing } from '@listup/shared';
+import type { DirEntry, FileEntry, FileVersion, Snapshot, TrashEntry, TreeListing } from '@listup/shared';
 import { baseName } from '@listup/shared';
 import type { Db } from '../db/index.ts';
 import { newId } from '../lib/ids.ts';
@@ -342,4 +342,108 @@ export function snapshotBelongsTo(db: Db, snapshotId: string, repoId: string): b
     .prepare<[string, string], { id: string }>(`SELECT id FROM snapshots WHERE id = ? AND repo_id = ?`)
     .get(snapshotId, repoId);
   return row !== undefined;
+}
+
+interface VersionRow {
+  snapshot_id: string;
+  created_at: number;
+  author_id: string;
+  display_name: string;
+  message: string;
+  blob_hash: string | null;
+  size: number | null;
+  prev_blob_hash: string | null;
+}
+
+/**
+ * 파일 하나의 버전 — 그 경로를 바꾼 스냅샷들, 최근 것부터. 옮긴 파일은 옮긴 때부터다
+ * (이동은 옛 경로의 삭제 + 새 경로의 추가로 남는다).
+ */
+export function listFileVersions(
+  db: Db,
+  repoId: string,
+  path: string,
+  limit: number,
+  cursor?: SnapshotCursor,
+): FileVersion[] {
+  const before = cursor?.before ?? Number.MAX_SAFE_INTEGER;
+  const beforeId = cursor?.beforeId ?? '';
+  const rows = db
+    .prepare<[string, string, number, number, string, number], VersionRow>(
+      `SELECT s.id AS snapshot_id, s.created_at, s.author_id, u.display_name, s.message,
+              c.blob_hash, c.size, c.prev_blob_hash
+         FROM snapshot_changes c
+         JOIN snapshots s ON s.id = c.snapshot_id
+         JOIN users u ON u.id = s.author_id
+        WHERE c.path = ? AND s.repo_id = ?
+          AND (s.created_at < ? OR (s.created_at = ? AND s.id < ?))
+        ORDER BY s.created_at DESC, s.id DESC
+        LIMIT ?`,
+    )
+    .all(path, repoId, before, before, beforeId, limit);
+  return rows.map((row) => ({
+    snapshotId: row.snapshot_id,
+    createdAt: row.created_at,
+    author: { id: row.author_id, displayName: row.display_name },
+    message: row.message,
+    op: row.blob_hash === null ? 'deleted' : row.prev_blob_hash === null ? 'added' : 'updated',
+    blobHash: row.blob_hash,
+    size: row.size,
+  }));
+}
+
+interface TrashRow {
+  path: string;
+  snapshot_id: string;
+  parent_id: string;
+  message: string;
+  created_at: number;
+  author_id: string;
+  display_name: string;
+  prev_blob_hash: string;
+  prev_size: number;
+  prev_mime_type: string;
+}
+
+/**
+ * 휴지통 — 지워서 지금 없는 파일, 최근 지운 것부터. 다음은 뺀다.
+ * - 지금 그 경로에 파일이 있다(다시 올렸거나 되돌렸다).
+ * - 같은 스냅샷에서 같은 내용이 다른 경로로 생겼다 — 이름 바꾸기·옮기기다.
+ * - 같은 경로를 그 뒤에 또 바꿨다 — 마지막으로 지운 한 번만 남긴다.
+ * 지운 내용은 이력이 참조하므로 GC 가 지우지 않는다. 언제든 되돌릴 수 있다.
+ */
+export function listTrash(db: Db, repoId: string, limit: number): TrashEntry[] {
+  const rows = db
+    .prepare<[string, number], TrashRow>(
+      `SELECT c.path, s.id AS snapshot_id, s.parent_id, s.message, s.created_at, s.author_id, u.display_name,
+              c.prev_blob_hash, c.prev_size, c.prev_mime_type
+         FROM snapshot_changes c
+         JOIN snapshots s ON s.id = c.snapshot_id
+         JOIN users u ON u.id = s.author_id
+        WHERE s.repo_id = ?
+          AND c.blob_hash IS NULL AND c.prev_blob_hash IS NOT NULL AND s.parent_id IS NOT NULL
+          AND NOT EXISTS (SELECT 1 FROM repo_files f WHERE f.repo_id = s.repo_id AND f.path = c.path)
+          AND NOT EXISTS (
+                SELECT 1 FROM snapshot_changes m
+                 WHERE m.snapshot_id = c.snapshot_id AND m.prev_blob_hash IS NULL AND m.blob_hash = c.prev_blob_hash)
+          AND NOT EXISTS (
+                SELECT 1 FROM snapshot_changes l JOIN snapshots ls ON ls.id = l.snapshot_id
+                 WHERE l.path = c.path AND ls.repo_id = s.repo_id
+                   AND (ls.created_at > s.created_at OR (ls.created_at = s.created_at AND ls.id > s.id)))
+        ORDER BY s.created_at DESC, s.id DESC, c.path
+        LIMIT ?`,
+    )
+    .all(repoId, limit);
+  return rows.map((row) => ({
+    path: row.path,
+    name: baseName(row.path),
+    snapshotId: row.snapshot_id,
+    beforeSnapshotId: row.parent_id,
+    message: row.message,
+    deletedAt: row.created_at,
+    deletedBy: { id: row.author_id, displayName: row.display_name },
+    blobHash: row.prev_blob_hash,
+    size: row.prev_size,
+    mimeType: row.prev_mime_type,
+  }));
 }

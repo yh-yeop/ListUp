@@ -43,6 +43,8 @@ export interface Config {
   gcMinAgeMs: number;
   /** GC 를 도는 주기(ms). 0 이면 주기 실행을 하지 않는다(수동 `npm run gc` 는 가능). */
   gcIntervalMs: number;
+  /** 서버 주인이 붙인 이름. health 로 알려 앱이 서버를 더할 때 이름 기본값으로 쓴다. 없으면 null. */
+  serverName: string | null;
 }
 
 const MINUTE = 60 * 1000;
@@ -70,6 +72,7 @@ const KNOWN_ENV = new Set([
   'LISTUP_LOGIN_BLOCK_MIN',
   'LISTUP_GC_MIN_AGE_HOURS',
   'LISTUP_GC_INTERVAL_HOURS',
+  'LISTUP_SERVER_NAME',
 ]);
 
 const LOG_LEVELS = ['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'];
@@ -121,6 +124,18 @@ function envTrustProxy(): boolean | string[] {
   return entries;
 }
 
+/** 서버 이름의 최대 길이 — 앱의 서버 이름 입력칸과 같다. */
+export const MAX_SERVER_NAME_LENGTH = 60;
+
+/** `LISTUP_SERVER_NAME` — 앞뒤 공백·제어 문자를 떼고 길이를 자른다. 비면 null. */
+function envServerName(): string | null {
+  const raw = process.env.LISTUP_SERVER_NAME;
+  if (!raw) return null;
+  // eslint-disable-next-line no-control-regex
+  const clean = raw.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim();
+  return clean ? [...clean].slice(0, MAX_SERVER_NAME_LENGTH).join('') : null;
+}
+
 const warnedUnknownEnv = new Set<string>();
 
 /** 이름을 잘못 쓴 `LISTUP_*` 변수는 무시되므로, 한 번씩 경고로 알려준다. */
@@ -169,6 +184,7 @@ export function loadConfig(overrides: Partial<Config> = {}): Config {
     loginBlockMs: envInt('LISTUP_LOGIN_BLOCK_MIN', 15, { min: 1 }) * MINUTE,
     gcMinAgeMs: envInt('LISTUP_GC_MIN_AGE_HOURS', 24, { min: 0 }) * HOUR,
     gcIntervalMs: envInt('LISTUP_GC_INTERVAL_HOURS', 6, { min: 0 }) * HOUR,
+    serverName: envServerName(),
     ...overrides,
   };
 }

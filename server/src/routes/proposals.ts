@@ -274,7 +274,7 @@ export async function registerProposalRoutes(app: FastifyInstance, ctx: AppConte
       const conflicts = findConflicts(db, changes, row.base_snapshot_id, repo.head_snapshot_id);
       if (conflicts.length > 0) {
         throw conflict(
-          '제안 이후 같은 파일이 바뀌어 병합할 수 없습니다. 최신 내용으로 다시 제안해 주세요.',
+          '제안 이후 같은 파일이 바뀌어 반영할 수 없습니다. 최신 내용으로 다시 제안해 주세요.',
           { conflicts },
         );
       }
@@ -283,7 +283,7 @@ export async function registerProposalRoutes(app: FastifyInstance, ctx: AppConte
       // 제안 이후 head 에 같은 이름의 파일/폴더가 생겼을 수 있다 (예: 제안은 "a/b" 추가, head 에 파일 "a").
       const pathConflicts = findPathConflicts(head, changes);
       if (pathConflicts.length > 0) {
-        throw conflict('제안 이후 이름이 겹치는 파일이나 폴더가 생겨 병합할 수 없습니다.', {
+        throw conflict('제안 이후 이름이 겹치는 파일이나 폴더가 생겨 반영할 수 없습니다.', {
           conflicts: pathConflicts,
         });
       }
@@ -299,7 +299,7 @@ export async function registerProposalRoutes(app: FastifyInstance, ctx: AppConte
         repoId: row.repo_id,
         parentId: repo.head_snapshot_id,
         authorId: user.id,
-        message: `제안 #${row.number} 병합: ${row.title}`,
+        message: `제안 #${row.number} 반영: ${row.title}`,
         manifest: nextManifest,
         now,
       });
@@ -324,7 +324,7 @@ export async function registerProposalRoutes(app: FastifyInstance, ctx: AppConte
     if (row.author_id !== user.id && !hasRole(role, 'editor')) {
       throw forbidden('작성자 또는 편집자만 닫을 수 있습니다.');
     }
-    if (row.status === 'merged') throw conflict('이미 병합된 제안입니다.');
+    if (row.status === 'merged') throw conflict('이미 반영된 제안입니다.');
     if (row.status === 'closed') return { proposal: detail(ctx, proposalId) };
 
     db.prepare(`UPDATE proposals SET status = 'closed', updated_at = ? WHERE id = ?`).run(

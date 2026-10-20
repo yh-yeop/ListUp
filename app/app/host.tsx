@@ -2,7 +2,7 @@ import * as Clipboard from 'expo-clipboard';
 import { useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import { Linking, Pressable, Switch, View } from 'react-native';
-import type { HostStatus, HostTools, HostTunnelMode } from '@listup/shared';
+import { formatDateTime, type HostStatus, type HostTools, type HostTunnelMode } from '@listup/shared';
 import { HOST_STATE_BADGE, useEnterOwnServer } from '../src/components/HostCard';
 import {
   Badge,
@@ -21,7 +21,7 @@ import {
   Subtitle,
   Title,
 } from '../src/components/ui';
-import { notify } from '../src/lib/dialogs';
+import { notifySuccess } from '../src/lib/dialogs';
 import { desktopBridge, desktopErrorMessage, useHostStatus } from '../src/lib/desktop';
 import { fontSize, monoFont, spacing, useTheme } from '../src/theme';
 
@@ -141,7 +141,7 @@ function CopyLine({ label, value }: { label: string; value: string }) {
         icon="copy-outline"
         label={`${label} 복사`}
         onPress={() => {
-          void Clipboard.setStringAsync(value).then(() => notify('주소를 복사했습니다.'));
+          void Clipboard.setStringAsync(value).then(() => notifySuccess('주소를 복사했습니다.'));
         }}
       />
     </Row>
@@ -303,9 +303,7 @@ function ResetCodeCard({ running }: { running: boolean }) {
     }
   };
 
-  const until = issued
-    ? new Date(issued.expiresAt).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })
-    : '';
+  const until = issued ? formatDateTime(issued.expiresAt) : '';
 
   return (
     <Card style={{ gap: spacing.md }}>
@@ -335,7 +333,7 @@ function ResetCodeCard({ running }: { running: boolean }) {
       />
       {!running ? <Caption>서버가 켜져 있을 때 발급할 수 있습니다.</Caption> : null}
       {issued ? (
-        <CopyLine label={`${issued.email} · ${until} 까지`} value={issued.code} />
+        <CopyLine label={`${issued.email} · ${until}까지`} value={issued.code} />
       ) : null}
     </Card>
   );
@@ -376,10 +374,34 @@ function StartupCard({ status, stopped, act }: { status: HostStatus; stopped: bo
   useEffect(() => setPort(String(status.port)), [status.port]);
   const portNumber = Number(port);
   const portValid = /^\d+$/.test(port) && portNumber >= 1 && portNumber <= 65535;
+  const [name, setName] = useState(status.serverName ?? '');
+  useEffect(() => setName(status.serverName ?? ''), [status.serverName]);
+  const nameChanged = name.trim() !== (status.serverName ?? '');
 
   return (
     <Card style={{ gap: spacing.lg }}>
       <Body style={{ fontWeight: '600' }}>실행</Body>
+      <Field
+        label="서버 이름"
+        hint={`초대받은 사람이 서버를 더할 때 이 이름이 목록에 들어갑니다.${stopped ? '' : ' 서버를 다시 켜면 적용됩니다.'}`}
+      >
+        <Row gap={spacing.sm}>
+          <Input
+            value={name}
+            onChangeText={setName}
+            placeholder="예: 우리집 음악서버"
+            maxLength={60}
+            style={{ flex: 1 }}
+          />
+          <Button
+            label="이름 저장"
+            variant="secondary"
+            compact
+            disabled={!nameChanged}
+            onPress={() => void act('server-name', () => host.update({ serverName: name.trim() || null }))}
+          />
+        </Row>
+      </Field>
       <SwitchRow
         label="앱을 열 때 서버도 켜기"
         description="ListUp 을 켜면 서버가 함께 켜집니다."
@@ -445,7 +467,7 @@ function DataCard({ status, stopped, act, busy }: { status: HostStatus; stopped:
           onPress={() =>
             void act('backup', async () => {
               const dir = await host.backup();
-              if (dir) notify('백업했습니다.', `${dir}\n\nDB 사본과 blobs 폴더를 담았습니다. 같은 폴더에 다시 백업하면 새 파일만 더해집니다.`);
+              if (dir) notifySuccess('백업했습니다.', `${dir}\n\nDB 사본과 blobs 폴더를 담았습니다. 같은 폴더에 다시 백업하면 새 파일만 더해집니다.`);
             })
           }
         />

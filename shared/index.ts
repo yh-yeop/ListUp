@@ -37,7 +37,7 @@ export const ROLE_LABEL: Record<Role, string> = {
 /** 역할별로 할 수 있는 일 요약 (UI 설명용). */
 export const ROLE_DESCRIPTION: Record<Role, string> = {
   viewer: '파일을 보고 내려받을 수 있고, 변경 제안을 올릴 수 있습니다.',
-  editor: '파일을 직접 올리고 지울 수 있고, 다른 사람의 제안을 병합할 수 있습니다.',
+  editor: '파일을 직접 올리고 지울 수 있고, 다른 사람의 제안을 반영할 수 있습니다.',
   owner: '저장소 설정과 멤버를 관리할 수 있습니다.',
 };
 
@@ -98,6 +98,40 @@ export interface Snapshot {
   fileCount: number;
   totalSize: number;
 }
+
+/** 파일 하나가 어떤 시점에 어떻게 바뀌었는지. GET /repos/:id/files/versions 의 한 줄. */
+export interface FileVersion {
+  /** 이 변경을 만든 스냅샷. 내용을 받을 때 이 시점을 쓴다(삭제면 받을 것이 없다). */
+  snapshotId: string;
+  createdAt: number;
+  author: PublicUser;
+  /** 스냅샷 메시지 (예: "파일 3개 올림", "제안 #2 반영: …"). */
+  message: string;
+  op: 'added' | 'updated' | 'deleted';
+  /** 이 시점 뒤의 내용. 삭제면 null. */
+  blobHash: string | null;
+  size: number | null;
+}
+
+/** 휴지통 — 지워서 지금 저장소에 없는 파일. 지운 뒤 다시 생겼거나 옮긴 것은 빠진다. */
+export interface TrashEntry {
+  path: string;
+  name: string;
+  /** 지운 스냅샷. 같은 때 지운 것끼리 묶는 데 쓴다. */
+  snapshotId: string;
+  /** 지우기 바로 전 시점 — 지운 파일을 받을 때 이 시점을 쓴다. */
+  beforeSnapshotId: string;
+  message: string;
+  deletedAt: number;
+  deletedBy: PublicUser;
+  /** 지우기 전 내용. 되돌리기는 이 값으로 다시 반영한다. */
+  blobHash: string;
+  size: number;
+  mimeType: string;
+}
+
+/** 휴지통에 한 번에 보여 주는 최대 수 (최근 지운 것부터). */
+export const MAX_TRASH_ENTRIES = 500;
 
 export interface FileEntry {
   path: string;
@@ -183,7 +217,7 @@ export type ProposalStatus = 'open' | 'merged' | 'closed';
 
 export const PROPOSAL_STATUS_LABEL: Record<ProposalStatus, string> = {
   open: '검토 중',
-  merged: '병합됨',
+  merged: '반영됨',
   closed: '닫힘',
 };
 
@@ -308,10 +342,30 @@ export function formatRelativeTime(timestamp: number, now: number = Date.now()):
   if (diff < hour) return `${Math.floor(diff / minute)}분 전`;
   if (diff < day) return `${Math.floor(diff / hour)}시간 전`;
   if (diff < 30 * day) return `${Math.floor(diff / day)}일 전`;
+  return formatDate(new Date(timestamp));
+}
+
+const pad2 = (value: number) => String(value).padStart(2, '0');
+
+/** `2026.10.20` — 화면에 날짜를 쓸 때 늘 이 모양으로. */
+function formatDate(date: Date): string {
+  return `${date.getFullYear()}.${pad2(date.getMonth() + 1)}.${pad2(date.getDate())}`;
+}
+
+/**
+ * 앞으로 올 시각(만료 등) — `오늘 15:20`, `내일 09:00`, 그 밖에는 `2026.10.27 15:20`.
+ * 지난 시각은 formatRelativeTime 으로. Intl 을 쓰지 않는다(Hermes 에서 기기마다 다르게 나온다).
+ */
+export function formatDateTime(timestamp: number, now: number = Date.now()): string {
   const date = new Date(timestamp);
-  return `${date.getFullYear()}.${String(date.getMonth() + 1).padStart(2, '0')}.${String(
-    date.getDate(),
-  ).padStart(2, '0')}`;
+  const time = `${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
+  const today = new Date(now);
+  const tomorrow = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1);
+  const sameDay = (a: Date, b: Date) =>
+    a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+  if (sameDay(date, today)) return `오늘 ${time}`;
+  if (sameDay(date, tomorrow)) return `내일 ${time}`;
+  return `${formatDate(date)} ${time}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -390,11 +444,12 @@ export const API_VERSION = 1;
  * 서버에는 들어가지 않는다. 이 필드가 없는 서버(1.1.0 까지)는 1 이다.
  *
  * - 2 (1.2.0): 나눠 올리기, 여러 파일 커밋, 다운로드 링크·폴더 zip, Range, 비밀번호 재설정
+ * - 3 (1.5.0): 파일 버전 목록(`/files/versions`), 휴지통(`/trash`). 없는 서버에서는 앱이 그 화면만 막는다.
  *
  * API_VERSION 을 올리지 않은 이유: 옛 앱(1.1.0)은 API_VERSION 이 같아야만 들어가서, 올리면 멀쩡히
  * 쓸 수 있는 새 서버에서 옛 앱이 모두 막힌다.
  */
-export const API_LEVEL = 2;
+export const API_LEVEL = 3;
 
 /** 이 앱이 쓰는 기능이 있는 가장 낮은 서버 API_LEVEL. 앱의 업로드·내려받기가 수준 2 를 쓴다. */
 export const REQUIRED_SERVER_API_LEVEL = 2;
@@ -411,6 +466,8 @@ export interface HealthResponse {
   apiLevel: number;
   /** 서버 버전(package.json). 사람에게 보여주는 용도다 — 호환 판단은 apiVersion 으로 한다. */
   version: string;
+  /** 서버 주인이 붙인 이름(LISTUP_SERVER_NAME). 정하지 않았으면 null, 1.3.0 까지의 서버에는 없다. */
+  serverName?: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -501,6 +558,8 @@ export interface HostStatus {
   autoStart: boolean;
   /** Windows 에 로그인하면 앱을 (창 없이) 켤지. */
   openAtLogin: boolean;
+  /** 서버 이름(LISTUP_SERVER_NAME). 들어오는 사람의 서버 목록에 이 이름으로 보인다. 없으면 null. */
+  serverName: string | null;
 }
 
 export interface HostSettingsPatch {
@@ -508,6 +567,8 @@ export interface HostSettingsPatch {
   tunnel?: HostTunnelMode;
   autoStart?: boolean;
   openAtLogin?: boolean;
+  /** 빈 문자열이나 null 이면 이름을 지운다. 서버를 다시 켜면 적용된다. */
+  serverName?: string | null;
 }
 
 /** 공개 방식에 필요한 프로그램이 준비됐는지. */
