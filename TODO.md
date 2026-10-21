@@ -24,7 +24,7 @@ PC 실행이 가능하다. 코드를 만지면 테스트·타입 검사를 바�
 - **v1.2.0 준비** (2026-09-14): 서버 테스트 150개, 타입 검사, 웹 흐름 테스트 147개(`npm run test:e2e`)
   통과. 네이티브 전용 경로(조각 읽기·폴더 선택·다운로드 작업·secure-store)는 아래 *검증 대기 — v1.2.0 폰*.
 - **지금 (2026-09-16):** 최신 릴리즈 **v1.2.1** (안드로이드 내려받기를 저장 폴더로). 서버 데이터는 2026-09-14 에
-  비우고 새로 시작 — 음악 서버·`music@listup.local` 은 없다. 테스트 서버는 **https://listup.tailffc023.ts.net**
+  비우고 새로 시작 — 음악 서버·`music@listup.local` 은 없다. 테스트 서버는 이 PC 의 Tailscale Funnel 고정 주소(`https://<내 노드>.<tailnet>.ts.net`)
   (Tailscale Funnel, `npm run serve -- --tunnel`), 테스트 계정·저장소·초대가 하나씩 있다. 폰에서 v1.2 체크리스트
   (*검증 대기 — v1.2.0 폰*) 진행 중: 초대 링크로 가입·참여, 조각 업로드는 확인됨.
 - **v1.3.0 (2026-09-17):** PC 앱(클라이언트 + 이 PC 에서 서버 열기), 내 폴더와 비교, 터널 뒤 로그인 제한 수정.
@@ -39,7 +39,7 @@ PC 실행이 가능하다. 코드를 만지면 테스트·타입 검사를 바�
   이미 올린 파일 건너뛰기. 릴리즈 노트 `docs/releases/v1.5.0.md`. 서버 171·웹 흐름 186·PC 앱 흐름 32 통과.
   **안드로이드 서명 키를 잃었다**(백업 없이 PC 교체). 1.5.0 부터 새 키 — 폰은 이번 한 번 지우고 새로 설치(릴리즈 노트).
   새 키의 지문을 `app/android-signing-cert.json` 에 고정했고, 키가 없거나 다르면 빌드가 멈춘다. 키 백업:
-  외장 디스크 `E:\ListUp-안드로이드-서명키\` (이 PC 의 원본은 `~/.listup`). PC 를 옮기면 이 둘을 꼭 챙길 것.
+  저장소 밖 외장 매체에 따로 있다(위치는 리포에 적지 않는다. 이 PC 의 원본은 `~/.listup`). PC 를 옮기면 이 둘을 꼭 챙길 것.
 - **PC 앱 (2026-09-16):** 설치형 클라이언트 + **이 PC 에서 서버 열기**를 한 앱으로(아래 ④). 서버 테스트 157개,
   타입 검사(서버·앱·desktop), 웹 흐름 147개, PC 앱 흐름 21개(`npm run test:desktop`)를 개발 묶음과 **설치본
   (win-unpacked)** 양쪽에서 통과. 설치 파일 `release/listup-1.2.1-windows-setup.exe`(115MB)는 만들었지만
@@ -171,8 +171,8 @@ Cloudflare 가 로그에 직접 적어 두었듯, 빠른 터널은 **계정 없�
 계정을 지남. 대안인 DDNS 방식(주소만 주고 각자 포트포워딩)은 약관 문제는 없지만 공인 IP·공유기 설정이 필요.
 도메인 없이 개인 고정 주소가 필요하면 Tailscale Funnel(`*.ts.net`)이 남아 있다.
 
-**내 서버는 Tailscale Funnel 로 고정 (2026-09-16).** 이 PC 를 `listup` 으로 등록해
-**https://listup.tailffc023.ts.net** . `tailscale funnel --bg 4000` 이라 창을 닫거나 재부팅해도 남고(서버가
+**내 서버는 Tailscale Funnel 로 고정 (2026-09-16).** 이 PC 를 Tailscale 노드로 등록해
+고정 주소 `https://<내 노드>.<tailnet>.ts.net` . `tailscale funnel --bg 4000` 이라 창을 닫거나 재부팅해도 남고(서버가
 꺼져 있으면 502), `server/data/tunnel.json` 은 `tailscale`. `npm run serve -- --tunnel` 도 `--bg` 로 바꿨다.
 Funnel 은 대역폭 제한(수치 비공개)이 있어 큰 파일을 많이 주고받으면 느릴 수 있다.
 
@@ -505,7 +505,7 @@ iCloud Keychain 으로 거의 자동 복구되는 반면 Android Keystore 는 �
 - [ ] 설치 파일 실행 → SmartScreen "추가 정보 → 실행" → 설치 위치 고르기 → 시작 메뉴·바탕화면 바로가기, 앱 아이콘
 - [ ] 트레이 아이콘·메뉴(열기 / 서버 켜기·끄기 / 끝내기), 창을 처음 닫을 때 알림
 - [ ] **Tailscale Funnel 모드** — 지금 명령줄 서버가 4000 을 쓰므로, 명령줄 서버를 끄고 PC 앱에서 포트 4000 +
-      Tailscale 로 켜서 https://listup.tailffc023.ts.net 이 PC 앱 서버로 가는지. 데이터 폴더를 `server/data` 로
+      Tailscale 로 켜서 `https://<내 노드>.<tailnet>.ts.net` 이 PC 앱 서버로 가는지. 데이터 폴더를 `server/data` 로
       고르면 테스트 계정이 그대로
 - [ ] 빠른 터널 모드 — 주소가 뜨고, 서버를 끄면 닫히는지
 - [ ] PC 브라우저로 초대 링크를 열고 "설치한 앱에서 열기"(`listup://join?...`)를 누르면 PC 앱이 열려 서버 추가·참여로 이어지는지
@@ -553,7 +553,7 @@ iCloud Keychain 으로 거의 자동 복구되는 반면 Android Keystore 는 �
 
 처음으로 진짜 데이터를 넣고 다른 기기에서 썼다. 여기까지가 "만든 것"과 "쓰는 것"의 경계다.
 
-- [x] `C:\Users\hoyaj\Music\Musics` 의 mp3·lrc **539개 · 2,192MB** 적재 (38초)
+- [x] `%USERPROFILE%\Music\Musics` 의 mp3·lrc **539개 · 2,192MB** 적재 (38초)
       → `scripts/sync-folder.mjs`. 폴더 구조·일본어 파일명 유지, 다운로드 바이트 일치 확인
 - [x] 다른 PC 에서 터널 주소로 접속 — 로그인·폴더 탐색·음악 다운로드 정상
 - [x] 환경변수 없이 저장소 총량 4GB 기본값이 적용되는지 확인 (2.2GB 저장소에 추가 업로드 201)

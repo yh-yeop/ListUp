@@ -62,7 +62,7 @@ Copyright (C) 2026 yh-yeop
 
 자세한 설계는 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), API 목록은
 [docs/API.md](docs/API.md)를 보세요. 남은 작업과 우선순위는 [TODO.md](TODO.md) 에서
-관리합니다.
+관리합니다. 코드를 고칠 때 같이 고칠 것·테스트·릴리즈 규칙은 [CLAUDE.md](CLAUDE.md) 에 모았습니다.
 
 ---
 
