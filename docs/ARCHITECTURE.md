@@ -169,6 +169,7 @@ UPDATE invites SET use_count = use_count + 1
 | 업로드 파일로 XSS | Content-Type 을 업로더 말이 아니라 **확장자 화이트리스트**로 결정. `nosniff` 헤더. SVG·HTML 은 inline 금지 |
 | 비밀번호 | scrypt(N=16384, 비동기) + 랜덤 솔트, 파라미터를 해시 문자열에 함께 저장 |
 | 토큰 위조 | HMAC-SHA256 서명, `timingSafeEqual` 비교 |
+| 약하거나 깨진 서명 키 | `LISTUP_AUTH_SECRET` 은 32자 이상(빈 값 거부, `config.ts`). `npm run serve`·PC 앱은 데이터 폴더의 `auth-secret.txt` 를 `server/src/lib/secret.ts` `ensureAuthSecret` 하나로 — 없으면 randomBytes(32) hex 를 원자적으로(0600) 만들고, 있는데 64자 16진수가 아니면 새로 만들지 않고 멈춘다(새 키는 전원 로그아웃) |
 | 비밀번호 대입 | 로그인 실패를 아이디·IP 기준으로 세어 한도를 넘으면 일정 시간 차단 (`lib/rate-limit.ts`) |
 | 유출된 토큰 | 사용자마다 토큰 세대(`users.token_epoch`)를 두고 토큰에 실어, 비밀번호를 바꾸면 세대를 올려 이전 토큰을 한 번에 끊는다 |
 | 계정 존재 여부 노출 | 로그인 실패 메시지를 하나로 통일하고, 없는 계정도 더미 해시를 검증해 응답 시간을 맞춤 |
@@ -179,6 +180,7 @@ UPDATE invites SET use_count = use_count + 1
 | 남의 저장소 blob 참조 | 제안에는 그 저장소에 올렸거나 이력에 있는 blob 만 (`repo_blobs`) |
 | 추방된 사람의 초대 | 발급자가 editor 이상 멤버가 아니면 초대 무효, 추방·강등 시 회수 |
 | 다운로드 링크 유출 | 사용자·저장소·경로 하나에 묶인 HMAC 서명(`dl:` 접두사로 로그인 토큰과 섞이지 않음), 10분 만료, 받을 때 멤버십·토큰 세대를 다시 확인. 요청 로그에서는 `?t=` 를 가린다(`start.ts` `maskUrl`, 초대 코드도) |
+| 오류 번호 흉내·겹침 | 요청 id(로그의 `reqId` = 500 의 `requestId`)는 서버가 무작위 10자 16진수로 매기고(`app.ts` `newRequestId`) 요청 헤더로 온 id 는 쓰지 않는다 — 재시작해도 server.log 에서 번호가 겹치지 않는다 |
 | 비밀번호 재설정 남용 | 코드는 서버 운영자만 발급(CLI), 해시만 저장, 30분·한 번, 새 코드가 이전 코드를 끝냄, 실패는 로그인 제한과 같이 셈 |
 | 올리다 만 파일로 디스크 채우기 | 세션 크기를 먼저 한도로 보고, 오래 멈춘 세션은 GC 가 지움. 편집 권한 없는 사람은 하루 한도 |
 
@@ -209,8 +211,18 @@ app/
    ├─ lib/desktop.ts          PC 앱이 창에 넣어 준 window.listupDesktop 읽기
    ├─ lib/local-folder.ts     내 폴더 고르기·훑기·그 폴더에 받기 (PC 앱 / 안드로이드 SAF / 브라우저)
    ├─ lib/folder-compare.ts   저장소 폴더(recursive 목록)와 내 폴더를 이름으로 견주기
-   ├─ lib/pure/               플랫폼 import 가 없는 순수 로직 — 버전 비교·건너뛰기 판정·폴더 대조·서버 목록 읽기/예전 키 이전.
-   │                          원래 파일(updates·transfer·folder-compare·state/servers)이 다시 내보낸다. app/test 가 node 로 검사
+   ├─ lib/credentials.ts      서버마다 로그인 정보 저장 — expo-secure-store / PC 앱 safeStorage, 서버가 주는 웹엔 두지 않음
+   ├─ lib/updates.ts          설치형 클라이언트 업데이트 확인(GitHub 최신 릴리즈와 견주기), 소스 코드 링크(SOURCE_URL)
+   ├─ lib/apk-update.ts       안드로이드 앱 안 업데이트 — 새 APK 를 받아 시스템 설치 화면 띄우기
+   ├─ lib/restore.ts          되돌리기 — 이력의 내용(blobHash)으로 편집자는 커밋, 열람자는 제안
+   ├─ lib/search.ts           저장소 안 파일 이름 검색(낱말 모두 포함, 대소문자·NFC 무시, 파일 이름 일치 먼저)
+   ├─ lib/toast.ts            화면 밖에 두는 토스트 상태(notify 가 넣고 ToastHost 가 그림)
+   ├─ lib/useAsync.ts         화면 데이터 불러오기 훅 — 늦게 온 이전 요청 결과는 버림, 당겨서 새로고침
+   ├─ lib/pure/               플랫폼 import 가 없는 순수 로직. 원래 파일이 다시 내보내고, app/test 가 node 로 검사
+   │  ├─ versions.ts          버전 비교(compareVersions) ← updates
+   │  ├─ transfer-plan.ts     이미 올라간 파일 건너뛰기 판정 ← transfer
+   │  ├─ compare-core.ts      폴더 대조(이름 NFC/NFD 맞추기) ← folder-compare
+   │  └─ server-store.ts      서버 목록 읽기·정리, 예전 저장 키 이전 규칙(storeFromLegacy) ← state/servers
    ├─ components/             공용 UI + 저장소 탭 네비게이션
    └─ theme.ts                라이트/다크 팔레트
 ```
@@ -293,12 +305,14 @@ app/
 desktop/src/
 ├─ main.ts          창·트레이·app:// 스킴·IPC. 서버가 돌면 창을 닫아도 트레이에 남는다
 ├─ preload.ts       window.listupDesktop (계약: shared 의 DesktopBridge)
+├─ protocol.ts      IPC 채널 이름(main ↔ 창)과 main ↔ 서버 프로세스 메시지 타입
 ├─ host.ts          이 PC 서버 — utilityProcess 관리, 상태·로그(logs/server.log 에도, 1MB 회전), 재설정 코드·백업 요청
 ├─ server-entry.ts  utilityProcess 안에서 startServer (server/src/start.ts) + main 의 요청 처리
 ├─ tunnel.ts        공개 주소 — Tailscale Funnel(--bg) / Cloudflare 빠른 터널
 ├─ folders.ts       내 폴더와 비교 — 대화상자로 고른 폴더 안만 훑기·조각 읽기·받아 쓰기
 ├─ settings.ts      포트·공개 방식·자동 켜기·데이터 폴더 (앱 데이터 폴더의 settings.json)
 ├─ credentials.ts   로그인 정보 — safeStorage(DPAPI)로 암호화
+├─ updater.ts       자동 업데이트(electron-updater) — 받아 두었다가 다시 시작·끝낼 때 설치, sha512 확인
 └─ atomic-write.ts  settings·credentials 저장(임시 파일 → fsync → 이름 바꾸기), 깨진 파일을 .corrupt-<시각> 으로 격리
 ```
 

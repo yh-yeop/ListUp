@@ -612,6 +612,10 @@ Node 22 이상이 필요하다. `better-sqlite3` 는 네이티브 모듈이지�
   형식·새 인스턴스와 겹치지 않음·헤더 무시. 기본 생성기로 되돌리면 셋이 실패하는 것을 확인했다. README·`docs/API.md`·
   e2e 10 의 예시 번호를 새 꼴로.
 
+- [x] **ARCHITECTURE 구조 블록 채우기** — 2026-10-21. `check:sync [5]` 경고 2건(app/src/lib 7개, desktop/src 2개)을
+  각 파일을 읽고 한 줄씩. `lib/pure/` 는 파일별로(어느 파일이 다시 내보내는지), 보안 표에 서명 키(`lib/secret.ts`)·
+  요청 id 줄을 더했다. 경고 0건.
+
 - [x] **앱 순수 로직 단위 테스트** — 2026-10-21. 버전 비교·이미 올라간 파일 건너뛰기·폴더 대조(NFC/NFD)·예전 저장 키
   이전이 Chromium 버전에 민감한 e2e 로만 간접 확인됐다. 이 함수들이 react-native·expo·`api/client` 를 맨 위에서
   import 하는 파일에 섞여 있어 node 에서 불러올 수 없었으므로, 플랫폼 import 가 없는 부분만 `app/src/lib/pure/`
