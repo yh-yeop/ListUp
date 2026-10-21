@@ -602,6 +602,16 @@ Node 22 이상이 필요하다. `better-sqlite3` 는 네이티브 모듈이지�
 
 ## 완료
 
+- [x] **문서·코드 짝 기계 검사 — `npm run check:sync`** — 2026-10-21. 짝이 어긋나도 typecheck·테스트는 통과하고,
+  버전·노트는 Windows 에서 `release:publish` 를 돌릴 때야 드러났다. `scripts/check-sync.mjs`(표준 node 만)를 CI 의
+  typecheck 앞에서 돌린다: [1] `KNOWN_ENV` ↔ README 환경변수 표 · 서버 코드가 쓰는 `LISTUP_*`, [2] 버전(package.json
+  5곳·lock·app.json version·versionCode 공식), [3] `docs/releases/v<버전>.md`, [4] 추적 파일의 실제 tailnet 주소·
+  `C:\Users\<이름>`, [5] ARCHITECTURE 구조 블록 누락(경고만). 버전 읽기는 `scripts/versions.mjs` 로 빼서 set-version·
+  publish-release 와 함께 쓴다. 처음 돌려 README 표에 빠져 있던 `LISTUP_HOST`·`LISTUP_DB_PATH`·`LISTUP_BLOB_DIR` 를 채웠다.
+  CI 에 `concurrency`(같은 브랜치 앞선 실행 취소). API 라우트 ↔ `docs/API.md` 대조는 정규식 오탐이 커서 넣지 않았다(P2).
+  - **남은 경고** — ARCHITECTURE 앱 구조 블록에 `lib/` 7개(apk-update·credentials·restore·search·toast·updates·useAsync),
+    PC 앱 블록에 `protocol.ts`·`updater.ts` 가 없다. 채우면 경고가 사라진다.
+
 - [x] **업데이트를 앱 안에서 + 안드로이드 흐름 테스트 (v1.7.0)** — 2026-10-21.
   - **PC 앱 자동 업데이트** — `desktop/src/updater.ts`(electron-updater, NSIS). 켜고 15초 뒤·6시간마다 GitHub 릴리즈의
     `latest.yml` 을 보고 백그라운드로 받는다(sha512 확인). 다 받으면 "다시 시작해 설치"를 한 번 묻고, 미뤄도 끝낼 때

@@ -12,6 +12,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { LOCK_PACKAGES, versionCodeOf } from './versions.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const version = process.argv[2];
@@ -19,13 +20,6 @@ const version = process.argv[2];
 if (!/^\d+\.\d+\.\d+$/.test(version ?? '')) {
   console.error('사용법: npm run version:set -- <major.minor.patch>   (예: 1.1.0)');
   process.exit(1);
-}
-
-/** 1.2.3 → 10203. minor·patch 는 99 까지. */
-function versionCodeOf(v) {
-  const [major, minor, patch] = v.split('.').map(Number);
-  if (minor > 99 || patch > 99) throw new Error('minor·patch 는 99 까지만 쓸 수 있습니다 (versionCode 계산).');
-  return major * 10000 + minor * 100 + patch;
 }
 
 function updateJson(relative, change) {
@@ -48,7 +42,7 @@ for (const pkg of ['package.json', 'app/package.json', 'server/package.json', 's
 }
 updateJson('package-lock.json', (lock) => {
   lock.version = version;
-  for (const key of ['', 'app', 'server', 'shared', 'desktop']) {
+  for (const key of LOCK_PACKAGES) {
     if (lock.packages?.[key]) lock.packages[key].version = version;
   }
 });

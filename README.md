@@ -122,8 +122,11 @@ npm run server        # http://localhost:4000
 
 | 환경변수 | 기본값 | 설명 |
 | --- | --- | --- |
+| `LISTUP_HOST` | `0.0.0.0` | 들을 주소. 이 PC 에서만 열려면 `127.0.0.1` |
 | `LISTUP_PORT` | `4000` | 포트 |
 | `LISTUP_DATA_DIR` | `server/data` | DB·파일 저장 위치 |
+| `LISTUP_DB_PATH` | `<DATA_DIR>/listup.db` | SQLite 파일 위치 (따로 둘 때만) |
+| `LISTUP_BLOB_DIR` | `<DATA_DIR>/blobs` | 업로드된 파일 위치 (따로 둘 때만) |
 | `LISTUP_SERVER_NAME` | (없음) | 서버 이름. 초대받은 사람이 서버를 더할 때 목록에 이 이름으로 들어갑니다 (60자까지) |
 | `LISTUP_AUTH_SECRET` | (개발 시 자동 생성) | 토큰 서명 키. **운영에서는 반드시 지정** |
 | `LISTUP_TOKEN_TTL_DAYS` | `30` | 로그인 유지 기간 |
@@ -294,6 +297,7 @@ Tailscale 을 쓴다면 `tailscale up` 으로 로그인만 해두고
 ## 검증
 
 ```bash
+npm run check:sync  # 문서·코드 짝 검사 (환경변수 표·버전·릴리즈 노트·공개하면 안 되는 주소)
 npm test          # 서버 테스트 (HTTP 수준)
 npm run typecheck # 서버 + 앱 타입 검사
 npm run test:e2e  # 웹 흐름 테스트 (웹을 두 모드로 빌드하고 브라우저로)
@@ -308,7 +312,7 @@ PC 앱을 고칠 때는 `npm run desktop` 으로 띄우고(앱 화면을 고쳤�
 HTTP 요청 수준에서 확인합니다. 웹 흐름 테스트는 빈 포트에 임시 서버를 띄워(쓰고 있는 서버와 데이터를
 건드리지 않음) 서버 목록·설치형 클라이언트·버전 확인·로그인 저장·업데이트 알림·전송·초대 링크·
 비밀번호 재설정을 브라우저에서 확인합니다. Windows 는 설치된 Edge 를 쓰고(`--no-build` 면 지난 웹
-빌드를 재사용), 푸시하면 GitHub Actions 가 셋 다 돌립니다.
+빌드를 재사용), 푸시하면 GitHub Actions 가 짝 검사와 함께 셋 다 돌립니다.
 
 **Android 실기기에서 외부망(LTE)으로 확인했습니다** (2026-08-27) — Expo Go 로 앱이 뜨고,
 앱 안에서 서버 주소를 지정해 공개된 서버에 붙는 것까지 동작합니다. 다만 파일 선택·저장과

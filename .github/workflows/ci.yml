@@ -1,10 +1,15 @@
-# 푸시와 PR 마다 타입 검사 → 서버 테스트 → 웹 흐름 테스트.
+# 푸시와 PR 마다 짝 검사 → 타입 검사 → 서버 테스트 → 웹 흐름 테스트.
 name: CI
 
 on:
   push:
     branches: [main]
   pull_request:
+
+# 같은 브랜치에 연달아 푸시하면 앞선 실행(e2e 포함 최대 30분)을 취소한다.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
@@ -23,6 +28,9 @@ jobs:
 
       - name: 의존성
         run: npm ci
+
+      - name: 짝 검사 (문서·버전·공개 금지 패턴)
+        run: npm run check:sync
 
       - name: 타입 검사
         run: npm run typecheck

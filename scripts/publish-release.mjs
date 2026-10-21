@@ -21,6 +21,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PIN_FILE, missingKeyMessage, readPin, readSigning } from './android-signing.mjs';
 import { spawnNpm } from './run-npm.mjs';
+import { mismatchedVersions, readVersions } from './versions.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const readJson = (relative) => JSON.parse(fs.readFileSync(path.join(ROOT, relative), 'utf8'));
@@ -92,14 +93,7 @@ try {
   fail(err.message);
 }
 
-const versions = {
-  'app/package.json': readJson('app/package.json').version,
-  'server/package.json': readJson('server/package.json').version,
-  'shared/package.json': readJson('shared/package.json').version,
-  'desktop/package.json': readJson('desktop/package.json').version,
-  'app/app.json': readJson('app/app.json').expo.version,
-};
-const mismatched = Object.entries(versions).filter(([, v]) => v !== VERSION);
+const mismatched = mismatchedVersions(readVersions(ROOT), VERSION);
 if (mismatched.length) {
   fail(`버전이 어긋납니다: ${mismatched.map(([f, v]) => `${f}=${v}`).join(', ')} (npm run version:set -- ${VERSION})`);
 }
