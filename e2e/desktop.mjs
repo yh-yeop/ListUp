@@ -171,6 +171,7 @@ try {
   t.must(Boolean(expectedBase) && linkText.startsWith(`${expectedBase}/join?code=`), `초대 링크는 공유기 안 주소로 (${expectedBase})`);
 
   // 4-1. 내 폴더와 비교 — PC 앱은 고른 폴더에 바로 받고, 다시 훑고, 그 폴더의 파일을 올린다
+  let dlToken = null;
   {
     const base = `http://127.0.0.1:${PORT}`;
     const put = async (filePath, content) => {
@@ -214,6 +215,11 @@ try {
       headers: { Authorization: `Bearer ${own.token}` },
     });
     t.must(raw.ok && (await raw.text()) === '내 파일', '비교: PC 앱 폴더의 파일을 main 이 읽어 저장소에 올린다');
+
+    // 다운로드 링크(?t=)를 실제로 한 번 써 둔다 — 8 에서 로그 파일에 토큰이 가려져 남았는지 본다.
+    const { json: dl } = await api(base, `/api/repos/${repoRes.repo.id}/download-link`, { path: '내것.txt' }, own.token);
+    dlToken = dl?.url ? new URL(dl.url, base).searchParams.get('t') : null;
+    t.must(Boolean(dlToken) && (await fetch(new URL(dl.url, base))).ok, '다운로드 링크로 받을 수 있다');
 
     const outside = await page.evaluate(
       (root) => window.listupDesktop.folders.read(root, '../../escape.txt', 0, 10).then(() => 'read', (e) => String(e)),
@@ -266,7 +272,10 @@ try {
   const logFile = path.join(await app.evaluate(({ app: electronApp }) => electronApp.getPath('logs')), 'server.log');
   const logText = fs.existsSync(logFile) ? fs.readFileSync(logFile, 'utf8') : '';
   t.must(logText.includes('/api/health'), '서버 로그가 logs/server.log 에도 남는다');
-  t.must(!/[?&]t=(?!\*\*\*)/.test(logText), '로그 파일에 다운로드 토큰이 없다');
+  t.must(
+    Boolean(dlToken) && !logText.includes(dlToken) && logText.includes('/api/dl?t=***'),
+    '로그 파일에 다운로드 토큰이 없다 — /api/dl?t=*** 로 가려 남는다',
+  );
 
   // 9. 창을 닫아도 서버는 돈다
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close());

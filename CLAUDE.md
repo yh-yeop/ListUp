@@ -59,7 +59,7 @@ npm run test:android  # 안드로이드 흐름 — 에뮬레이터 + 시험용 A
 - `test:desktop` 은 Electron 실행 파일이 있어야 한다(위 SKIP 으로 설치했으면 못 돈다).
 - `test:android` 는 Android SDK·에뮬레이터·JDK 와 **정식 서명 키**(`~/.listup`)가 있어야 한다 — 시험용 APK 도 같은 키로 서명한다.
 
-**GitHub Actions(`.github/workflows/ci.yml`)가 푸시·PR 마다 check:sync → typecheck → test → test:e2e 를 돌린다**
+**GitHub Actions(`.github/workflows/ci.yml`)가 `main` 푸시·PR 마다 check:sync → typecheck → test → test:e2e 를 돌린다**
 (같은 브랜치에 새로 푸시하면 앞선 실행은 취소된다).
 desktop·android 흐름은 CI 에서 돌지 않으므로 그쪽을 고쳤으면 직접 돌린다.
 
