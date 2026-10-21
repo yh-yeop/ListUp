@@ -13,10 +13,13 @@ export interface Harness {
   close(): Promise<void>;
 }
 
-/** 테스트용 서버. `overrides` 로 용량 한도 같은 설정을 작게 잡을 수 있다. 로그를 볼 테스트는 `logger` 를 준다. */
+/**
+ * 테스트용 서버. `overrides` 로 용량 한도 같은 설정을 작게 잡을 수 있다. 로그를 볼 테스트는 `logger` 를 준다.
+ * `beforeReady` 는 ready 전에 시험용 라우트(일부러 터지는 것 등)를 더할 때.
+ */
 export async function createHarness(
   overrides: Partial<Config> = {},
-  options: { logger?: BuildOptions['logger'] } = {},
+  options: { logger?: BuildOptions['logger']; beforeReady?: (app: FastifyInstance) => void } = {},
 ): Promise<Harness> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'listup-test-'));
   const config = loadConfig({
@@ -30,6 +33,7 @@ export async function createHarness(
   });
   const ctx = createContext(config);
   const app = await buildApp(ctx, { logger: options.logger ?? false });
+  options.beforeReady?.(app);
   await app.ready();
 
   return {

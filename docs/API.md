@@ -28,7 +28,7 @@ Authorization: Bearer <token>
 | `conflict` | 409 | 병합 충돌, 초대 소진, 중복 가입, 파일/폴더 이름 충돌, 나눠 올리기 위치 어긋남 등 |
 | `payload_too_large` | 413 | 파일 하나 크기·저장소 총량·하루 업로드 한도 초과 |
 | `too_many_requests` | 429 | 로그인·재설정 코드 실패가 잦음. `details.retryAfterSeconds` 뒤에 다시 |
-| `internal` | 500 | 서버 오류. `requestId` 가 함께 오므로 로그와 대조할 수 있습니다 |
+| `internal` | 500 | 서버 오류. `requestId`(무작위 10자 16진수, 서버 로그의 `reqId`)가 함께 오므로 로그와 대조할 수 있습니다. 요청 헤더로 보낸 id 는 쓰지 않습니다 |
 
 병합 충돌·경로 충돌일 때는 `details.conflicts` 에 문제가 된 경로 목록이 들어갑니다.
 

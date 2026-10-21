@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import cors from '@fastify/cors';
@@ -28,6 +29,15 @@ export interface BuildOptions {
   logger?: boolean | FastifyServerOptions['logger'];
 }
 
+/**
+ * 요청 id — 로그의 reqId 이자 500 응답의 requestId(앱이 "오류 번호"로 보인다).
+ * fastify 기본(`req-<36진 카운터>`)은 서버를 다시 켜면 처음부터 매겨져, 파일로 남는 server.log 에서 같은 번호가
+ * 여러 번 나온다. 무작위 10자 16진수(40비트)면 재시작해도 사실상 겹치지 않고, 사람이 불러 주기에도 짧다.
+ */
+export function newRequestId(): string {
+  return randomBytes(5).toString('hex');
+}
+
 /** 경로 어딘가에 `.` 으로 시작하는 이름(.env, .git/…)이 있으면 웹 앱 라우트로 보지 않는다. */
 function hasDotSegment(url: string): boolean {
   const pathname = url.split('?')[0];
@@ -39,6 +49,10 @@ export async function buildApp(ctx: AppContext, options: BuildOptions = {}): Pro
     logger: options.logger ?? false,
     trustProxy: ctx.config.trustProxy,
     bodyLimit: 1024 * 1024, // JSON 본문은 작다. 파일은 multipart 로 따로 제한.
+    // 요청 헤더(request-id 등)로 온 id 는 믿지 않는다 — 남이 로그 줄을 흉내 내거나 같은 번호를 겹치게 할 수 있다.
+    // fastify 5 의 기본도 false 지만 기본값이 바뀌어도 그대로이도록 적어 둔다.
+    requestIdHeader: false,
+    genReqId: () => newRequestId(),
   });
 
   const corsOrigins = ctx.config.corsOrigin

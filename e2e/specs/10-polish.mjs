@@ -130,7 +130,7 @@ export default async function run(t, env) {
     );
     await page.goto(A + '/');
     await s.onRepos('rid').waitFor();
-    let reply = { status: 500, body: { error: { code: 'internal', message: '서버 오류가 발생했습니다.' }, requestId: 'req-e2e1' } };
+    let reply = { status: 500, body: { error: { code: 'internal', message: '서버 오류가 발생했습니다.' }, requestId: '3f9c0a7b21' } };
     await page.route('**/api/repos', (route) =>
       route.request().method() === 'POST'
         ? route.fulfill({ status: reply.status, contentType: 'application/json', body: JSON.stringify(reply.body) })
@@ -139,9 +139,9 @@ export default async function run(t, env) {
     await page.getByRole('button', { name: '새 저장소' }).click();
     await page.getByPlaceholder('예: 동아리 사진첩').fill('번호 시험');
     await page.getByRole('button', { name: '만들기' }).click();
-    await page.getByText('서버 오류가 발생했습니다. (오류 번호 req-e2e1)').waitFor({ timeout: 10000 });
+    await page.getByText('서버 오류가 발생했습니다. (오류 번호 3f9c0a7b21)').waitFor({ timeout: 10000 });
     t.ok('500 → 오류 문장 끝에 오류 번호');
-    reply = { status: 409, body: { error: { code: 'conflict', message: '같은 이름이 있습니다.' }, requestId: 'req-e2e2' } };
+    reply = { status: 409, body: { error: { code: 'conflict', message: '같은 이름이 있습니다.' }, requestId: '0d4e8a1c55' } };
     await page.getByRole('button', { name: '만들기' }).click();
     await page.getByText('같은 이름이 있습니다.', { exact: true }).waitFor({ timeout: 10000 });
     t.must((await page.getByText('오류 번호', { exact: false }).count()) === 0, '4xx → 오류 번호를 붙이지 않는다');

@@ -604,6 +604,14 @@ Node 22 이상이 필요하다. `better-sqlite3` 는 네이티브 모듈이지�
 
 ## 완료
 
+- [x] **요청 id 를 무작위로 — 재시작해도 오류 번호가 겹치지 않게** — 2026-10-21. fastify 기본 reqId 는
+  `req-<36진 카운터>` 라 서버를 다시 켜면 처음부터 매겨져, 파일로 남는 server.log 에서 앱 화면의 오류 번호가 여러
+  줄에 걸렸다(그래서 "시각도 함께 보라"고 안내했다). `server/src/app.ts` 가 `genReqId` 를 `newRequestId`
+  (randomBytes(5) hex, 10자)로 하고 `requestIdHeader: false` 를 명시해 요청 헤더로 온 id 는 쓰지 않는다(fastify 5 기본도
+  false 지만 기본이 바뀌어도 그대로이게). `server/test/logging.test.ts` *요청 id* — 500 의 requestId 가 로그 reqId 와 같음·
+  형식·새 인스턴스와 겹치지 않음·헤더 무시. 기본 생성기로 되돌리면 셋이 실패하는 것을 확인했다. README·`docs/API.md`·
+  e2e 10 의 예시 번호를 새 꼴로.
+
 - [x] **앱 순수 로직 단위 테스트** — 2026-10-21. 버전 비교·이미 올라간 파일 건너뛰기·폴더 대조(NFC/NFD)·예전 저장 키
   이전이 Chromium 버전에 민감한 e2e 로만 간접 확인됐다. 이 함수들이 react-native·expo·`api/client` 를 맨 위에서
   import 하는 파일에 섞여 있어 node 에서 불러올 수 없었으므로, 플랫폼 import 가 없는 부분만 `app/src/lib/pure/`
@@ -619,7 +627,8 @@ Node 22 이상이 필요하다. `better-sqlite3` 는 네이티브 모듈이지�
   쓰고(1MB 넘으면 `server.log.1` 로, 하나만), 이 PC 서버 화면 「최근 로그」에 **로그 폴더 열기**(IPC `host:open-logs`).
   파일에 쌓이게 됐으므로 `server/src/start.ts` `maskUrl` 이 `/api/dl?t=` 토큰도 가린다(`server/test/logging.test.ts`).
   `app/src/api/client.ts` `ApiError` 가 5xx 의 `requestId` 를 보존하고 메시지 끝에 "(오류 번호 …)" 를 붙인다 —
-  4xx 에는 붙이지 않는다(`e2e/specs/10-polish.mjs`). reqId 는 서버를 다시 켜면 처음부터 매겨진다(fastify 기본).
+  4xx 에는 붙이지 않는다(`e2e/specs/10-polish.mjs`). reqId 는 서버를 다시 켜면 처음부터 매겨진다(fastify 기본)
+  → 같은 날 무작위 id 로 바꿨다(완료 절 *요청 id 를 무작위로*).
 
 - [x] **PC 앱 로컬 파일 원자적 저장·손상 격리 + 서명 키 일원화** — 2026-10-21. settings.json 을 writeFileSync 로
   덮어쓰다 죽거나 깨지면 조용히 기본값으로 떠 데이터 폴더(dataDir)가 바뀌고, 새 서명 키·빈 DB 로 서버가 떠
