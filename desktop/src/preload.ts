@@ -28,6 +28,7 @@ const bridge: DesktopBridge = {
     chooseDataFolder: () => ipcRenderer.invoke(IPC.hostChooseData),
     openDataFolder: () => ipcRenderer.invoke(IPC.hostOpenData),
     logs: () => ipcRenderer.invoke(IPC.hostLogs),
+    openLogFolder: () => ipcRenderer.invoke(IPC.hostOpenLogs),
   },
   updates: {
     getState: () => ipcRenderer.invoke(IPC.updatesState),

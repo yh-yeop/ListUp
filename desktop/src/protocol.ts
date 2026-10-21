@@ -27,6 +27,7 @@ export const IPC = {
   hostChooseData: 'host:choose-data',
   hostOpenData: 'host:open-data',
   hostLogs: 'host:logs',
+  hostOpenLogs: 'host:open-logs',
   foldersPick: 'folders:pick',
   foldersScan: 'folders:scan',
   foldersRead: 'folders:read',

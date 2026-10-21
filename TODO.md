@@ -604,6 +604,14 @@ Node 22 이상이 필요하다. `better-sqlite3` 는 네이티브 모듈이지�
 
 ## 완료
 
+- [x] **진단 연결고리 — PC 서버 로그 파일 + 다운로드 토큰 마스킹 + 오류 번호 표시** — 2026-10-21. 서버는 500 에
+  `requestId`(로그의 reqId)를 실어 "번호로 로그에서 찾기"를 노렸지만 앱은 그 번호를 버렸고, PC 앱 로그는 메모리
+  300줄뿐이라 앱을 다시 켜면 사라졌다. `desktop/src/host.ts` 가 받은 로그를 그대로 `logs/server.log` 에도
+  쓰고(1MB 넘으면 `server.log.1` 로, 하나만), 이 PC 서버 화면 「최근 로그」에 **로그 폴더 열기**(IPC `host:open-logs`).
+  파일에 쌓이게 됐으므로 `server/src/start.ts` `maskUrl` 이 `/api/dl?t=` 토큰도 가린다(`server/test/logging.test.ts`).
+  `app/src/api/client.ts` `ApiError` 가 5xx 의 `requestId` 를 보존하고 메시지 끝에 "(오류 번호 …)" 를 붙인다 —
+  4xx 에는 붙이지 않는다(`e2e/specs/10-polish.mjs`). reqId 는 서버를 다시 켜면 처음부터 매겨진다(fastify 기본).
+
 - [x] **PC 앱 로컬 파일 원자적 저장·손상 격리 + 서명 키 일원화** — 2026-10-21. settings.json 을 writeFileSync 로
   덮어쓰다 죽거나 깨지면 조용히 기본값으로 떠 데이터 폴더(dataDir)가 바뀌고, 새 서명 키·빈 DB 로 서버가 떠
   '저장소 전멸'처럼 보였다. `desktop/src/atomic-write.ts`(임시 파일 → fsync → 이름 바꾸기, 거부되면 제자리 쓰기)를

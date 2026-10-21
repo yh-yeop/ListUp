@@ -178,7 +178,7 @@ UPDATE invites SET use_count = use_count + 1
 | 디스크 고갈 | 저장소 총량(`LISTUP_MAX_REPO_MB`)과 사용자별 하루 제안용 업로드(`LISTUP_MAX_STAGING_MB_PER_DAY`) 한도 |
 | 남의 저장소 blob 참조 | 제안에는 그 저장소에 올렸거나 이력에 있는 blob 만 (`repo_blobs`) |
 | 추방된 사람의 초대 | 발급자가 editor 이상 멤버가 아니면 초대 무효, 추방·강등 시 회수 |
-| 다운로드 링크 유출 | 사용자·저장소·경로 하나에 묶인 HMAC 서명(`dl:` 접두사로 로그인 토큰과 섞이지 않음), 10분 만료, 받을 때 멤버십·토큰 세대를 다시 확인 |
+| 다운로드 링크 유출 | 사용자·저장소·경로 하나에 묶인 HMAC 서명(`dl:` 접두사로 로그인 토큰과 섞이지 않음), 10분 만료, 받을 때 멤버십·토큰 세대를 다시 확인. 요청 로그에서는 `?t=` 를 가린다(`start.ts` `maskUrl`, 초대 코드도) |
 | 비밀번호 재설정 남용 | 코드는 서버 운영자만 발급(CLI), 해시만 저장, 30분·한 번, 새 코드가 이전 코드를 끝냄, 실패는 로그인 제한과 같이 셈 |
 | 올리다 만 파일로 디스크 채우기 | 세션 크기를 먼저 한도로 보고, 오래 멈춘 세션은 GC 가 지움. 편집 권한 없는 사람은 하루 한도 |
 
@@ -291,7 +291,7 @@ app/
 desktop/src/
 ├─ main.ts          창·트레이·app:// 스킴·IPC. 서버가 돌면 창을 닫아도 트레이에 남는다
 ├─ preload.ts       window.listupDesktop (계약: shared 의 DesktopBridge)
-├─ host.ts          이 PC 서버 — utilityProcess 관리, 상태·로그, 재설정 코드·백업 요청
+├─ host.ts          이 PC 서버 — utilityProcess 관리, 상태·로그(logs/server.log 에도, 1MB 회전), 재설정 코드·백업 요청
 ├─ server-entry.ts  utilityProcess 안에서 startServer (server/src/start.ts) + main 의 요청 처리
 ├─ tunnel.ts        공개 주소 — Tailscale Funnel(--bg) / Cloudflare 빠른 터널
 ├─ folders.ts       내 폴더와 비교 — 대화상자로 고른 폴더 안만 훑기·조각 읽기·받아 쓰기

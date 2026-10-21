@@ -434,6 +434,8 @@ export type ApiErrorCode =
 
 export interface ApiErrorBody {
   error: { code: ApiErrorCode; message: string; details?: unknown };
+  /** 500 일 때만. 서버 로그의 reqId 와 같다. */
+  requestId?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -607,6 +609,8 @@ export interface DesktopHost {
   openDataFolder(): Promise<void>;
   /** 최근 서버 로그 (오래된 것부터). */
   logs(): Promise<string[]>;
+  /** 서버 로그 파일(server.log, 지난 것은 server.log.1)이 있는 폴더를 연다. */
+  openLogFolder(): Promise<void>;
 }
 
 /** 내 폴더에 있는 파일 하나. relativePath 는 고른 폴더 안의 경로(`/` 로 나눔). */

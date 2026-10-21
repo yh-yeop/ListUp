@@ -503,15 +503,30 @@ function LogCard({ running }: { running: boolean }) {
     }, [host, running]),
   );
 
-  if (lines.length === 0) return null;
+  // 지난 실행의 로그는 파일에만 있으므로, 이번에 받은 줄이 없어도 폴더 열기는 보인다.
   return (
     <Card style={{ gap: spacing.sm }}>
-      <Body style={{ fontWeight: '600' }}>최근 로그</Body>
-      <View style={{ backgroundColor: colors.surfaceAlt, borderRadius: 8, padding: spacing.md }}>
-        <Caption style={{ fontFamily: monoFont, color: colors.textMuted, fontSize: fontSize.xs }}>
-          {lines.join('\n')}
-        </Caption>
-      </View>
+      <Row style={{ justifyContent: 'space-between' }} wrap>
+        <Body style={{ fontWeight: '600' }}>최근 로그</Body>
+        <Button
+          label="로그 폴더 열기"
+          variant="secondary"
+          icon="folder-open-outline"
+          compact
+          onPress={() => void host.openLogFolder()}
+        />
+      </Row>
+      {lines.length > 0 ? (
+        <View style={{ backgroundColor: colors.surfaceAlt, borderRadius: 8, padding: spacing.md }}>
+          <Caption style={{ fontFamily: monoFont, color: colors.textMuted, fontSize: fontSize.xs }}>
+            {lines.join('\n')}
+          </Caption>
+        </View>
+      ) : null}
+      <Caption>
+        로그는 server.log 에도 남아 앱을 다시 켜도 볼 수 있습니다. 들어온 사람이 "오류 번호"를 알려 주면 그 파일에서
+        같은 reqId 를 찾으세요.
+      </Caption>
     </Card>
   );
 }

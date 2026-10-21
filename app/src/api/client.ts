@@ -104,13 +104,19 @@ export class ApiError extends Error {
   readonly code: ApiErrorCode;
   readonly status: number;
   readonly details?: unknown;
+  /**
+   * 서버 오류(5xx)일 때 서버가 준 번호 — 서버 로그의 reqId 와 같다. 사용자가 알려 줄 수 있게 메시지 끝에도
+   * "(오류 번호 …)" 로 붙는다(토스트·ErrorNotice 가 모두 message 를 보인다).
+   */
+  readonly requestId?: string;
 
-  constructor(status: number, code: ApiErrorCode, message: string, details?: unknown) {
-    super(message);
+  constructor(status: number, code: ApiErrorCode, message: string, details?: unknown, requestId?: string) {
+    super(requestId ? `${message} (오류 번호 ${requestId})` : message);
     this.name = 'ApiError';
     this.status = status;
     this.code = code;
     this.details = details;
+    this.requestId = requestId;
   }
 
   /** 병합 충돌 시 서버가 알려주는 경로 목록. */
@@ -118,6 +124,13 @@ export class ApiError extends Error {
     const details = this.details as { conflicts?: unknown } | undefined;
     return Array.isArray(details?.conflicts) ? (details!.conflicts as string[]) : [];
   }
+}
+
+/** 오류 응답의 requestId — 서버 오류(5xx)에만. 4xx 는 사용자가 고칠 일이라 번호를 붙이지 않는다. */
+function serverRequestId(status: number, parsed: ApiErrorBody | null): string | undefined {
+  if (status < 500) return undefined;
+  const id = parsed?.requestId;
+  return typeof id === 'string' && id ? id : undefined;
 }
 
 /** 토큰이 더는 유효하지 않을 때 무효가 된 그 토큰으로 호출된다 (자동 로그아웃). */
@@ -218,6 +231,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
         parsed?.error?.code ?? 'internal',
         parsed?.error?.message ?? `요청이 실패했습니다. (HTTP ${response.status})`,
         parsed?.error?.details,
+        serverRequestId(response.status, parsed),
       );
     }
 
@@ -316,6 +330,7 @@ function sendBytes<T>(
           error?.code ?? 'internal',
           error?.message ?? `요청이 실패했습니다. (HTTP ${xhr.status})`,
           error?.details,
+          serverRequestId(xhr.status, parsed as ApiErrorBody | null),
         ),
       );
     };

@@ -258,9 +258,15 @@ try {
   const saved = JSON.parse(fs.readFileSync(path.join(userData, 'settings.json'), 'utf8'));
   t.must(saved.serverName === '새 이름', '이름 저장 → 앞뒤 공백을 떼고 설정에 남는다');
 
-  // 8. 로그가 보인다
+  // 8. 로그가 보이고, 파일(logs/server.log)에도 남는다 — 다운로드 토큰은 가려서
   await page.getByText('최근 로그').waitFor({ timeout: 10_000 });
-  t.must((await page.getByText('/api/health', { exact: false }).count()) > 0, '최근 로그에 요청이 남는다');
+  await page.getByText('/api/health', { exact: false }).first().waitFor({ timeout: 10_000 });
+  t.must(true, '최근 로그에 요청이 남는다');
+  t.must((await page.getByRole('button', { name: '로그 폴더 열기' }).filter({ visible: true }).count()) === 1, '최근 로그 옆에 로그 폴더 열기');
+  const logFile = path.join(await app.evaluate(({ app: electronApp }) => electronApp.getPath('logs')), 'server.log');
+  const logText = fs.existsSync(logFile) ? fs.readFileSync(logFile, 'utf8') : '';
+  t.must(logText.includes('/api/health'), '서버 로그가 logs/server.log 에도 남는다');
+  t.must(!/[?&]t=(?!\*\*\*)/.test(logText), '로그 파일에 다운로드 토큰이 없다');
 
   // 9. 창을 닫아도 서버는 돈다
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close());

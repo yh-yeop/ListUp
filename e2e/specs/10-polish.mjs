@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { api, screen } from '../lib.mjs';
 
-export const title = '사용 흐름 — 서버 이름·올리기 멈추기·토스트·아이디';
+export const title = '사용 흐름 — 서버 이름·올리기 멈추기·토스트·오류 번호·아이디';
 
 export default async function run(t, env) {
   const { A, C, NAMED } = env;
@@ -110,6 +110,42 @@ export default async function run(t, env) {
     await ctx.close();
   } finally {
     fs.rmSync(work, { recursive: true, force: true });
+  }
+
+  // 오류 번호 — 서버 오류(500)는 서버가 준 requestId 를 화면에 붙여 로그와 대조할 수 있게, 4xx 에는 붙이지 않는다.
+  {
+    const reg = await api(A, '/api/auth/signup', { email: `rid-${env.run}@a.test`, password: 'password-1', displayName: 'rid' });
+    const ctx = await env.newContext();
+    const page = await ctx.newPage();
+    page.on('dialog', (d) => void d.accept());
+    const s = screen(page);
+    await page.goto(A + '/api/health');
+    await page.evaluate(
+      ({ token, user }) =>
+        localStorage.setItem(
+          'listup.servers',
+          JSON.stringify({ version: 1, activeId: 'default', servers: [{ id: 'default', url: '', label: null, token, user, lastUsedAt: null, signedOut: false }] }),
+        ),
+      { token: reg.json.token, user: reg.json.user },
+    );
+    await page.goto(A + '/');
+    await s.onRepos('rid').waitFor();
+    let reply = { status: 500, body: { error: { code: 'internal', message: '서버 오류가 발생했습니다.' }, requestId: 'req-e2e1' } };
+    await page.route('**/api/repos', (route) =>
+      route.request().method() === 'POST'
+        ? route.fulfill({ status: reply.status, contentType: 'application/json', body: JSON.stringify(reply.body) })
+        : route.continue(),
+    );
+    await page.getByRole('button', { name: '새 저장소' }).click();
+    await page.getByPlaceholder('예: 동아리 사진첩').fill('번호 시험');
+    await page.getByRole('button', { name: '만들기' }).click();
+    await page.getByText('서버 오류가 발생했습니다. (오류 번호 req-e2e1)').waitFor({ timeout: 10000 });
+    t.ok('500 → 오류 문장 끝에 오류 번호');
+    reply = { status: 409, body: { error: { code: 'conflict', message: '같은 이름이 있습니다.' }, requestId: 'req-e2e2' } };
+    await page.getByRole('button', { name: '만들기' }).click();
+    await page.getByText('같은 이름이 있습니다.', { exact: true }).waitFor({ timeout: 10000 });
+    t.must((await page.getByText('오류 번호', { exact: false }).count()) === 0, '4xx → 오류 번호를 붙이지 않는다');
+    await ctx.close();
   }
 
   // 아이디 — 이메일이 아닌 아이디로 가입하고, 대소문자가 달라도 로그인된다.

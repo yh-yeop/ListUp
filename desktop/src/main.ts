@@ -24,7 +24,7 @@ import {
 import type { DesktopUpdateState, HostSettingsPatch, HostStatus } from '@listup/shared';
 import { allowRoot, readChunk, saveUrl, scanFolder } from './folders.ts';
 import { credentialsAvailable, getCredential, removeCredential, setCredential } from './credentials.ts';
-import { Host } from './host.ts';
+import { Host, serverLogFile } from './host.ts';
 import { IPC } from './protocol.ts';
 import { readSettings, writeSettings } from './settings.ts';
 import { inspectTools } from './tunnel.ts';
@@ -260,6 +260,11 @@ function registerIpc(): void {
     await shell.openPath(dir);
   });
   ipcMain.handle(IPC.hostLogs, () => host.logs());
+  ipcMain.handle(IPC.hostOpenLogs, async () => {
+    const dir = path.dirname(serverLogFile());
+    fs.mkdirSync(dir, { recursive: true });
+    await shell.openPath(dir);
+  });
 
   ipcMain.handle(IPC.updatesState, () => updater.getState());
   ipcMain.handle(IPC.updatesCheck, () => updater.check());

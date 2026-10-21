@@ -1,7 +1,9 @@
 import { EventEmitter } from 'node:events';
+import fs from 'node:fs';
 import os from 'node:os';
+import path from 'node:path';
 import { createSocket } from 'node:dgram';
-import { utilityProcess, type UtilityProcess } from 'electron';
+import { app, utilityProcess, type UtilityProcess } from 'electron';
 import type { HostSettingsPatch, HostState, HostStatus } from '@listup/shared';
 import { ensureAuthSecret } from '../../server/src/lib/secret.ts';
 import type { ServerReply, ServerRequest } from './protocol.ts';
@@ -17,7 +19,18 @@ export interface HostPaths {
 }
 
 const LOG_LINES = 300;
+/** 로그 파일이 이만큼 넘으면 `server.log.1` 로 돌리고 새로 쓴다 — 지난 것은 하나만 둔다. */
+const LOG_FILE_MAX_BYTES = 1024 * 1024;
 const START_TIMEOUT_MS = 60_000;
+
+/**
+ * 서버 로그 파일 (Windows 는 `%APPDATA%\ListUp\logs\server.log`). 화면의 최근 로그는 메모리에만 있어
+ * 앱을 다시 켜면 사라지므로, 받은 줄을 다듬지 않고(pino JSON — reqId·오류 스택 포함) 여기에도 남긴다.
+ * 500 응답의 requestId 는 이 파일의 reqId 와 같다.
+ */
+export function serverLogFile(): string {
+  return path.join(app.getPath('logs'), 'server.log');
+}
 
 type Pending = { resolve: (value: unknown) => void; reject: (err: Error) => void };
 
@@ -94,6 +107,8 @@ export class Host extends EventEmitter {
   private error: string | null = null;
   private readonly tunnel = new Tunnel(() => this.emitChange());
   private readonly logLines: string[] = [];
+  /** 로그 파일의 지금 크기. 처음 쓸 때 읽는다. */
+  private logFileBytes: number | null = null;
   private nextId = 1;
   private readonly pending = new Map<number, Pending>();
   private primaryAddress: string | null = null;
@@ -152,6 +167,31 @@ export class Host extends EventEmitter {
       this.logLines.push(formatLogLine(line));
     }
     if (this.logLines.length > LOG_LINES) this.logLines.splice(0, this.logLines.length - LOG_LINES);
+    // 파일에는 받은 그대로 — 한 줄이 두 덩이로 나뉘어 와도 이어 붙어 JSON 줄이 깨지지 않는다.
+    if (text) this.appendLogFile(text);
+  }
+
+  private appendLogFile(text: string): void {
+    try {
+      const file = serverLogFile();
+      if (this.logFileBytes === null) {
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        this.logFileBytes = fs.existsSync(file) ? fs.statSync(file).size : 0;
+      }
+      if (this.logFileBytes >= LOG_FILE_MAX_BYTES) {
+        // 돌리지 못하면(다른 프로그램이 잡고 있는 등) 이어 쓰고 1MB 뒤에 다시 해 본다.
+        try {
+          fs.renameSync(file, `${file}.1`);
+        } catch {
+          // 그대로 이어 쓴다.
+        }
+        this.logFileBytes = 0;
+      }
+      fs.appendFileSync(file, text);
+      this.logFileBytes += Buffer.byteLength(text);
+    } catch {
+      // 파일에 못 남겨도 서버는 그대로 돈다 — 화면의 최근 로그는 남는다.
+    }
   }
 
   private fork(mode: 'serve' | 'task'): UtilityProcess {
