@@ -153,11 +153,7 @@ Cloudflare 가 로그에 직접 적어 두었듯, 빠른 터널은 **계정 없�
       `server/data/tunnel.json` 에 남는다.
 - [x] **③ 적용 UX** — 주소와 함께 QR 코드를 띄우고(`qrcode-terminal`), 모자란 것을
       딱 집어 알려준다(`npm run serve -- --check`). 서명 키도 첫 실행에 자동 생성.
-- [ ] **`deploy-tunnel.ps1` 을 지울지 정하기** — `npm run serve -- --tunnel` 이 같은 일을
-      하면서 OS 를 가리지 않고 QR 까지 준다. 남겨 두면 두 갈래를 다 관리해야 하고,
-      배포 묶음에서는 이미 빼 두었다. 쓰던 사람이 없으면 지우는 편이 낫다.
-      남겨 두는 동안은 서명 키를 혼자 따로 만든다 — `serve.mjs`·PC 앱은 `server/src/lib/secret.ts` 의
-      `ensureAuthSecret`(형식 검사·원자적 생성)로 모았지만 이 스크립트는 아직 아니다(2026-10-21).
+- [x] **`deploy-tunnel.ps1` 을 지울지 정하기** — 2026-10-21 지웠다(완료 절 *deploy-tunnel.ps1 삭제*).
 - [x] Tailscale 경로 — 2026-09-16 실제로 켜서 밖에서 웹·로그인 확인. 이름 있는 터널은 여전히 안 써 봤다.
 - [ ] 이름 있는 터널 경로는 **실제로 써 보지 않았다** — 계정·도메인이 없어
       판별 로직까지만 확인했다. 실제로 옮길 때 확인이 필요하다.
@@ -192,8 +188,8 @@ Funnel 은 대역폭 제한(수치 비공개)이 있어 큰 파일을 많이 주
 
 - 지금 상태를 알아내기: 터널 없음 / 빠른 터널 / 이름 있는 터널 중 무엇인지
   (`~/.cloudflared/cert.pem` 과 `<UUID>.json` 존재 여부로 판별)
-- 이름 있는 터널이 준비돼 있으면 `deploy-tunnel.ps1` 이 **알아서 그걸 쓴다**
-  (지금은 `tunnel --url` 로 빠른 터널을 하드코딩)
+- 이름 있는 터널이 준비돼 있으면 **알아서 그걸 쓴다** — `scripts/serve.mjs` 가 한다
+  (당시의 `deploy-tunnel.ps1` 은 `tunnel --url` 로 빠른 터널을 하드코딩했다. 2026-10-21 삭제)
 - 정해진 호스트 이름을 저장해 두고 `LISTUP_CORS_ORIGIN` 에도 반영
 - Tailscale 경로도 같은 자리에서 고를 수 있게 (터널 방식을 하드코딩하지 않는다)
 
@@ -611,6 +607,13 @@ Node 22 이상이 필요하다. `better-sqlite3` 는 네이티브 모듈이지�
   false 지만 기본이 바뀌어도 그대로이게). `server/test/logging.test.ts` *요청 id* — 500 의 requestId 가 로그 reqId 와 같음·
   형식·새 인스턴스와 겹치지 않음·헤더 무시. 기본 생성기로 되돌리면 셋이 실패하는 것을 확인했다. README·`docs/API.md`·
   e2e 10 의 예시 번호를 새 꼴로.
+
+- [x] **deploy-tunnel.ps1 삭제** — 2026-10-21. `npm run serve -- --tunnel` 이 같은 단계를 모두 한다 — 서명 키(이쪽은
+  `ensureAuthSecret` 로 형식 검사·원자적 생성, 스크립트는 따로 만들고 검사 없음), `NODE_ENV=production`, 도장 파일로
+  웹 재빌드 판정, 서버 켜고 90초 헬스체크, cloudflared 를 PATH·흔한 설치 경로에서 찾아 빠른 터널 — 그리고 QR·이름 있는
+  터널·Tailscale 까지. 스크립트가 늘 빠른 터널만 쓰던 것은 `npm run tunnel use quick` 으로 고정할 수 있고, PC 앱도
+  빠른 터널을 고를 수 있다. 다른 점은 서버를 별도 cmd 창으로 띄우던 것뿐이라 기능 차이는 없다. README·docs·CLAUDE.md·
+  check-sync·배포 묶음 어디에도 참조가 없었다(이 파일의 기록만). 다음 릴리즈 노트 「호환」에 적는다(P1).
 
 - [x] **ARCHITECTURE 구조 블록 채우기** — 2026-10-21. `check:sync [5]` 경고 2건(app/src/lib 7개, desktop/src 2개)을
   각 파일을 읽고 한 줄씩. `lib/pure/` 는 파일별로(어느 파일이 다시 내보내는지), 보안 표에 서명 키(`lib/secret.ts`)·
