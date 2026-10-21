@@ -2,13 +2,15 @@
  * GitHub 릴리즈를 올린다 — 서버 묶음, 안드로이드 APK, PC 설치 파일을 함께.
  *
  *   npm run release:publish
+ *   npm run release:publish -- --skip-ci   CI 결과 확인만 건너뛴다(로컬 검사는 그대로 돈다)
  *
  * 설치형 클라이언트는 GitHub 의 최신 릴리즈를 보고 업데이트를 제안하므로(app/src/lib/updates.ts),
  * 릴리즈는 이 명령으로만 올려 태그·버전·파일이 어긋나지 않게 한다.
  *
  * 하는 일
  *   1. 확인 — gh 로그인, 작업 트리 깨끗함, main 이 원격과 같음(푸시됨), 태그 v<버전> 이 아직 없음,
- *      릴리즈 노트 docs/releases/v<버전>.md 가 있음, 버전이 모든 곳에서 같음
+ *      릴리즈 노트 docs/releases/v<버전>.md 가 있음, 버전이 모든 곳에서 같음, 서명 키가 있음,
+ *      이 커밋의 GitHub CI 가 모두 끝나 성공함, 로컬 check:sync·typecheck·test 통과
  *   2. 서버 묶음(npm run release), APK(npm run build:android), PC 설치 파일(npm run build:desktop) 빌드
  *   3. 태그를 달아 푸시하고 gh release create 로 파일을 올린다
  *
@@ -36,12 +38,16 @@ const SETUP = path.join(ROOT, 'release', `listup-${VERSION}-windows-setup.exe`);
 const BLOCKMAP = `${SETUP}.blockmap`;
 const LATEST_YML = path.join(ROOT, 'release', `listup-${VERSION}-latest.yml`);
 
+// 설치된 앱이 자동 업데이트로 받아 가므로, CI 가 빨간 커밋은 올리지 않는다. 급할 때만 이걸로 건너뛴다.
+const SKIP_CI = process.argv.slice(2).includes('--skip-ci');
+
 const say = (m) => console.log(m);
 const fail = (m) => {
   console.error(`\n릴리즈를 올리지 않았습니다: ${m}`);
   process.exit(1);
 };
 const git = (...args) => execFileSync('git', args, { cwd: ROOT, encoding: 'utf8' }).trim();
+const REPO = git('remote', 'get-url', 'origin').replace(/^.*github\.com[:/]/, '').replace(/\.git$/, '');
 
 function run(command, args) {
   return new Promise((resolve, reject) => {
@@ -98,6 +104,43 @@ if (mismatched.length) {
   fail(`버전이 어긋납니다: ${mismatched.map(([f, v]) => `${f}=${v}`).join(', ')} (npm run version:set -- ${VERSION})`);
 }
 
+// 이 커밋의 CI — 위에서 HEAD 가 origin/main 과 같다고 봤으므로 푸시로 돈 CI 가 바로 이 커밋 것이다.
+// e2e(웹 흐름)는 로컬에서 돌리지 않고 여기서만 본다. 진행 중·취소·실패·결과 없음은 모두 멈춘다.
+if (SKIP_CI) {
+  console.warn(
+    '\n' + '!'.repeat(72) + '\n' +
+      '!! --skip-ci: CI 결과를 확인하지 않고 올립니다.\n' +
+      '!! e2e 가 깨진 커밋이어도 그대로 배포되고, 설치된 앱이 자동 업데이트로 받아 갑니다.\n' +
+      '!'.repeat(72) + '\n',
+  );
+} else {
+  const sha = git('rev-parse', 'HEAD');
+  let runs;
+  try {
+    const out = execFileSync('gh', ['api', `repos/${REPO}/commits/${sha}/check-runs?per_page=100`], { cwd: ROOT, encoding: 'utf8' });
+    runs = JSON.parse(out).check_runs ?? [];
+  } catch {
+    fail('CI 결과를 가져오지 못했습니다 (위 gh 출력 참고). 네트워크를 확인하거나, 꼭 올려야 하면 --skip-ci.');
+  }
+  const url = `https://github.com/${REPO}/commit/${sha}`;
+  if (!runs.length) fail(`이 커밋(${sha.slice(0, 7)})에 CI 결과가 없습니다. 방금 푸시했으면 CI 가 끝난 뒤 다시 하세요: ${url}`);
+  const pending = runs.filter((r) => r.status !== 'completed');
+  if (pending.length) fail(`CI 가 아직 돌고 있습니다 (${pending.map((r) => r.name).join(', ')}). 끝난 뒤 다시 하세요: ${url}`);
+  // skipped 는 조건(if:)으로 일부러 안 돈 작업이라 통과로 본다.
+  const bad = runs.filter((r) => r.conclusion !== 'success' && r.conclusion !== 'skipped');
+  if (bad.length) fail(`CI 가 녹색이 아닙니다: ${bad.map((r) => `${r.name}=${r.conclusion}`).join(', ')} — ${url}`);
+  say(`CI 통과: ${runs.map((r) => r.name).join(', ')} (${sha.slice(0, 7)})`);
+}
+
+// 로컬 검사 — CI 와 같은 순서(e2e 제외). 빌드보다 훨씬 빠르니 먼저 돌려 실패를 일찍 본다.
+for (const script of ['check:sync', 'typecheck', 'test']) {
+  try {
+    await runNpm(['run', script]);
+  } catch (err) {
+    fail(err.message);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // 2. 빌드
 // ---------------------------------------------------------------------------
@@ -126,4 +169,4 @@ git('tag', '-a', TAG, '-m', `ListUp ${VERSION}`);
 git('push', 'origin', TAG);
 await run('gh', ['release', 'create', TAG, ARCHIVE, APK, SETUP, BLOCKMAP, LATEST_UPLOAD, '--title', `ListUp ${VERSION}`, '--notes-file', NOTES]);
 
-say(`\n완료: https://github.com/${git('remote', 'get-url', 'origin').replace(/^.*github\.com[:/]/, '').replace(/\.git$/, '')}/releases/tag/${TAG}`);
+say(`\n완료: https://github.com/${REPO}/releases/tag/${TAG}`);

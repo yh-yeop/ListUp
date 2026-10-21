@@ -64,7 +64,10 @@ desktop·android 흐름은 CI 에서 돌지 않으므로 그쪽을 고쳤으면 
 
 `npm run version:set -- <버전>` → `docs/releases/v<버전>.md` 작성 → 커밋·푸시 → **Windows 에서**
 `npm run release:publish`. 이 명령이 gh 로그인·깨끗한 작업 트리·`main` 이 원격과 같음·태그 없음·노트 있음·
-버전 일치·서명 키를 먼저 보고, 서버 묶음·APK·PC 설치 파일을 만들어 태그와 함께 GitHub Releases 에 올린다.
+버전 일치·서명 키를 먼저 보고, **그 커밋의 CI(check-runs)가 모두 끝나 성공했는지**(진행 중이면 끝난 뒤 다시) 확인한
+다음 로컬에서 `check:sync`·`typecheck`·`test` 를 돌린 뒤에야 서버 묶음·APK·PC 설치 파일을 만들어 태그와 함께
+GitHub Releases 에 올린다. 그래서 **푸시하고 CI 가 녹색이 된 뒤에** 돌린다. `-- --skip-ci` 는 CI 확인만 건너뛰고
+(크게 경고한다, 로컬 검사는 그대로) e2e 를 거치지 않은 커밋이 배포되므로 급할 때만.
 릴리즈는 이 명령으로만 올린다 — 설치된 앱이 GitHub 최신 릴리즈를 보고 업데이트한다(`app/src/lib/updates.ts`,
 `desktop/src/updater.ts`).
 

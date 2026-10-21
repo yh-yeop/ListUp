@@ -602,6 +602,12 @@ Node 22 이상이 필요하다. `better-sqlite3` 는 네이티브 모듈이지�
 
 ## 완료
 
+- [x] **릴리즈 전 CI 녹색·로컬 검사 관문 — `release:publish`** — 2026-10-21. 사전 확인은 트리·원격·버전·서명만 보고
+  테스트·CI 는 보지 않았는데, 릴리즈는 자동 업데이트로 설치된 앱에 그대로 퍼진다. 서명 키 확인 뒤·빌드 앞에 HEAD 의
+  `check-runs`(gh api)가 모두 `completed` + `success`(또는 `skipped`)인지 보고 — 결과 없음·진행 중·실패·취소면 멈춘다 —
+  로컬 `check:sync`·`typecheck`·`test` 를 돌린다(`scripts/publish-release.mjs`). e2e 는 CI 결과로만 본다.
+  `--skip-ci` 는 CI 확인만 건너뛰고 크게 경고한다.
+
 - [x] **문서·코드 짝 기계 검사 — `npm run check:sync`** — 2026-10-21. 짝이 어긋나도 typecheck·테스트는 통과하고,
   버전·노트는 Windows 에서 `release:publish` 를 돌릴 때야 드러났다. `scripts/check-sync.mjs`(표준 node 만)를 CI 의
   typecheck 앞에서 돌린다: [1] `KNOWN_ENV` ↔ README 환경변수 표 · 서버 코드가 쓰는 `LISTUP_*`, [2] 버전(package.json
