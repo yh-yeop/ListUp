@@ -9,7 +9,6 @@
  * → 터널 열기 → 주소와 QR 코드 보여주기.
  */
 import { spawn } from 'node:child_process';
-import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import qrcode from 'qrcode-terminal';
@@ -42,15 +41,22 @@ if (has('check')) {
 // ---------------------------------------------------------------------------
 // 1. 서명 키 — 없으면 만들어 둔다. 없이 켜면 재시작마다 전원 로그아웃된다.
 // ---------------------------------------------------------------------------
-const secretFile = path.join(DATA_DIR, 'auth-secret.txt');
 if (!process.env.LISTUP_AUTH_SECRET) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  if (!fs.existsSync(secretFile)) {
-    fs.writeFileSync(secretFile, `${crypto.randomBytes(32).toString('hex')}\n`);
-    say(`서명 키를 새로 만들었습니다: ${secretFile}`);
+  // 만들기·검사는 서버 코드(server/src/lib/secret.ts) 한 곳에 — PC 앱도 같은 것을 쓴다. tsx 는 서버 의존성이다.
+  const { tsImport } = await import('tsx/esm/api');
+  const { ensureAuthSecret } = await tsImport('../server/src/lib/secret.ts', import.meta.url);
+  let result;
+  try {
+    result = ensureAuthSecret(DATA_DIR);
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : err);
+    process.exit(1);
+  }
+  if (result.created) {
+    say(`서명 키를 새로 만들었습니다: ${result.file}`);
     say('  이 파일이 바뀌면 모두 로그아웃됩니다. 지우거나 옮기지 마세요.\n');
   }
-  process.env.LISTUP_AUTH_SECRET = fs.readFileSync(secretFile, 'utf8').trim();
+  process.env.LISTUP_AUTH_SECRET = result.secret;
 }
 
 // ---------------------------------------------------------------------------

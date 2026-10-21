@@ -1,12 +1,11 @@
-import crypto from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import fs from 'node:fs';
 import os from 'node:os';
 import { createSocket } from 'node:dgram';
 import { utilityProcess, type UtilityProcess } from 'electron';
 import type { HostSettingsPatch, HostState, HostStatus } from '@listup/shared';
+import { ensureAuthSecret } from '../../server/src/lib/secret.ts';
 import type { ServerReply, ServerRequest } from './protocol.ts';
-import { cleanServerName, dataDirOf, readSettings, writeSettings } from './settings.ts';
+import { cleanServerName, dataDirOf, readSettings, settingsNotice, writeSettings } from './settings.ts';
 import { Tunnel } from './tunnel.ts';
 
 /** 서버 프로세스를 띄우는 데 필요한 파일 위치. main 이 개발/설치에 맞춰 정한다. */
@@ -125,6 +124,7 @@ export class Host extends EventEmitter {
       autoStart: settings.autoStart,
       openAtLogin: settings.openAtLogin,
       serverName: settings.serverName,
+      settingsNotice: settingsNotice(),
     };
   }
 
@@ -154,14 +154,6 @@ export class Host extends EventEmitter {
     if (this.logLines.length > LOG_LINES) this.logLines.splice(0, this.logLines.length - LOG_LINES);
   }
 
-  /** 서명 키 — 없으면 만든다. 없이 켜면 켤 때마다 새 키라 모두 로그아웃된다. */
-  private authSecret(dataDir: string): string {
-    const file = `${dataDir}/auth-secret.txt`;
-    fs.mkdirSync(dataDir, { recursive: true });
-    if (!fs.existsSync(file)) fs.writeFileSync(file, `${crypto.randomBytes(32).toString('hex')}\n`);
-    return fs.readFileSync(file, 'utf8').trim();
-  }
-
   private fork(mode: 'serve' | 'task'): UtilityProcess {
     const settings = readSettings();
     const dataDir = dataDirOf(settings);
@@ -176,7 +168,8 @@ export class Host extends EventEmitter {
         ...inherited,
         NODE_ENV: 'production',
         LISTUP_DATA_DIR: dataDir,
-        LISTUP_AUTH_SECRET: this.authSecret(dataDir),
+        // 서명 키 — 없으면 만든다. 없이 켜면 켤 때마다 새 키라 모두 로그아웃된다. 깨졌으면 던진다(켜지 않음).
+        LISTUP_AUTH_SECRET: ensureAuthSecret(dataDir).secret,
         LISTUP_PORT: String(settings.port),
         LISTUP_WEB_DIR: this.paths.serverWeb,
         LISTUP_LOG_LEVEL: process.env.LISTUP_LOG_LEVEL ?? 'info',

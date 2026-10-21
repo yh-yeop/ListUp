@@ -318,6 +318,43 @@ try {
 }
 
 // ---------------------------------------------------------------------------
+// 손상된 설정 — 원본을 .corrupt-<시각> 으로 옮겨 두고 기본값으로 뜨며, 이 PC 서버 화면에 알린다.
+// (조용히 기본값으로 뜨면 데이터 폴더가 바뀌어 저장소가 전부 사라진 것처럼 보인다.) 서버는 켜지 않는다.
+// ---------------------------------------------------------------------------
+{
+  say('\n손상된 설정');
+  const userData3 = fs.mkdtempSync(path.join(os.tmpdir(), 'listup-desktop-corrupt-'));
+  const broken = '{"port": 12';
+  fs.writeFileSync(path.join(userData3, 'settings.json'), broken);
+  const env3 = { ...env, LISTUP_DESKTOP_USER_DATA: userData3 };
+  const app3 = await _electron.launch(
+    packagedExe ? { executablePath: packagedExe, args: [], env: env3 } : { executablePath, args: [path.join(ROOT, 'desktop')], env: env3 },
+  );
+  const page3 = await app3.firstWindow();
+  page3.on('dialog', (d) => void d.dismiss());
+  try {
+    await screen(page3).listIntro().waitFor();
+    const moved = fs.readdirSync(userData3).filter((name) => name.startsWith('settings.json.corrupt-'));
+    t.must(
+      moved.length === 1 && fs.readFileSync(path.join(userData3, moved[0]), 'utf8') === broken,
+      '깨진 settings.json 은 내용 그대로 .corrupt-<시각> 으로 옮겨 둔다',
+    );
+    await page3.goto('app://listup/host');
+    await page3.getByText('설정 파일(settings.json)이 손상돼 기본값으로 시작했습니다', { exact: false }).waitFor();
+    t.must(true, '이 PC 서버 화면에 손상 안내');
+  } catch (err) {
+    failed += 1;
+    say(`  ✗ 중단: ${err instanceof Error ? err.message : err}`);
+    fs.mkdirSync(FAILURES, { recursive: true });
+    await page3.screenshot({ path: path.join(FAILURES, 'desktop-corrupt.png') }).catch(() => {});
+  } finally {
+    await app3.evaluate(({ app: electronApp }) => electronApp.exit(0)).catch(() => {});
+    await app3.close().catch(() => {});
+    fs.rmSync(userData3, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });
+  }
+}
+
+// ---------------------------------------------------------------------------
 // 자동 업데이트 — 가짜 업데이트 서버(latest.yml + 가짜 설치 파일)로 확인·받기·설치 제안까지.
 // 받은 파일을 실행(설치)하지는 않는다(LISTUP_DESKTOP_UPDATE_NO_INSTALL).
 // ---------------------------------------------------------------------------

@@ -26,6 +26,50 @@ function serverNameFor(value: string | undefined) {
   }
 }
 
+function withEnv<T>(values: Record<string, string | undefined>, run: () => T): T {
+  const before = Object.fromEntries(Object.keys(values).map((name) => [name, process.env[name]]));
+  const apply = (next: Record<string, string | undefined>) => {
+    for (const [name, value] of Object.entries(next)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  };
+  apply(values);
+  try {
+    return run();
+  } finally {
+    apply(before);
+  }
+}
+
+describe('LISTUP_AUTH_SECRET', () => {
+  it('개발에서 안 주면 매번 새로 만든다', () => {
+    const secret = withEnv({ LISTUP_AUTH_SECRET: undefined, NODE_ENV: 'development' }, () => loadConfig().authSecret);
+    assert.match(secret, /^[0-9a-f]{64}$/);
+  });
+
+  it('production 에서 안 주면 뜨지 않는다', () => {
+    assert.throws(
+      () => withEnv({ LISTUP_AUTH_SECRET: undefined, NODE_ENV: 'production' }, () => loadConfig()),
+      /LISTUP_AUTH_SECRET 환경변수가 필요합니다/,
+    );
+  });
+
+  it('주었으면 32자 이상이어야 한다 — 빈 값은 개발에서도 거부', () => {
+    for (const NODE_ENV of ['development', 'production']) {
+      for (const value of ['', 'short', 'a'.repeat(31)]) {
+        assert.throws(
+          () => withEnv({ LISTUP_AUTH_SECRET: value, NODE_ENV }, () => loadConfig()),
+          /32자 이상/,
+          `${NODE_ENV} ${JSON.stringify(value)}`,
+        );
+      }
+    }
+    const key = 'k'.repeat(32);
+    assert.equal(withEnv({ LISTUP_AUTH_SECRET: key, NODE_ENV: 'production' }, () => loadConfig().authSecret), key);
+  });
+});
+
 describe('LISTUP_SERVER_NAME', () => {
   it('없거나 공백뿐이면 null', () => {
     assert.equal(serverNameFor(undefined), null);

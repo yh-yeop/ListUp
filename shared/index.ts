@@ -571,6 +571,8 @@ export interface HostStatus {
   openAtLogin: boolean;
   /** 서버 이름(LISTUP_SERVER_NAME). 들어오는 사람의 서버 목록에 이 이름으로 보인다. 없으면 null. */
   serverName: string | null;
+  /** PC 앱 설정 파일이 손상돼 기본값으로 시작했다는 안내(이번 실행 동안). 없으면 null. */
+  settingsNotice: string | null;
 }
 
 export interface HostSettingsPatch {

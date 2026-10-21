@@ -78,6 +78,7 @@ function HostPanel({ status }: { status: HostStatus }) {
         </Subtitle>
       </View>
 
+      {status.settingsNotice ? <ErrorNotice message={status.settingsNotice} /> : null}
       {error ? <ErrorNotice message={error} /> : null}
 
       <Card style={{ gap: spacing.md }}>

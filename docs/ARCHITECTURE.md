@@ -296,7 +296,8 @@ desktop/src/
 ├─ tunnel.ts        공개 주소 — Tailscale Funnel(--bg) / Cloudflare 빠른 터널
 ├─ folders.ts       내 폴더와 비교 — 대화상자로 고른 폴더 안만 훑기·조각 읽기·받아 쓰기
 ├─ settings.ts      포트·공개 방식·자동 켜기·데이터 폴더 (앱 데이터 폴더의 settings.json)
-└─ credentials.ts   로그인 정보 — safeStorage(DPAPI)로 암호화
+├─ credentials.ts   로그인 정보 — safeStorage(DPAPI)로 암호화
+└─ atomic-write.ts  settings·credentials 저장(임시 파일 → fsync → 이름 바꾸기), 깨진 파일을 .corrupt-<시각> 으로 격리
 ```
 
 - **`app://listup`** — 창의 주소가 늘 같아 서버 목록(localStorage)이 남습니다. 보안 컨텍스트가 아니게

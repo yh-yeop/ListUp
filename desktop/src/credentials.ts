@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { app, safeStorage } from 'electron';
+import { atomicWrite, quarantine } from './atomic-write.ts';
 
 /**
  * 로그인 정보 저장소 — 앱(`app/src/lib/credentials.ts`)이 서버마다 이메일·비밀번호를 둔다.
@@ -12,15 +13,17 @@ const file = () => path.join(app.getPath('userData'), 'credentials.json');
 function readAll(): Record<string, string> {
   try {
     const parsed = JSON.parse(fs.readFileSync(file(), 'utf8')) as unknown;
-    return parsed && typeof parsed === 'object' ? (parsed as Record<string, string>) : {};
-  } catch {
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('객체가 아닙니다');
+    return parsed as Record<string, string>;
+  } catch (err) {
+    // 깨졌으면 원본을 옆에 남긴다 — 다음 저장이 빈 목록으로 덮어쓰지 않게.
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') quarantine(file(), err);
     return {};
   }
 }
 
 function writeAll(values: Record<string, string>): void {
-  fs.mkdirSync(path.dirname(file()), { recursive: true });
-  fs.writeFileSync(file(), JSON.stringify(values));
+  atomicWrite(file(), JSON.stringify(values));
 }
 
 export function credentialsAvailable(): boolean {

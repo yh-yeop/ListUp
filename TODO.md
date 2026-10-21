@@ -156,6 +156,8 @@ Cloudflare 가 로그에 직접 적어 두었듯, 빠른 터널은 **계정 없�
 - [ ] **`deploy-tunnel.ps1` 을 지울지 정하기** — `npm run serve -- --tunnel` 이 같은 일을
       하면서 OS 를 가리지 않고 QR 까지 준다. 남겨 두면 두 갈래를 다 관리해야 하고,
       배포 묶음에서는 이미 빼 두었다. 쓰던 사람이 없으면 지우는 편이 낫다.
+      남겨 두는 동안은 서명 키를 혼자 따로 만든다 — `serve.mjs`·PC 앱은 `server/src/lib/secret.ts` 의
+      `ensureAuthSecret`(형식 검사·원자적 생성)로 모았지만 이 스크립트는 아직 아니다(2026-10-21).
 - [x] Tailscale 경로 — 2026-09-16 실제로 켜서 밖에서 웹·로그인 확인. 이름 있는 터널은 여전히 안 써 봤다.
 - [ ] 이름 있는 터널 경로는 **실제로 써 보지 않았다** — 계정·도메인이 없어
       판별 로직까지만 확인했다. 실제로 옮길 때 확인이 필요하다.
@@ -601,6 +603,15 @@ Node 22 이상이 필요하다. `better-sqlite3` 는 네이티브 모듈이지�
 ---
 
 ## 완료
+
+- [x] **PC 앱 로컬 파일 원자적 저장·손상 격리 + 서명 키 일원화** — 2026-10-21. settings.json 을 writeFileSync 로
+  덮어쓰다 죽거나 깨지면 조용히 기본값으로 떠 데이터 폴더(dataDir)가 바뀌고, 새 서명 키·빈 DB 로 서버가 떠
+  '저장소 전멸'처럼 보였다. `desktop/src/atomic-write.ts`(임시 파일 → fsync → 이름 바꾸기, 거부되면 제자리 쓰기)를
+  settings·credentials 저장에 쓰고, 읽다 실패하면(ENOENT 제외) `<파일>.corrupt-<시각>` 으로 옮겨 두고 경고 —
+  settings 는 `HostStatus.settingsNotice` 로 이 PC 서버 화면에 알린다. 서명 키는 `server/src/lib/secret.ts` 의
+  `ensureAuthSecret` 하나로(`serve.mjs` 는 tsx 로 불러 씀): 없으면 원자적으로 만들고(0600), 64자 hex 가 아니면 새로
+  만들지 않고 멈춘다. `config.ts` 는 `LISTUP_AUTH_SECRET` 을 주었으면 32자 이상(빈 값은 개발에서도 거부).
+  서버 테스트(secret·config), `test:desktop` 에 손상 설정 케이스.
 
 - [x] **릴리즈 전 CI 녹색·로컬 검사 관문 — `release:publish`** — 2026-10-21. 사전 확인은 트리·원격·버전·서명만 보고
   테스트·CI 는 보지 않았는데, 릴리즈는 자동 업데이트로 설치된 앱에 그대로 퍼진다. 서명 키 확인 뒤·빌드 앞에 HEAD 의

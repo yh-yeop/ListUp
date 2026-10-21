@@ -136,6 +136,9 @@ function envServerName(): string | null {
   return clean ? [...clean].slice(0, MAX_SERVER_NAME_LENGTH).join('') : null;
 }
 
+/** 서명 키의 최소 길이. 만들어 주는 키(server/src/lib/secret.ts)는 64자 hex 다. */
+export const MIN_AUTH_SECRET_LENGTH = 32;
+
 const warnedUnknownEnv = new Set<string>();
 
 /** 이름을 잘못 쓴 `LISTUP_*` 변수는 무시되므로, 한 번씩 경고로 알려준다. */
@@ -153,8 +156,15 @@ export function loadConfig(overrides: Partial<Config> = {}): Config {
   const dataDir = process.env.LISTUP_DATA_DIR ?? path.resolve(process.cwd(), 'data');
   const secret = process.env.LISTUP_AUTH_SECRET;
 
-  if (!secret && process.env.NODE_ENV === 'production') {
+  if (secret === undefined && process.env.NODE_ENV === 'production') {
     throw new Error('LISTUP_AUTH_SECRET 환경변수가 필요합니다 (production).');
+  }
+  // 주었으면 짧은 키는 받지 않는다 — 빈 값(`LISTUP_AUTH_SECRET=`)도 모드와 상관없이. 안 주는 것은 개발에서 괜찮다(아래).
+  if (secret !== undefined && secret.length < MIN_AUTH_SECRET_LENGTH) {
+    throw new Error(
+      `LISTUP_AUTH_SECRET 은(는) ${MIN_AUTH_SECRET_LENGTH}자 이상이어야 합니다 (지금 ${secret.length}자). ` +
+        '개발에서 자동으로 만들게 하려면 변수를 아예 지우세요.',
+    );
   }
 
   const logLevel = process.env.LISTUP_LOG_LEVEL || 'info';
