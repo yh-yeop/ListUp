@@ -6,6 +6,9 @@ import type { DesktopUpdates, DesktopUpdateState } from '@listup/shared';
 import { apkInstallSupported, downloadAndInstallApk } from './apk-update';
 import { desktopBridge } from './desktop';
 import { confirmAction, notify, notifyError } from './dialogs';
+import { compareVersions } from './pure/versions';
+
+export { compareVersions };
 
 /**
  * 설치형 클라이언트의 업데이트 확인. 새 버전(APK 등)은 GitHub 릴리즈에 올린다.
@@ -82,22 +85,6 @@ interface UpdateCache {
 /** 업데이트를 확인하는 빌드인지 — 설치형 클라이언트만. */
 export function updateChecksEnabled(): boolean {
   return IS_CLIENT_BUILD;
-}
-
-/** `1.10.0` 과 `1.9.2` 처럼 숫자로 견준다. 앞의 `v` 와 `-beta` 같은 꼬리는 무시한다. a>b 면 양수. */
-export function compareVersions(a: string, b: string): number {
-  const parts = (v: string) =>
-    v
-      .replace(/^v/i, '')
-      .split(/[-+]/)[0]
-      .split('.')
-      .map((n) => Number.parseInt(n, 10) || 0);
-  const [x, y] = [parts(a), parts(b)];
-  for (let i = 0; i < Math.max(x.length, y.length); i += 1) {
-    const diff = (x[i] ?? 0) - (y[i] ?? 0);
-    if (diff !== 0) return diff;
-  }
-  return 0;
 }
 
 async function readCache(): Promise<UpdateCache> {

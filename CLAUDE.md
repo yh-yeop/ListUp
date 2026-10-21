@@ -32,6 +32,7 @@ CI 가 typecheck 앞에서 돌린다. 나머지는 수동이고, 타입 검사·
 | 버전 | **`npm run version:set -- <버전>`** 으로만 (package.json 5곳·lock·`app/app.json` version·versionCode) + `docs/releases/v<버전>.md` | `check:sync [2]`(전부 일치·versionCode 공식) `[3]`(노트). 릴리즈 때 `release:publish` 도 package.json·app.json version 과 노트를 다시 본다 |
 | DB 스키마 | `server/src/db/schema.sql.ts` 의 `MIGRATIONS` 끝에 항목 추가(기존 항목은 고치지 않는다), 위에 **왜** 주석. 데이터를 옮기는(`run`) 마이그레이션은 `server/test/migrations.test.ts` 에 이전 전후 대조 | 수동 |
 | PC 앱 IPC (`window.listupDesktop`) | `shared/index.ts` `DesktopBridge` + `desktop/src/protocol.ts` `IPC` 채널 + `desktop/src/preload.ts` 구현 + `desktop/src/main.ts` `ipcMain.handle` | preload 는 typecheck, main 핸들러는 수동(`test:desktop`) |
+| 앱의 순수 로직(버전 비교·건너뛰기 판정·폴더 대조·서버 목록 읽기 같은 것) | `app/src/lib/pure/` 에 두고 원래 파일이 다시 내보낸다. 거기서는 react-native·expo·`api/client` 를 `import type` 으로만. 사례는 `app/test/*.test.ts` | `npm test` (값 import 가 섞이면 node 에서 불러오다 실패) |
 | 앱·PC 앱 소스 파일 추가 | `docs/ARCHITECTURE.md` 구조 블록 (`app/src/…`, `desktop/src/…`) | `check:sync [5]` 가 `app/src/lib`·`desktop/src` 만 **경고**(실패 아님). 나머지는 수동 |
 | 화면의 버튼 글자·`accessibilityLabel` | e2e 가 `getByRole(…, { name })` 으로 찾는다 → `e2e/` 의 해당 이름 | `test:e2e` |
 | 사용자에게 보이는 기능 | README 「무엇을 할 수 있나」(+ 릴리즈에 나갈 거면 `docs/releases/v<버전>.md`) | 수동 |
@@ -44,7 +45,7 @@ Electron 실행 파일이 필요 없으면 `ELECTRON_SKIP_BINARY_DOWNLOAD=1 npm 
 ```
 npm run check:sync    # 문서·코드 짝 (env 표·버전·릴리즈 노트·공개 금지 패턴·구조 블록). 표준 node 만
 npm run typecheck     # server + app + desktop
-npm test              # 서버 테스트 (node:test + tsx, HTTP 수준)
+npm test              # 서버 테스트(HTTP 수준) + 앱 순수 로직(app/test) — 둘 다 node:test + tsx
 npm run test:e2e      # 웹 흐름 — 웹을 두 모드로 빌드해 브라우저로. 임시 DB·빈 포트
 npm run test:desktop  # PC 앱 흐름 — 실제 Electron
 npm run test:android  # 안드로이드 흐름 — 에뮬레이터 + 시험용 APK
@@ -53,6 +54,8 @@ npm run test:android  # 안드로이드 흐름 — 에뮬레이터 + 시험용 A
 - `test:e2e` 브라우저: Windows 는 설치된 Edge, 그 밖에는 `npx playwright-core install chromium`
   (`E2E_BROWSER_CHANNEL` 로 바꿀 수 있다). 실패 화면은 `e2e/.cache/failures/`.
   **앱 화면·서버 흐름을 고쳤으면 반드시 돌린다.**
+- `npm test` 의 앱 쪽(`app/test/`)은 `app/src/lib/pure/` 만 불러온다 — 화면·저장소·네트워크는 e2e 몫이다.
+  로직을 고쳤으면 수정 전 코드에서 실패하는 사례를 하나 넣는다.
 - `test:desktop` 은 Electron 실행 파일이 있어야 한다(위 SKIP 으로 설치했으면 못 돈다).
 - `test:android` 는 Android SDK·에뮬레이터·JDK 와 **정식 서명 키**(`~/.listup`)가 있어야 한다 — 시험용 APK 도 같은 키로 서명한다.
 

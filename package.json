@@ -28,7 +28,7 @@
     "release:publish": "node scripts/publish-release.mjs",
     "version:set": "node scripts/set-version.mjs",
     "check:sync": "node scripts/check-sync.mjs",
-    "test": "npm run test --workspace @listup/server",
+    "test": "npm run test --workspace @listup/server && npm run test --workspace @listup/app",
     "test:e2e": "node e2e/run.mjs",
     "test:desktop": "node e2e/desktop.mjs",
     "test:android": "node e2e/android.mjs",

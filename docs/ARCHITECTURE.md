@@ -209,6 +209,8 @@ app/
    ├─ lib/desktop.ts          PC 앱이 창에 넣어 준 window.listupDesktop 읽기
    ├─ lib/local-folder.ts     내 폴더 고르기·훑기·그 폴더에 받기 (PC 앱 / 안드로이드 SAF / 브라우저)
    ├─ lib/folder-compare.ts   저장소 폴더(recursive 목록)와 내 폴더를 이름으로 견주기
+   ├─ lib/pure/               플랫폼 import 가 없는 순수 로직 — 버전 비교·건너뛰기 판정·폴더 대조·서버 목록 읽기/예전 키 이전.
+   │                          원래 파일(updates·transfer·folder-compare·state/servers)이 다시 내보낸다. app/test 가 node 로 검사
    ├─ components/             공용 UI + 저장소 탭 네비게이션
    └─ theme.ts                라이트/다크 팔레트
 ```
