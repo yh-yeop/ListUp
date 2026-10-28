@@ -49,6 +49,8 @@ export default function NewProposalScreen() {
   const [progress, setProgress] = useState<UploadProgress | null>(null);
   const uploading = progress !== null;
   const transfer = useTransferControl('담던 파일은 끊습니다. 그때까지 다 담은 파일은 제안에 남습니다.');
+  // 선택기가 돌아온 뒤 한도를 확인하고 올리기 시작하기 전까지 다시 눌리지 않게 한다.
+  const [preparing, setPreparing] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [browsePath, setBrowsePath] = useState(initialPath ?? '');
@@ -82,7 +84,7 @@ export default function NewProposalScreen() {
   }, [navigation, hasDraft]);
 
   async function addFiles() {
-    if (uploading) return;
+    if (uploading || preparing) return;
     let sources;
     try {
       sources = await pickFiles(true);
@@ -91,47 +93,51 @@ export default function NewProposalScreen() {
       return;
     }
     if (sources.length === 0) return;
-
-    setError(null);
-    // 새로 담는 파일은 지금 탐색 중인 폴더에 넣는다.
-    const targetFolder = browsePath;
-    // 한도는 서버 설정을 따르므로 서버에 물어본 값으로 거른다.
-    const maxBytes = await getMaxUploadBytes();
-    const tooLarge = sources.filter((source) => source.size > maxBytes).map((source) => source.name);
-    const accepted = sources.filter((source) => source.size <= maxBytes);
-    const added: StagedChange[] = [];
-    if (accepted.length > 0) {
-      setProgress({ sentBytes: 0, totalBytes: 0, doneFiles: 0, totalFiles: accepted.length, current: '' });
-      // 제안용 blob 은 미리 나눠 올려 둔다. 저장소 내용은 아직 그대로다.
-      const { uploaded, failures, cancelled } = await uploadMany(
-        repoId,
-        accepted.map((source) => ({
-          source,
-          path: targetFolder ? `${targetFolder}/${source.name}` : source.name,
-        })),
-        setProgress,
-        transfer.begin(),
-      );
-      if (cancelled) notify(`멈췄습니다 — ${uploaded.length}/${accepted.length}개 담음`);
-      for (const { item, blob } of uploaded) {
-        keySeq.current += 1;
-        added.push({
-          key: `upload:${keySeq.current}`,
-          path: item.path,
-          blobHash: blob.hash,
-          size: blob.size,
-          originalName: item.source.name,
-        });
+    setPreparing(true);
+    try {
+      setError(null);
+      // 새로 담는 파일은 지금 탐색 중인 폴더에 넣는다.
+      const targetFolder = browsePath;
+      // 한도는 서버 설정을 따르므로 서버에 물어본 값으로 거른다.
+      const maxBytes = await getMaxUploadBytes();
+      const tooLarge = sources.filter((source) => source.size > maxBytes).map((source) => source.name);
+      const accepted = sources.filter((source) => source.size <= maxBytes);
+      const added: StagedChange[] = [];
+      if (accepted.length > 0) {
+        setProgress({ sentBytes: 0, totalBytes: 0, doneFiles: 0, totalFiles: accepted.length, current: '' });
+        // 제안용 blob 은 미리 나눠 올려 둔다. 저장소 내용은 아직 그대로다.
+        const { uploaded, failures, cancelled } = await uploadMany(
+          repoId,
+          accepted.map((source) => ({
+            source,
+            path: targetFolder ? `${targetFolder}/${source.name}` : source.name,
+          })),
+          setProgress,
+          transfer.begin(),
+        );
+        if (cancelled) notify(`멈췄습니다 — ${uploaded.length}/${accepted.length}개 담음`);
+        for (const { item, blob } of uploaded) {
+          keySeq.current += 1;
+          added.push({
+            key: `upload:${keySeq.current}`,
+            path: item.path,
+            blobHash: blob.hash,
+            size: blob.size,
+            originalName: item.source.name,
+          });
+        }
+        if (failures.length > 0) setError(`${failures[0].item.source.name}: ${failures[0].message}`);
+        setProgress(null);
       }
-      if (failures.length > 0) setError(`${failures[0].item.source.name}: ${failures[0].message}`);
-      setProgress(null);
-    }
-    setStaged((prev) => [...prev, ...added]);
-    if (tooLarge.length > 0) {
-      notifyError(
-        '너무 큰 파일은 건너뛰었습니다.',
-        `파일 하나는 ${formatBytes(maxBytes)}까지 담을 수 있습니다: ${tooLarge.join(', ')}`,
-      );
+      setStaged((prev) => [...prev, ...added]);
+      if (tooLarge.length > 0) {
+        notifyError(
+          '너무 큰 파일은 건너뛰었습니다.',
+          `파일 하나는 ${formatBytes(maxBytes)}까지 담을 수 있습니다: ${tooLarge.join(', ')}`,
+        );
+      }
+    } finally {
+      setPreparing(false);
     }
   }
 
@@ -246,7 +252,7 @@ export default function NewProposalScreen() {
             icon="add"
             compact
             onPress={addFiles}
-            loading={uploading}
+            loading={uploading || preparing}
           />
         </Row>
         <Caption>
@@ -311,12 +317,13 @@ export default function NewProposalScreen() {
         {browsePath !== '' ? (
           <Pressable
             onPress={() => setBrowsePath(browsePath.split('/').slice(0, -1).join('/'))}
+            accessibilityRole="button"
             style={{
               flexDirection: 'row',
               alignItems: 'center',
               gap: spacing.md,
               paddingHorizontal: spacing.lg,
-              paddingVertical: spacing.sm,
+              paddingVertical: spacing.md,
             }}
           >
             <Ionicons name="arrow-up" size={18} color={colors.textMuted} />
@@ -336,6 +343,7 @@ export default function NewProposalScreen() {
               <Pressable
                 key={dir.path}
                 onPress={() => setBrowsePath(dir.path)}
+                accessibilityRole="button"
                 style={({ pressed }) => ({
                   flexDirection: 'row',
                   alignItems: 'center',
@@ -360,6 +368,7 @@ export default function NewProposalScreen() {
                   <Divider />
                   <Pressable
                     onPress={() => stageDeletion(file.path)}
+                    accessibilityRole="button"
                     disabled={alreadyStaged}
                     style={({ pressed }) => ({
                       flexDirection: 'row',

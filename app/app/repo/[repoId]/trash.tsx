@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Stack, router, useLocalSearchParams } from 'expo-router';
 import { useMemo, useState } from 'react';
-import { RefreshControl, Text, View } from 'react-native';
+import { ActivityIndicator, RefreshControl, Text, View } from 'react-native';
 import {
   MAX_TRASH_ENTRIES,
   formatBytes,
@@ -224,16 +224,22 @@ export default function TrashScreen() {
                             {entry.path} · {formatBytes(entry.size)}
                           </Caption>
                         </View>
-                        <IconButton
-                          icon="download-outline"
-                          label={`${entry.name} 지우기 전 내용 받기`}
-                          onPress={() => void download(entry)}
-                        />
-                        <IconButton
-                          icon="arrow-undo-outline"
-                          label={`${entry.name} 되돌리기`}
-                          onPress={() => void restore([entry], key)}
-                        />
+                        {busy === key || busy === `dl:${key}` ? (
+                          <ActivityIndicator size="small" color={colors.textMuted} />
+                        ) : (
+                          <>
+                            <IconButton
+                              icon="download-outline"
+                              label={`${entry.name} 지우기 전 내용 받기`}
+                              onPress={() => void download(entry)}
+                            />
+                            <IconButton
+                              icon="arrow-undo-outline"
+                              label={`${entry.name} 되돌리기`}
+                              onPress={() => void restore([entry], key)}
+                            />
+                          </>
+                        )}
                       </Row>
                     </View>
                   );

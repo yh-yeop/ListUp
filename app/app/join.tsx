@@ -29,7 +29,7 @@ import { confirmAction } from '../src/lib/dialogs';
 import { appLinkFor, clearPendingInvite, setPendingInvite } from '../src/lib/invite-link';
 import { useAuth } from '../src/state/auth';
 import { checkServer, describeCheck, normalizeServerUrl, serverUrl } from '../src/state/servers';
-import { fontSize, monoFont, spacing, useTheme } from '../src/theme';
+import { fontSize, monoFont, radius, spacing, useTheme } from '../src/theme';
 
 /**
  * 초대 코드로 참여. 초대 링크(`/join?code=`)나 앱 링크(`listup://join?server=&code=`)로도 들어온다.
@@ -120,6 +120,7 @@ export default function JoinScreen() {
   }
 
   async function lookup(code: string) {
+    if (busy) return;
     const clean = parseInviteCode(code);
     if (!clean) {
       setError(`초대 코드는 ${INVITE_CODE_LENGTH}자입니다. 다시 확인해 주세요.`);
@@ -191,7 +192,7 @@ export default function JoinScreen() {
           label="코드 확인"
           onPress={() => void lookup(raw)}
           loading={busy && !preview}
-          disabled={!normalized}
+          disabled={!normalized || busy}
           full
         />
       </Card>
@@ -216,7 +217,7 @@ export default function JoinScreen() {
           <View
             style={{
               backgroundColor: colors.surfaceAlt,
-              borderRadius: spacing.md,
+              borderRadius: radius.md,
               padding: spacing.md,
               gap: spacing.xs,
             }}

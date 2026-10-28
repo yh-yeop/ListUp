@@ -21,7 +21,7 @@ import { useAuth } from '../src/state/auth';
 import { ApiError, IS_CLIENT_BUILD } from '../src/api/client';
 import { openServerList } from '../src/lib/server-list';
 import { serverTitle } from '../src/state/servers';
-import { radius, spacing, useTheme } from '../src/theme';
+import { fontSize, radius, spacing, useTheme } from '../src/theme';
 
 export default function LoginScreen() {
   const { login, activeServer, servers } = useAuth();
@@ -129,10 +129,10 @@ export default function LoginScreen() {
                 router.push({ pathname: '/reset-password', params: email.trim() ? { email: email.trim() } : {} })
               }
               accessibilityRole="link"
-              hitSlop={8}
+              hitSlop={12}
               style={{ alignSelf: 'center' }}
             >
-              <Body muted style={{ fontSize: 13 }}>
+              <Body muted style={{ fontSize: fontSize.sm }}>
                 비밀번호를 잊었나요?
               </Body>
             </Pressable>
@@ -153,11 +153,11 @@ export default function LoginScreen() {
               gap: spacing.xs,
             }}
           >
-            <Body muted style={{ fontSize: 12 }}>
+            <Body muted style={{ fontSize: fontSize.xs }}>
               서버: {activeServer ? serverTitle(activeServer) : '고르지 않음'}
             </Body>
-            <Pressable onPress={openServerList} accessibilityRole="link" hitSlop={8}>
-              <Body style={{ color: colors.accent, fontSize: 12, fontWeight: '600' }}>
+            <Pressable onPress={openServerList} accessibilityRole="link" hitSlop={12}>
+              <Body style={{ color: colors.accent, fontSize: fontSize.xs, fontWeight: '600' }}>
                 {IS_CLIENT_BUILD || servers.length > 1 ? '다른 서버' : '바꾸기'}
               </Body>
             </Pressable>

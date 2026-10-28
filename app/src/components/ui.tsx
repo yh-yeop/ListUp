@@ -83,7 +83,7 @@ export function Card({
 export function Title({ children, style }: { children: ReactNode; style?: StyleProp<TextStyle> }) {
   const { colors } = useTheme();
   return (
-    <Text style={[{ color: colors.text, fontSize: fontSize.xl, fontWeight: '700' }, style]}>
+    <Text role="heading" style={[{ color: colors.text, fontSize: fontSize.xl, fontWeight: '700' }, style]}>
       {children}
     </Text>
   );
@@ -429,7 +429,7 @@ export function ErrorNotice({ message, onRetry }: { message: string; onRetry?: (
     >
       <View style={{ flexDirection: 'row', gap: spacing.sm, alignItems: 'flex-start' }}>
         <Ionicons name="alert-circle" size={18} color={colors.danger} style={{ marginTop: 1 }} />
-        <Text style={{ color: colors.danger, fontSize: fontSize.sm, flex: 1, lineHeight: 20 }}>
+        <Text role="alert" style={{ color: colors.danger, fontSize: fontSize.sm, flex: 1, lineHeight: 20 }}>
           {message}
         </Text>
       </View>

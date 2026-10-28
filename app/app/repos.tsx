@@ -92,8 +92,9 @@ export default function ReposScreen() {
           headerRight: () => (
             <Pressable
               onPress={() => router.push('/settings')}
+              accessibilityRole="button"
               accessibilityLabel="내 정보"
-              hitSlop={8}
+              hitSlop={12}
               style={{ paddingHorizontal: spacing.md }}
             >
               <Ionicons name="person-circle-outline" size={24} color={colors.textMuted} />

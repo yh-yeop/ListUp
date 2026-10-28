@@ -7,7 +7,7 @@ import { RememberLogin } from '../src/components/RememberLogin';
 import { credentialsSupported } from '../src/lib/credentials';
 import { useAuth } from '../src/state/auth';
 import { serverTitle } from '../src/state/servers';
-import { spacing } from '../src/theme';
+import { fontSize, spacing } from '../src/theme';
 
 /**
  * 비밀번호를 잊었을 때 — 계정은 서버마다 따로라, 그 서버를 돌리는 사람에게 재설정 코드를 받는다
@@ -93,7 +93,7 @@ export default function ResetPasswordScreen() {
           <Button label="새 비밀번호로 로그인" onPress={submit} loading={busy} full />
         </Card>
 
-        <Body muted style={{ fontSize: 12 }}>
+        <Body muted style={{ fontSize: fontSize.xs }}>
           서버를 돌리는 사람이라면: 서버 폴더에서 npm run reset-password -- 아이디
         </Body>
       </Screen>

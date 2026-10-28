@@ -75,6 +75,8 @@ export default function RepoFilesScreen() {
   const [path, setPath] = useState('');
   const [progress, setProgress] = useState<UploadProgress | null>(null);
   const uploading = progress !== null;
+  // 선택기가 돌아온 뒤 올리기 시작까지(크기 검사·목록 대조·확인) 다시 누르지 못하게 한다.
+  const [preparing, setPreparing] = useState(false);
   const transfer = useTransferControl('올리던 파일은 끊고, 그때까지 다 올린 파일만 저장소에 반영합니다.');
   const [busyPath, setBusyPath] = useState<string | null>(null);
   const [editing, setEditing] = useState<Editing | null>(null);
@@ -192,7 +194,7 @@ export default function RepoFilesScreen() {
   }
 
   async function upload() {
-    if (uploading) return;
+    if (uploading || preparing) return;
     let sources: UploadSource[];
     try {
       sources = await pickFiles(true);
@@ -201,38 +203,43 @@ export default function RepoFilesScreen() {
       return;
     }
     if (sources.length === 0) return;
-    const accepted = await withinLimit(sources);
-    if (accepted.length === 0) return;
+    setPreparing(true);
+    try {
+      const accepted = await withinLimit(sources);
+      if (accepted.length === 0) return;
 
-    // 이미 올라가 있는 그대로인 파일은 건너뛴다.
-    const { changed, unchanged } = splitUnchanged(
-      accepted.map((source) => ({ source, path: path ? `${path}/${source.name}` : source.name })),
-      remoteFilesOf(tree?.files ?? []),
-    );
-    if (changed.length === 0) {
-      notify('모두 이미 올라가 있습니다.', '같은 크기의 같은 파일이 저장소에 있어 건너뛰었습니다.');
-      return;
+      // 이미 올라가 있는 그대로인 파일은 건너뛴다.
+      const { changed, unchanged } = splitUnchanged(
+        accepted.map((source) => ({ source, path: path ? `${path}/${source.name}` : source.name })),
+        remoteFilesOf(tree?.files ?? []),
+      );
+      if (changed.length === 0) {
+        notify('모두 이미 올라가 있습니다.', '같은 크기의 같은 파일이 저장소에 있어 건너뛰었습니다.');
+        return;
+      }
+
+      // 현재 폴더에 같은 이름이 있으면 올리기 전에 한 번에 묻는다. 취소하면 아무것도 올리지 않는다.
+      const existing = new Set((tree?.files ?? []).map((file) => file.name.normalize('NFC')));
+      const overwrites = changed.filter((item) => existing.has(item.source.name.normalize('NFC')));
+      if (overwrites.length > 0) {
+        const ok = await confirmAction({
+          title: '같은 이름의 파일이 있습니다. 덮어쓸까요?',
+          message: `${overwrites.map((item) => item.source.name).join(', ')}\n\n이전 버전은 변경 이력에 남아 언제든 다시 볼 수 있습니다.`,
+          confirmLabel: '덮어쓰기',
+        });
+        if (!ok) return;
+      }
+
+      if (unchanged.length > 0) notify(`${unchanged.length}개는 이미 올라가 있어 건너뜁니다.`);
+      await runUpload(changed);
+    } finally {
+      setPreparing(false);
     }
-
-    // 현재 폴더에 같은 이름이 있으면 올리기 전에 한 번에 묻는다. 취소하면 아무것도 올리지 않는다.
-    const existing = new Set((tree?.files ?? []).map((file) => file.name.normalize('NFC')));
-    const overwrites = changed.filter((item) => existing.has(item.source.name.normalize('NFC')));
-    if (overwrites.length > 0) {
-      const ok = await confirmAction({
-        title: '같은 이름의 파일이 있습니다. 덮어쓸까요?',
-        message: `${overwrites.map((item) => item.source.name).join(', ')}\n\n이전 버전은 변경 이력에 남아 언제든 다시 볼 수 있습니다.`,
-        confirmLabel: '덮어쓰기',
-      });
-      if (!ok) return;
-    }
-
-    if (unchanged.length > 0) notify(`${unchanged.length}개는 이미 올라가 있어 건너뜁니다.`);
-    await runUpload(changed);
   }
 
   /** 폴더를 통째로 — 폴더 구조 그대로 지금 폴더 아래에 올리고 커밋 하나로 반영한다. */
   async function uploadFolder() {
-    if (uploading) return;
+    if (uploading || preparing) return;
     let sources: UploadSource[];
     try {
       sources = await pickFolder();
@@ -241,38 +248,43 @@ export default function RepoFilesScreen() {
       return;
     }
     if (sources.length === 0) return;
-    const accepted = await withinLimit(sources);
-    if (accepted.length === 0) return;
-
-    const folderName = (accepted[0].relativePath ?? accepted[0].name).split('/')[0];
-    const items = accepted.map((source) => {
-      const inner = source.relativePath ?? source.name;
-      return { source, path: path ? `${path}/${inner}` : inner };
-    });
-    // 멈췄다가 같은 폴더를 다시 올리면, 이미 올라간 그대로인 파일은 다시 보내지 않는다.
-    let remote: RemoteFiles = new Map();
+    setPreparing(true);
     try {
-      remote = remoteFilesOf(await listRepoFolder(repoId, path ? `${path}/${folderName}` : folderName));
-    } catch {
-      // 못 받으면 전부 올린다 — 서버가 내용이 같은 파일은 반영하지 않는다.
-    }
-    const { changed, unchanged } = splitUnchanged(items, remote);
-    if (changed.length === 0) {
-      notify(`'${folderName}' 은(는) 모두 이미 올라가 있습니다.`, `파일 ${unchanged.length}개가 저장소에 그대로 있습니다.`);
-      return;
-    }
+      const accepted = await withinLimit(sources);
+      if (accepted.length === 0) return;
 
-    const totalBytes = changed.reduce((sum, item) => sum + item.source.size, 0);
-    const ok = await confirmAction({
-      title: `'${folderName}' 폴더를 올릴까요?`,
-      message:
-        `파일 ${changed.length}개 · ${formatBytes(totalBytes)}\n` +
-        (unchanged.length > 0 ? `이미 올라가 있는 ${unchanged.length}개는 건너뜁니다.\n` : '') +
-        `${path ? `'${path}' 아래에` : '저장소 맨 위에'} 폴더 구조 그대로 올립니다. 같은 경로의 파일은 새 내용으로 바뀌고, 이전 버전은 변경 이력에 남습니다.`,
-      confirmLabel: '올리기',
-    });
-    if (!ok) return;
-    await runUpload(changed);
+      const folderName = (accepted[0].relativePath ?? accepted[0].name).split('/')[0];
+      const items = accepted.map((source) => {
+        const inner = source.relativePath ?? source.name;
+        return { source, path: path ? `${path}/${inner}` : inner };
+      });
+      // 멈췄다가 같은 폴더를 다시 올리면, 이미 올라간 그대로인 파일은 다시 보내지 않는다.
+      let remote: RemoteFiles = new Map();
+      try {
+        remote = remoteFilesOf(await listRepoFolder(repoId, path ? `${path}/${folderName}` : folderName));
+      } catch {
+        // 못 받으면 전부 올린다 — 서버가 내용이 같은 파일은 반영하지 않는다.
+      }
+      const { changed, unchanged } = splitUnchanged(items, remote);
+      if (changed.length === 0) {
+        notify(`'${folderName}' 은(는) 모두 이미 올라가 있습니다.`, `파일 ${unchanged.length}개가 저장소에 그대로 있습니다.`);
+        return;
+      }
+
+      const totalBytes = changed.reduce((sum, item) => sum + item.source.size, 0);
+      const ok = await confirmAction({
+        title: `'${folderName}' 폴더를 올릴까요?`,
+        message:
+          `파일 ${changed.length}개 · ${formatBytes(totalBytes)}\n` +
+          (unchanged.length > 0 ? `이미 올라가 있는 ${unchanged.length}개는 건너뜁니다.\n` : '') +
+          `${path ? `'${path}' 아래에` : '저장소 맨 위에'} 폴더 구조 그대로 올립니다. 같은 경로의 파일은 새 내용으로 바뀌고, 이전 버전은 변경 이력에 남습니다.`,
+        confirmLabel: '올리기',
+      });
+      if (!ok) return;
+      await runUpload(changed);
+    } finally {
+      setPreparing(false);
+    }
   }
 
   /** 파일 하나, 또는 폴더를 zip 으로 받는다. */
@@ -409,6 +421,7 @@ export default function RepoFilesScreen() {
                   icon="cloud-upload-outline"
                   onPress={upload}
                   loading={uploading}
+                  disabled={preparing}
                 />
               ) : null}
               {canEdit && CAN_PICK_FOLDER ? (
@@ -417,7 +430,7 @@ export default function RepoFilesScreen() {
                   icon="folder-open-outline"
                   variant="secondary"
                   onPress={uploadFolder}
-                  disabled={uploading}
+                  disabled={uploading || preparing}
                 />
               ) : null}
               <Button
@@ -434,7 +447,7 @@ export default function RepoFilesScreen() {
                   icon="git-compare-outline"
                   variant="secondary"
                   onPress={() => router.push(`/repo/${repoId}/compare?path=${encodeURIComponent(path)}`)}
-                  disabled={uploading}
+                  disabled={uploading || preparing}
                 />
               ) : null}
             </Row>

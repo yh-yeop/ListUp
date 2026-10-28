@@ -43,6 +43,7 @@ export default function MembersScreen() {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [saving, setSaving] = useState(false);
+  const [leaving, setLeaving] = useState(false);
 
   const state = useAsync<{ repo: RepoSummary; members: Member[] }>(async () => {
     const [{ repo }, { members }] = await Promise.all([
@@ -159,11 +160,13 @@ export default function MembersScreen() {
     });
     if (!ok) return;
 
+    setLeaving(true);
     try {
       await api.removeMember(repoId, user.id);
       router.replace('/repos');
     } catch (err) {
       notifyError(err instanceof ApiError ? err.message : '나가지 못했습니다.');
+      setLeaving(false);
     }
   }
 
@@ -176,11 +179,13 @@ export default function MembersScreen() {
     });
     if (!ok) return;
 
+    setLeaving(true);
     try {
       await api.deleteRepo(repoId);
       router.replace('/repos');
     } catch (err) {
       notifyError(err instanceof ApiError ? err.message : '삭제하지 못했습니다.');
+      setLeaving(false);
     }
   }
 
@@ -302,6 +307,7 @@ export default function MembersScreen() {
                 variant="danger"
                 icon="trash-outline"
                 onPress={deleteRepo}
+                loading={leaving}
                 full
               />
             ) : (
@@ -310,6 +316,7 @@ export default function MembersScreen() {
                 variant="danger"
                 icon="exit-outline"
                 onPress={leave}
+                loading={leaving}
                 full
               />
             )}

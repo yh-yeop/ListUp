@@ -23,7 +23,7 @@ import {
 } from '../src/components/ui';
 import { notifySuccess } from '../src/lib/dialogs';
 import { desktopBridge, desktopErrorMessage, useHostStatus } from '../src/lib/desktop';
-import { fontSize, monoFont, spacing, useTheme } from '../src/theme';
+import { fontSize, monoFont, radius, spacing, useTheme } from '../src/theme';
 
 /** PC 앱 — 이 PC 에서 연 서버를 켜고 끄고, 공개 방식·계정·데이터를 다룬다. */
 export default function HostScreen() {
@@ -119,7 +119,7 @@ function HostPanel({ status }: { status: HostStatus }) {
       <AddressCard status={status} />
       <TunnelCard status={status} act={act} busy={busy} />
       <ResetCodeCard running={running} />
-      <StartupCard status={status} stopped={stopped} act={act} />
+      <StartupCard status={status} stopped={stopped} act={act} busy={busy} />
       <DataCard status={status} stopped={stopped} act={act} busy={busy} />
       <LogCard running={running} />
     </Screen>
@@ -232,7 +232,7 @@ function TunnelCard({ status, act, busy }: { status: HostStatus; act: Act; busy:
               flexDirection: 'row',
               gap: spacing.md,
               alignItems: 'flex-start',
-              opacity: pressed ? 0.6 : 1,
+              opacity: busy !== null ? 0.5 : pressed ? 0.6 : 1,
             })}
           >
             <View
@@ -290,6 +290,7 @@ function ResetCodeCard({ running }: { running: boolean }) {
   const [busy, setBusy] = useState(false);
 
   const issue = async () => {
+    if (busy || !running || !email.trim()) return;
     setBusy(true);
     setError(null);
     setIssued(null);
@@ -369,7 +370,7 @@ function SwitchRow({
   );
 }
 
-function StartupCard({ status, stopped, act }: { status: HostStatus; stopped: boolean; act: Act }) {
+function StartupCard({ status, stopped, act, busy }: { status: HostStatus; stopped: boolean; act: Act; busy: string | null }) {
   const host = desktopBridge()!.host;
   const [port, setPort] = useState(String(status.port));
   useEffect(() => setPort(String(status.port)), [status.port]);
@@ -399,6 +400,7 @@ function StartupCard({ status, stopped, act }: { status: HostStatus; stopped: bo
             variant="secondary"
             compact
             disabled={!nameChanged}
+            loading={busy === 'server-name'}
             onPress={() => void act('server-name', () => host.update({ serverName: name.trim() || null }))}
           />
         </Row>
@@ -429,6 +431,7 @@ function StartupCard({ status, stopped, act }: { status: HostStatus; stopped: bo
             variant="secondary"
             compact
             disabled={!stopped || !portValid || portNumber === status.port}
+            loading={busy === 'port'}
             onPress={() => void act('port', () => host.update({ port: portNumber }))}
           />
         </Row>
@@ -457,6 +460,7 @@ function DataCard({ status, stopped, act, busy }: { status: HostStatus; stopped:
           icon="swap-horizontal"
           compact
           disabled={!stopped}
+          loading={busy === 'data-dir'}
           onPress={() => void act('data-dir', () => host.chooseDataFolder())}
         />
         <Button
@@ -517,7 +521,7 @@ function LogCard({ running }: { running: boolean }) {
         />
       </Row>
       {lines.length > 0 ? (
-        <View style={{ backgroundColor: colors.surfaceAlt, borderRadius: 8, padding: spacing.md }}>
+        <View style={{ backgroundColor: colors.surfaceAlt, borderRadius: radius.sm, padding: spacing.md }}>
           <Caption style={{ fontFamily: monoFont, color: colors.textMuted, fontSize: fontSize.xs }}>
             {lines.join('\n')}
           </Caption>

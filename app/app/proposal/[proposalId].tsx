@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Stack, router, useLocalSearchParams } from 'expo-router';
 import { useState } from 'react';
-import { ActivityIndicator, RefreshControl, View } from 'react-native';
+import { RefreshControl, View } from 'react-native';
 import {
   CHANGE_OP_LABEL,
   PROPOSAL_STATUS_LABEL,
@@ -207,7 +207,7 @@ export default function ProposalDetailScreen() {
                     icon="git-merge-outline"
                     onPress={merge}
                     loading={action === 'merge'}
-                    disabled={!proposal.mergeable}
+                    disabled={!proposal.mergeable || action !== null}
                   />
                 ) : null}
                 <Button
@@ -215,6 +215,7 @@ export default function ProposalDetailScreen() {
                   variant="secondary"
                   onPress={close}
                   loading={action === 'close'}
+                  disabled={action !== null}
                 />
               </Row>
             ) : null
@@ -225,6 +226,7 @@ export default function ProposalDetailScreen() {
                 variant="secondary"
                 onPress={() => void run('reopen', () => api.reopenProposal(proposal.id))}
                 loading={action === 'reopen'}
+                disabled={action !== null}
               />
             ) : (
               <Caption>
@@ -290,7 +292,7 @@ export default function ProposalDetailScreen() {
               label="의견 등록"
               onPress={submitComment}
               loading={action === 'comment'}
-              disabled={!comment.trim()}
+              disabled={!comment.trim() || action !== null}
             />
           </Card>
 
@@ -387,7 +389,6 @@ function ChangeRow({
             onPress={() => void grab('base')}
           />
         ) : null}
-        {busy ? <ActivityIndicator size="small" color={colors.textMuted} /> : null}
       </Row>
     </View>
   );

@@ -80,7 +80,7 @@ export default function VersionsScreen() {
   const name = baseName(path);
 
   async function download(version: FileVersion) {
-    setBusy(version.snapshotId);
+    setBusy(`dl:${version.snapshotId}`);
     try {
       const result = await downloadFromRepo(repoId, { path, snapshotId: version.snapshotId, fileName: name });
       if (result.message) notify(result.message);
@@ -102,7 +102,7 @@ export default function VersionsScreen() {
       confirmLabel: isEditor ? '되돌리기' : '제안 만들기',
     });
     if (!ok) return;
-    setBusy(version.snapshotId);
+    setBusy(`restore:${version.snapshotId}`);
     try {
       const result = await restoreFiles(repoId, [{ path, blobHash: version.blobHash }], {
         isEditor,
@@ -176,7 +176,7 @@ export default function VersionsScreen() {
                         icon="download-outline"
                         variant="secondary"
                         compact
-                        loading={busy === version.snapshotId}
+                        loading={busy === `dl:${version.snapshotId}`}
                         disabled={busy !== null}
                         onPress={() => void download(version)}
                       />
@@ -186,6 +186,7 @@ export default function VersionsScreen() {
                           icon="arrow-undo-outline"
                           variant="secondary"
                           compact
+                          loading={busy === `restore:${version.snapshotId}`}
                           disabled={busy !== null}
                           onPress={() => void restore(version)}
                         />

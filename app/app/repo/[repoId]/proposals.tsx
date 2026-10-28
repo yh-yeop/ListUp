@@ -80,7 +80,7 @@ export default function ProposalsScreen() {
                 key={value}
                 onPress={() => setFilter(value)}
                 accessibilityRole="radio"
-                accessibilityState={{ selected: active }}
+                aria-checked={active}
                 style={{
                   paddingHorizontal: spacing.md,
                   paddingVertical: spacing.sm - 2,
@@ -163,6 +163,7 @@ function ProposalCard({ proposal }: { proposal: Proposal }) {
   return (
     <Pressable
       onPress={() => router.push(`/proposal/${proposal.id}`)}
+      accessibilityRole="button"
       style={({ pressed }) => ({ opacity: pressed ? 0.85 : 1 })}
     >
       <Card style={{ gap: spacing.sm }}>
@@ -183,12 +184,12 @@ function ProposalCard({ proposal }: { proposal: Proposal }) {
         <Row gap={spacing.md} wrap>
           <Caption>{proposal.author.displayName}</Caption>
           <Caption>{formatRelativeTime(proposal.createdAt)}</Caption>
-          <Row gap={4}>
+          <Row gap={spacing.xs}>
             <Ionicons name="document-outline" size={12} color={colors.textFaint} />
             <Caption>{proposal.changeCount}개 파일</Caption>
           </Row>
           {proposal.commentCount > 0 ? (
-            <Row gap={4}>
+            <Row gap={spacing.xs}>
               <Ionicons name="chatbubble-outline" size={12} color={colors.textFaint} />
               <Caption>{proposal.commentCount}</Caption>
             </Row>

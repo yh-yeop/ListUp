@@ -60,6 +60,7 @@ export default function InvitesScreen() {
   const [expiryDays, setExpiryDays] = useState<number | null>(7);
   const [maxUses, setMaxUses] = useState<number | null>(null);
   const [creating, setCreating] = useState(false);
+  const [revoking, setRevoking] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const state = useAsync<{ repo: RepoSummary; invites: Invite[] }>(async () => {
@@ -129,11 +130,14 @@ export default function InvitesScreen() {
       destructive: true,
     });
     if (!ok) return;
+    setRevoking(invite.id);
     try {
       await api.revokeInvite(invite.id);
       state.refresh();
     } catch (err) {
       notifyError(err instanceof ApiError ? err.message : '회수하지 못했습니다.');
+    } finally {
+      setRevoking(null);
     }
   }
 
@@ -300,6 +304,7 @@ export default function InvitesScreen() {
                           label="회수"
                           variant="ghost"
                           compact
+                          loading={revoking === invite.id}
                           onPress={() => void revoke(invite)}
                         />
                       ) : null}
@@ -337,7 +342,7 @@ function Chip({
     <Pressable
       onPress={onPress}
       accessibilityRole="radio"
-      accessibilityState={{ selected: active }}
+      aria-checked={active}
       style={({ pressed }) => ({
         paddingHorizontal: spacing.md,
         paddingVertical: spacing.sm - 2,

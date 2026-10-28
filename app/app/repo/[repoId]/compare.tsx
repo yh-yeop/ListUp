@@ -24,7 +24,7 @@ import { confirmAction, notify, notifyError, notifySuccess } from '../../../src/
 import { compareFolder, listRepoFolder, type RepoFile } from '../../../src/lib/folder-compare';
 import { localFolderSupported, pickLocalFolder, type LocalEntry, type LocalFolder } from '../../../src/lib/local-folder';
 import { uploadAndCommit, uploadMany, type UploadProgress } from '../../../src/lib/transfer';
-import { fontSize, monoFont, spacing, useTheme } from '../../../src/theme';
+import { fontSize, monoFont, radius, spacing, useTheme } from '../../../src/theme';
 
 type Tab = 'repoOnly' | 'localOnly' | 'both';
 
@@ -305,7 +305,19 @@ export default function CompareScreen() {
         </Caption>
       </View>
 
-      {error ? <ErrorNotice message={error} /> : null}
+      {error ? (
+        <ErrorNotice
+          message={error}
+          onRetry={
+            repoFiles
+              ? undefined
+              : () => {
+                  setError(null);
+                  loadRepo().catch((err) => setError(err instanceof ApiError ? err.message : '저장소 목록을 불러오지 못했습니다.'));
+                }
+          }
+        />
+      ) : null}
 
       <Card style={{ gap: spacing.md }}>
         {folder ? (
@@ -417,7 +429,7 @@ export default function CompareScreen() {
                           flexDirection: 'row',
                           alignItems: 'center',
                           gap: spacing.md,
-                          paddingVertical: spacing.sm,
+                          paddingVertical: spacing.md,
                           paddingHorizontal: spacing.lg,
                         }}
                       >
@@ -508,7 +520,7 @@ function TabChip({ label, active, onPress }: { label: string; active: boolean; o
       style={{
         paddingVertical: spacing.xs + 2,
         paddingHorizontal: spacing.md,
-        borderRadius: 999,
+        borderRadius: radius.pill,
         backgroundColor: active ? colors.accentSoft : colors.surfaceAlt,
       }}
     >

@@ -16,6 +16,7 @@ function useRepoFiles(repoId: string, snapshotId: string | undefined, headId: st
   const [files, setFiles] = useState<RepoFile[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const loadedFor = useRef<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
   const key = `${repoId}:${snapshotId ?? `head:${headId ?? ''}`}`;
 
   useEffect(() => {
@@ -41,9 +42,9 @@ function useRepoFiles(repoId: string, snapshotId: string | undefined, headId: st
       // 받는 도중에 그만두면(검색어를 지움·시점이 바뀜) 다음에 다시 받는다.
       if (!done) loadedFor.current = null;
     };
-  }, [repoId, key, snapshotId, enabled]);
+  }, [repoId, key, snapshotId, enabled, attempt]);
 
-  return { files, error };
+  return { files, error, retry: () => setAttempt((n) => n + 1) };
 }
 
 /** 검색 결과. 누르면 받고, 폴더 아이콘은 그 파일이 있는 폴더를 연다. */
@@ -70,10 +71,10 @@ export function SearchResults({
   onVersions?: (path: string) => void;
 }) {
   const { colors } = useTheme();
-  const { files, error } = useRepoFiles(repoId, snapshotId, headId, query.trim().length > 0);
+  const { files, error, retry } = useRepoFiles(repoId, snapshotId, headId, query.trim().length > 0);
   const results = useMemo(() => (files ? searchFiles(files, query) : []), [files, query]);
 
-  if (error) return <ErrorNotice message={error} />;
+  if (error) return <ErrorNotice message={error} onRetry={retry} />;
   if (!files) return <Loading label="저장소 전체에서 찾는 중…" />;
 
   const shown = results.slice(0, MAX_SEARCH_RESULTS);
@@ -115,8 +116,8 @@ export function SearchResults({
                     <Text numberOfLines={1} ellipsizeMode="middle" style={{ color: colors.text, fontSize: fontSize.md }}>
                       {file.name}
                     </Text>
-                    <Caption numberOfLines={1}>
-                      {folder ? `${folder} · ` : '맨 위 · '}
+                    <Caption numberOfLines={1}>{folder || '맨 위'}</Caption>
+                    <Caption>
                       {formatBytes(file.size)} · {formatRelativeTime(file.updatedAt)}
                     </Caption>
                   </View>

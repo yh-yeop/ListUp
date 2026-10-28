@@ -162,11 +162,9 @@ export default function ServerFormScreen() {
           </Field>
 
           {isDefault ? (
-            <View style={{ gap: spacing.xs }}>
-              <Caption>주소</Caption>
+            <Field label="주소" hint="기본 서버는 이 앱이 정한 주소를 따라갑니다. 주소는 바꿀 수 없습니다.">
               <Body style={{ fontFamily: monoFont }}>{describeUrl(normalized ?? '')}</Body>
-              <Caption>기본 서버는 이 앱이 정한 주소를 따라갑니다. 주소는 바꿀 수 없습니다.</Caption>
-            </View>
+            </Field>
           ) : (
             <Field label="주소" hint="예: http://192.168.0.10:4000 또는 https://listup.example.com">
               <Input

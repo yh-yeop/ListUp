@@ -53,7 +53,7 @@ export function RepoNav({ repoId, openProposals }: { repoId: string; openProposa
             key={tab.key}
             onPress={() => router.replace(tab.href as never)}
             accessibilityRole="tab"
-            accessibilityState={{ selected: active }}
+            aria-selected={active}
             style={({ pressed }) => ({
               flexDirection: 'row',
               alignItems: 'center',
