@@ -4,7 +4,6 @@ import { useState } from 'react';
 import { RefreshControl, View } from 'react-native';
 import {
   CHANGE_OP_LABEL,
-  PROPOSAL_STATUS_LABEL,
   baseName,
   formatBytes,
   formatRelativeTime,
@@ -29,6 +28,7 @@ import {
   Screen,
   Title,
 } from '../../src/components/ui';
+import { ProposalStatusBadge } from '../../src/components/ProposalStatusBadge';
 import { ApiError, api } from '../../src/api/client';
 import { confirmAction, notify, notifyError } from '../../src/lib/dialogs';
 import { downloadFile } from '../../src/lib/files';
@@ -48,6 +48,9 @@ export default function ProposalDetailScreen() {
   const [comment, setComment] = useState('');
   const [action, setAction] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  // 닫기를 누르면 이유를 적는 칸을 연다(선택). 이유는 닫은 사람의 의견으로 남아 작성자가 "내 제안"에서 본다.
+  const [closing, setClosing] = useState(false);
+  const [closeReason, setCloseReason] = useState('');
 
   const state = useAsync<ProposalView>(async () => {
     const { proposal } = await api.getProposal(proposalId);
@@ -96,13 +99,12 @@ export default function ProposalDetailScreen() {
 
   async function close() {
     if (!proposal) return;
-    const ok = await confirmAction({
-      title: '이 제안을 닫을까요?',
-      message: '닫아도 나중에 다시 열 수 있습니다.',
-      confirmLabel: '닫기',
+    const reason = closeReason.trim();
+    await run('close', async () => {
+      await api.closeProposal(proposal.id, reason || undefined);
+      setClosing(false);
+      setCloseReason('');
     });
-    if (!ok) return;
-    await run('close', () => api.closeProposal(proposal.id));
   }
 
   async function submitComment() {
@@ -133,16 +135,7 @@ export default function ProposalDetailScreen() {
         <>
           <View style={{ gap: spacing.sm }}>
             <Row gap={spacing.sm}>
-              <Badge
-                label={PROPOSAL_STATUS_LABEL[proposal.status]}
-                tone={
-                  proposal.status === 'merged'
-                    ? 'success'
-                    : proposal.status === 'open'
-                      ? 'warning'
-                      : 'neutral'
-                }
-              />
+              <ProposalStatusBadge status={proposal.status} />
               <Caption>#{proposal.number}</Caption>
             </Row>
             <Title>{proposal.title}</Title>
@@ -150,6 +143,12 @@ export default function ProposalDetailScreen() {
               {proposal.author.displayName} · {formatRelativeTime(proposal.createdAt)} ·{' '}
               {repo.name}
             </Caption>
+            {proposal.status !== 'open' && proposal.decidedBy && proposal.decidedAt ? (
+              <Caption>
+                {proposal.decidedBy.displayName} 님이 {proposal.status === 'merged' ? '반영' : '닫음'} ·{' '}
+                {formatRelativeTime(proposal.decidedAt)}
+              </Caption>
+            ) : null}
           </View>
 
           {proposal.description ? (
@@ -213,8 +212,7 @@ export default function ProposalDetailScreen() {
                 <Button
                   label="제안 닫기"
                   variant="secondary"
-                  onPress={close}
-                  loading={action === 'close'}
+                  onPress={() => setClosing((prev) => !prev)}
                   disabled={action !== null}
                 />
               </Row>
@@ -241,6 +239,30 @@ export default function ProposalDetailScreen() {
               </Caption>
             </Row>
           )}
+
+          {closing && canManage && proposal.status === 'open' ? (
+            <Card style={{ gap: spacing.md }}>
+              <Field label="닫는 이유" hint="선택 사항. 적으면 의견으로 남아 작성자가 봅니다. 닫아도 나중에 다시 열 수 있습니다.">
+                <Input
+                  value={closeReason}
+                  onChangeText={setCloseReason}
+                  placeholder="예: 다른 제안으로 이미 반영했습니다."
+                  multiline
+                  style={{ minHeight: 72, textAlignVertical: 'top' }}
+                />
+              </Field>
+              <Row gap={spacing.sm}>
+                <Button
+                  label="닫기"
+                  variant="danger"
+                  onPress={close}
+                  loading={action === 'close'}
+                  disabled={action !== null}
+                />
+                <Button label="취소" variant="ghost" onPress={() => setClosing(false)} disabled={action !== null} />
+              </Row>
+            </Card>
+          ) : null}
 
           {!canMerge && proposal.status === 'open' ? (
             <Caption>

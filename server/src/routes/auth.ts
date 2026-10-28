@@ -209,4 +209,33 @@ export async function registerAuthRoutes(app: FastifyInstance, ctx: AppContext):
     );
     return { ok: true, token: issueToken(user.id, config.authSecret, config.tokenTtlMs, epoch) };
   });
+
+  /**
+   * 로그아웃 — 이 요청에 쓴 토큰만 끊는다. 토큰은 서버에 저장하지 않으므로, 앱이 지우기만 하면 복사된
+   * 토큰이 만료까지 살아 있었다. 끊은 토큰의 해시를 만료 시각까지 적어 두고 GC 가 지운다.
+   */
+  app.post('/auth/logout', async (req) => {
+    const user = requireUser(req);
+    db.prepare(
+      `INSERT OR IGNORE INTO revoked_tokens (token_hash, user_id, expires_at) VALUES (?, ?, ?)`,
+    ).run(user.token.hash, user.id, user.token.exp);
+    return { ok: true };
+  });
+
+  /**
+   * 다른 기기 모두 로그아웃 — 세대를 올려 이 사용자의 토큰과 다운로드 링크를 한 번에 끊는다(비밀번호 변경과
+   * 같은 방식). 이 기기는 새 토큰을 받아 이어서 쓴다. 비밀번호를 저장해 둔 기기는 그 비밀번호로 다시
+   * 들어오므로, 기기를 잃어버렸다면 비밀번호를 바꿔야 한다 — 앱이 그렇게 안내한다.
+   */
+  app.post('/auth/logout-others', async (req) => {
+    const user = requireUser(req);
+    const epoch = db.transaction(() => {
+      db.prepare(`UPDATE users SET token_epoch = token_epoch + 1 WHERE id = ?`).run(user.id);
+      // 세대가 바뀌면 적어 둔 토큰은 어차피 통과하지 못한다.
+      db.prepare(`DELETE FROM revoked_tokens WHERE user_id = ?`).run(user.id);
+      return db.prepare<[string], { token_epoch: number }>(`SELECT token_epoch FROM users WHERE id = ?`).get(user.id)!
+        .token_epoch;
+    })();
+    return { token: issueToken(user.id, config.authSecret, config.tokenTtlMs, epoch) };
+  });
 }

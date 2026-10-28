@@ -192,6 +192,36 @@ export interface InvitePreview {
 }
 
 // ---------------------------------------------------------------------------
+// 활동 기록 (API_LEVEL 5, 소유자만)
+// ---------------------------------------------------------------------------
+
+/**
+ * 저장소 활동의 종류. 파일 변경은 변경 이력(스냅샷)에 있으므로 여기에는 멤버·초대 변화만 남긴다.
+ * 앱이 모르는 종류가 와도 깨지지 않게 그냥 문자열로 받아 "알 수 없는 활동"으로 보인다.
+ */
+export type RepoEventKind =
+  | 'repo_created'
+  | 'member_joined'
+  | 'member_left'
+  | 'member_removed'
+  | 'role_changed'
+  | 'owner_transferred'
+  | 'invite_created'
+  | 'invite_revoked';
+
+export interface RepoEvent {
+  seq: number;
+  kind: RepoEventKind | (string & {});
+  /** 한 사람. 저장소를 만든 사람, 참여한 사람, 내보낸 소유자 등. */
+  actor: PublicUser | null;
+  /** 당한 사람. 내보내진 사람, 역할이 바뀐 사람, 소유권을 받은 사람. */
+  target: PublicUser | null;
+  /** 참여·역할 변경·초대 발급 때의 역할. */
+  role: Role | null;
+  createdAt: number;
+}
+
+// ---------------------------------------------------------------------------
 // 변경 제안
 // ---------------------------------------------------------------------------
 
@@ -237,6 +267,17 @@ export interface Proposal {
   updatedAt: number;
   changeCount: number;
   commentCount: number;
+  /** 반영·닫힌 시각. 열린 제안은 null. API_LEVEL 5 미만 서버는 보내지 않는다. */
+  decidedAt?: number | null;
+  /** 반영·닫은 사람. 열린 제안이거나, 수준 5 이전에 결정된 제안은 null. */
+  decidedBy?: PublicUser | null;
+}
+
+/** 저장소를 가로지르는 "내 제안" 한 줄 (`GET /proposals/mine`, API_LEVEL 5). */
+export interface MyProposal extends Proposal {
+  repoName: string;
+  /** 내가 마지막으로 본 뒤 반영·닫혔거나 남이 의견을 달았다. 상세를 열면 풀린다. */
+  unseen: boolean;
 }
 
 export interface ProposalDetail extends Proposal {
@@ -459,11 +500,14 @@ export const API_VERSION = 1;
  * - 2 (1.2.0): 나눠 올리기, 여러 파일 커밋, 다운로드 링크·폴더 zip, Range, 비밀번호 재설정
  * - 3 (1.5.0): 파일 버전 목록(`/files/versions`), 휴지통(`/trash`). 없는 서버에서는 앱이 그 화면만 막는다.
  * - 4 (1.8.0): 제안 목록 나눠 받기(`limit`·`before` → `next`). 옛 서버는 무시하고 전부 주므로 앱이 그대로 쓴다.
+ * - 5 (1.8.0): 로그아웃(`/auth/logout`)·다른 기기 모두 로그아웃(`/auth/logout-others`), 내 제안
+ *   (`/proposals/mine`, 제안의 `decidedAt`·`decidedBy`, 닫을 때 `reason`), 저장소 활동 기록(`/repos/:id/events`).
+ *   없는 서버에서는 앱이 그 버튼·화면만 숨기고, 로그아웃은 예전처럼 기기에서만 지운다.
  *
  * API_VERSION 을 올리지 않은 이유: 옛 앱(1.1.0)은 API_VERSION 이 같아야만 들어가서, 올리면 멀쩡히
  * 쓸 수 있는 새 서버에서 옛 앱이 모두 막힌다.
  */
-export const API_LEVEL = 4;
+export const API_LEVEL = 5;
 
 /** 이 앱이 쓰는 기능이 있는 가장 낮은 서버 API_LEVEL. 앱의 업로드·내려받기가 수준 2 를 쓴다. */
 export const REQUIRED_SERVER_API_LEVEL = 2;

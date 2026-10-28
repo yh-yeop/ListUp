@@ -20,6 +20,9 @@ export interface ProposalRow {
   merged_snapshot_id: string | null;
   created_at: number;
   updated_at: number;
+  decided_at: number | null;
+  decided_by: string | null;
+  author_seen_at: number | null;
 }
 
 export interface ChangeRow {
@@ -58,9 +61,9 @@ export function toChange(row: ChangeRow): ProposalChange {
 }
 
 export function toProposal(db: Db, row: ProposalRow): Proposal {
-  const author = db
-    .prepare<[string], { display_name: string }>(`SELECT display_name FROM users WHERE id = ?`)
-    .get(row.author_id);
+  const nameOf = (id: string) =>
+    db.prepare<[string], { display_name: string }>(`SELECT display_name FROM users WHERE id = ?`).get(id)?.display_name ??
+    '알 수 없음';
   const changeCount = db
     .prepare<[string], { c: number }>(
       `SELECT COUNT(*) AS c FROM proposal_changes WHERE proposal_id = ?`,
@@ -79,13 +82,15 @@ export function toProposal(db: Db, row: ProposalRow): Proposal {
     title: row.title,
     description: row.description,
     status: row.status,
-    author: { id: row.author_id, displayName: author?.display_name ?? '알 수 없음' },
+    author: { id: row.author_id, displayName: nameOf(row.author_id) },
     baseSnapshotId: row.base_snapshot_id,
     mergedSnapshotId: row.merged_snapshot_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     changeCount,
     commentCount,
+    decidedAt: row.decided_at,
+    decidedBy: row.decided_by ? { id: row.decided_by, displayName: nameOf(row.decided_by) } : null,
   };
 }
 

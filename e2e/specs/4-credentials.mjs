@@ -87,7 +87,7 @@ export default async function run(t, env) {
 
   // 직접 로그아웃한 서버는 자동으로 들어가지 않는다 — 채워 둔 채 한 번 누르기
   await s.openSettings();
-  await page.getByRole('button', { name: '로그아웃' }).click();
+  await page.getByRole('button', { name: '로그아웃', exact: true }).click();
   await s.listIntro().waitFor();
   t.must((await s.card('A서버').innerText()).includes('계정 저장됨'), '목록 카드: 계정 저장됨');
   loginPosts.length = 0;
@@ -145,7 +145,7 @@ export default async function run(t, env) {
   t.must((await vaultA()) === null, '설정에서 지우기 → 저장소에서 사라짐');
 
   // 저장을 끄고 로그인하면 저장하지 않는다
-  await page.getByRole('button', { name: '로그아웃' }).click();
+  await page.getByRole('button', { name: '로그아웃', exact: true }).click();
   await s.listIntro().waitFor();
   await s.card('A서버').click();
   await page.getByText('서버: A서버').waitFor();
@@ -159,7 +159,7 @@ export default async function run(t, env) {
 
   // 주소를 고치면 저장된 비밀번호는 지우고 이메일만 남긴다 (다른 서버로 비밀번호가 가지 않게)
   await s.openSettings();
-  await page.getByRole('button', { name: '로그아웃' }).click();
+  await page.getByRole('button', { name: '로그아웃', exact: true }).click();
   await s.listIntro().waitFor();
   await s.card('A서버').click();
   await page.getByText('서버: A서버').waitFor();

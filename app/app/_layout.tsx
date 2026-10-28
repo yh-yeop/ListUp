@@ -73,6 +73,7 @@ function RootNavigator() {
       <Stack.Protected guard={!!user}>
         <Stack.Screen name="repos" options={{ title: 'ListUp' }} />
         <Stack.Screen name="settings" options={{ title: '내 정보' }} />
+        <Stack.Screen name="my-proposals" options={{ title: '내 제안' }} />
         <Stack.Screen name="repo/[repoId]/index" />
         <Stack.Screen name="repo/[repoId]/proposals" />
         <Stack.Screen name="repo/[repoId]/members" />
@@ -82,6 +83,7 @@ function RootNavigator() {
         <Stack.Screen name="repo/[repoId]/compare" />
         <Stack.Screen name="repo/[repoId]/versions" />
         <Stack.Screen name="repo/[repoId]/trash" />
+        <Stack.Screen name="repo/[repoId]/activity" />
         <Stack.Screen name="proposal/[proposalId]" />
       </Stack.Protected>
     </Stack>

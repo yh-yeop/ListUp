@@ -51,7 +51,9 @@ Authorization: Bearer <token>
   앱은 자기가 쓰는 기능이 있는 수준(`REQUIRED_SERVER_API_LEVEL`) 미만 서버에는 "서버가 오래됨"으로
   들어가지 않습니다. 2 = 1.2.0 (나눠 올리기·여러 파일 커밋·다운로드 링크·zip·Range·재설정),
   3 = 1.5.0 (파일 버전·휴지통 — 수준 2 서버에서는 앱이 그 화면에서만 "서버 업데이트 필요"를 보인다),
-  4 = 1.8.0 (제안 목록 나눠 받기 `limit`·`before` — 수준 3 서버는 이 값을 무시하고 전부 주므로 앱은 그대로 쓴다).
+  4 = 1.8.0 (제안 목록 나눠 받기 `limit`·`before` — 수준 3 서버는 이 값을 무시하고 전부 주므로 앱은 그대로 쓴다),
+  5 = 1.8.0 (로그아웃·다른 기기 모두 로그아웃, 내 제안·제안의 `decidedAt`/`decidedBy`·닫을 때 `reason`, 저장소 활동 기록 —
+  수준 4 이하 서버에서는 앱이 그 버튼·화면을 숨기고, 로그아웃은 기기에서만 지운다).
   **필드가 없는 서버(1.1.0 까지)는 `1`** 입니다.
 - `version` — 서버 버전(`server/package.json`). 사람에게 보여주는 용도이고 호환 판단에는 쓰지 않습니다.
 - `maxUploadBytes` — 파일 하나의 업로드 한도. 앱이 올리기 전에 검사합니다.
@@ -71,6 +73,19 @@ Authorization: Bearer <token>
 | PATCH | `/auth/me` | `{displayName}` |
 | POST | `/auth/password` | `{currentPassword, newPassword}` |
 | POST | `/auth/reset` | `{email, code, newPassword}` → `{token, user}` — 로그인 없이 |
+| POST | `/auth/logout` | 이 요청에 쓴 토큰을 끊는다 → `{ok}`. **수준 5** |
+| POST | `/auth/logout-others` | 다른 기기 모두 로그아웃 → `{token}`(이 기기가 이어 쓸 새 토큰). **수준 5** |
+
+### 로그아웃
+
+토큰은 서버에 저장하지 않으므로(서명만 확인한다), 예전에는 앱이 토큰을 지우는 것이 로그아웃의 전부였고
+복사된 토큰은 만료(`LISTUP_TOKEN_TTL_DAYS`, 기본 30일)까지 쓸 수 있었습니다.
+
+- `/auth/logout` 은 그 토큰의 SHA-256 을 토큰이 만료될 때까지 적어 두고(`revoked_tokens`) 이후 요청을 401 로 받습니다.
+  만료가 지난 기록은 GC 가 지웁니다. 이미 내준 다운로드 링크(10분)는 그대로입니다.
+- `/auth/logout-others` 는 비밀번호 변경과 같이 **토큰 세대**를 올립니다. 이 사용자의 다른 토큰과 다운로드 링크가
+  모두 끊기고, 응답의 새 토큰으로 이 기기만 이어 갑니다. 비밀번호를 저장해 둔 기기는 그 비밀번호로 다시
+  로그인하므로, 기기를 잃어버렸다면 비밀번호를 바꿔야 합니다.
 
 ### 로그인 아이디 (필드 이름은 `email`)
 
@@ -124,9 +139,30 @@ npm run reset-password -- hong     # 아이디. 서버가 켜져 있어도 됩�
 | POST | `/repos/:repoId/transfer` | owner | `{userId}` — 넘긴 사람은 editor 로 남음 |
 | GET | `/repos/:repoId/history` | viewer | 스냅샷 목록. 응답 `{snapshots, next}` — `next` 가 있으면 `?before=&beforeId=` 로 이어서 요청 (`limit` 최대 100) |
 | GET | `/repos/:repoId/files/versions?path=` | viewer | 파일 하나를 바꾼 시점들, 최근 것부터. `{versions:[{snapshotId, createdAt, author, message, op, blobHash, size}], next}` — 커서는 history 와 같다. 없는 경로면 빈 목록. **1.5.0+** |
+| GET | `/repos/:repoId/events?limit=&before=` | owner | 활동 기록(아래). **수준 5** |
 | GET | `/repos/:repoId/trash` | viewer | 휴지통 — 지워서 지금 없는 파일, 최근 것부터 500개. `{entries:[{path, name, snapshotId, beforeSnapshotId, message, deletedAt, deletedBy, blobHash, size, mimeType}]}`. 이름 바꾸기·옮기기, 다시 생긴 경로는 빠지고 같은 경로는 마지막 삭제만. **1.5.0+** |
 
 - 멤버를 내보내거나 viewer 로 강등하면 **그 사람이 만든 초대는 함께 회수**됩니다.
+
+### 활동 기록 (`events`)
+
+파일 변경은 변경 이력(스냅샷)에 있으므로, 여기에는 멤버·초대 변화만 남습니다. 소유자만 봅니다(편집자 403, 비멤버 404).
+`{events: [{seq, kind, actor, target, role, createdAt}], next: {before} | null}` — 최근 것부터, `limit` 기본 30·최대 100,
+`before` 는 이전 페이지 마지막의 `seq`.
+
+| kind | actor | target | role |
+| --- | --- | --- | --- |
+| `repo_created` | 만든 사람 | — | — |
+| `member_joined` | 참여한 사람 | — | 받은 역할 |
+| `member_left` | 나간 사람 | — | — |
+| `member_removed` | 내보낸 소유자 | 내보내진 사람 | — |
+| `role_changed` | 소유자 | 바뀐 사람 | 새 역할 |
+| `owner_transferred` | 넘긴 사람 | 받은 사람 | — |
+| `invite_created` | 만든 사람 | — | 초대 역할 |
+| `invite_revoked` | 회수한 사람 | — | 초대 역할 |
+
+추방·강등에 딸려 자동으로 회수된 초대는 따로 남기지 않습니다. 앱은 모르는 `kind` 를 "알 수 없는 활동"으로 보입니다.
+수준 5 이전에 있던 일은 기록이 없습니다.
 
 ---
 
@@ -274,12 +310,13 @@ POST /api/repos/:repoId/files/commit
 | --- | --- | --- | --- |
 | GET | `/repos/:repoId/proposals?status=&limit=&before=` | viewer | 목록, 번호 큰 것부터 (아래) |
 | POST | `/repos/:repoId/proposals` | **viewer** | 제안 만들기 |
-| GET | `/proposals/:proposalId` | viewer | 상세 + 충돌 여부 |
+| GET | `/proposals/mine?limit=` | — | 내가 올린 제안, 저장소를 가로질러(아래). **수준 5** |
+| GET | `/proposals/:proposalId` | viewer | 상세 + 충돌 여부. 작성자가 열면 "새 소식"이 풀린다 |
 | PATCH | `/proposals/:proposalId` | 작성자 | `{title?, description?}` — `open` 상태에서만 |
 | GET | `/proposals/:proposalId/raw?path=` | viewer | 제안에 담긴 파일 내려받기 |
 | POST | `/proposals/:proposalId/comments` | viewer | `{body}` |
 | POST | `/proposals/:proposalId/merge` | **editor** | 저장소에 반영 |
-| POST | `/proposals/:proposalId/close` | 작성자 또는 editor | 닫기 |
+| POST | `/proposals/:proposalId/close` | 작성자 또는 editor | 닫기. `{reason?}` 을 주면 같은 사람의 의견으로 남는다(2000자, **수준 5**) |
 | POST | `/proposals/:proposalId/reopen` | 작성자 또는 editor | 다시 열기 |
 
 ### 제안 목록
@@ -292,6 +329,15 @@ POST /api/repos/:repoId/files/commit
 - **`limit` 이 없으면 전부**와 `next: null` — 1.7 까지의 앱이 이렇게 부릅니다. 1.8 앱은 `limit=30` 으로 부르고,
   `apiLevel` 3 이하 서버는 `limit` 을 무시하고 전부 주며 `next` 가 없습니다(앱은 없음을 `null` 로 봅니다).
 - `before` 가 숫자가 아니면 400.
+
+### 내 제안 (`/proposals/mine`)
+
+`{proposals: MyProposal[]}` — 지금 멤버인 저장소에서 내가 올린 제안, 최근에 바뀐 것부터(`limit` 기본 50·최대 100).
+`MyProposal` 은 `Proposal` 에 `repoName` 과 `unseen` 을 더한 것입니다. `unseen` 은 내가 마지막으로 상세를 연 뒤
+반영·닫혔거나 **남이** 의견을 달았으면 `true` 이고, 작성자가 `GET /proposals/:id` 를 부르면 풀립니다.
+
+수준 5 부터 모든 `Proposal` 에 `decidedAt`(반영·닫힌 시각, 열린 제안은 `null`)과 `decidedBy`(결정한 사람)가 붙습니다.
+다시 열면 둘 다 `null` 로 돌아갑니다. 수준 5 이전에 결정된 제안은 `decidedBy` 가 `null` 입니다.
 
 ### 제안 만들기
 

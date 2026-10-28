@@ -42,6 +42,8 @@ export async function collectGarbage(ctx: AppContext, minAgeMs: number): Promise
   const cutoff = Date.now() - minAgeMs;
   const result: GcResult = { removed: 0, freedBytes: 0, orphanFiles: 0, failed: 0, staleUploads: 0 };
   result.staleUploads = await sweepUploadSessions(ctx, cutoff);
+  // 로그아웃한 토큰은 그 토큰이 만료되면 적어 둘 이유가 없다.
+  db.prepare(`DELETE FROM revoked_tokens WHERE expires_at <= ?`).run(Date.now());
 
   const candidates = db
     .prepare<[number], BlobRow>(

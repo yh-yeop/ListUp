@@ -170,7 +170,7 @@ export default async function run(t, env) {
     t.ok('이메일 모양이 아닌 아이디로 가입');
     await s.openSettings();
     t.must(await page.getByText(`아이디 ${id.toLowerCase()}`).isVisible(), '내 정보에 아이디(소문자로 정리)');
-    await page.getByRole('button', { name: '로그아웃' }).click();
+    await page.getByRole('button', { name: '로그아웃', exact: true }).click();
     await page.getByRole('button', { name: '로그인' }).waitFor();
     await s.inputs().nth(0).fill(id.toUpperCase());
     await s.inputs().nth(1).fill('password-1');

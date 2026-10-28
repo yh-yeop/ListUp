@@ -66,6 +66,8 @@ interface AuthState {
   updateProfile(displayName: string): Promise<void>;
   /** 비밀번호를 바꾸고, 서버가 새로 준 토큰으로 이 기기의 세션을 이어 간다. */
   changePassword(currentPassword: string, newPassword: string): Promise<void>;
+  /** 다른 기기의 로그인을 모두 끊고, 서버가 새로 준 토큰으로 이 기기만 이어 간다 (apiLevel 5). */
+  logoutOthers(): Promise<void>;
   /**
    * 연결을 확인한 뒤 그 서버로 옮긴다. 닿지 않거나 API 버전이 다르면 아무것도 바꾸지 않고
    * 이유를 담은 오류를 던진다.
@@ -84,6 +86,9 @@ interface AuthState {
 const AuthContext = createContext<AuthState | null>(null);
 
 const INITIAL_STORE: ServerStore = initialStore();
+
+/** 로그아웃할 때 서버가 토큰을 끊어 주기를 기다리는 한도. 닿지 않는 서버 때문에 로그아웃이 멈추면 안 된다. */
+const LOGOUT_WAIT_MS = 3000;
 
 /** 서버를 고르지 않은 채 로그인하려 할 때. 화면에서는 서버 목록으로 안내한다. */
 function noServerError(): Error {
@@ -334,6 +339,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       async logout() {
         const entry = activeServer(storeRef.current);
+        // 서버에도 이 토큰을 끊어 달라고 한다 — 복사된 토큰이 만료까지 살아 있지 않게. 옛 서버(404)·
+        // 오프라인이어도 기기에서는 로그아웃해야 하므로 실패는 무시하고, 오래 기다리지 않는다.
+        await Promise.race([
+          api.logout().catch(() => undefined),
+          new Promise((resolve) => setTimeout(resolve, LOGOUT_WAIT_MS)),
+        ]);
         // 토큰을 먼저 메모리에서 내려 더는 보내지 않게 한 뒤 저장한다.
         setApiTarget(entry ? serverUrl(entry) : null, null);
         setUser(null);
@@ -360,6 +371,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (saved?.password) {
           await saveLogin(entry.id, { email: saved.email, password: newPassword }).catch(() => undefined);
         }
+      },
+
+      async logoutOthers() {
+        const entry = activeServer(storeRef.current);
+        if (!entry) throw noServerError();
+        const result = await api.logoutOthers();
+        // 비밀번호 변경과 같다 — 세대가 올라 이 기기의 옛 토큰도 끊겼으니 새 토큰으로 갈아 끼운다.
+        if (storeRef.current.activeId === entry.id) setApiTarget(serverUrl(entry), result.token);
+        await commit((s) => updateEntry(s, entry.id, (e) => ({ ...e, token: result.token })), {
+          evenIfNotSaved: true,
+        });
       },
 
       async updateProfile(displayName) {

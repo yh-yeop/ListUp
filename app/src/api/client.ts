@@ -13,8 +13,10 @@ import type {
   Invite,
   InvitePreview,
   Member,
+  MyProposal,
   Proposal,
   ProposalDetail,
+  RepoEvent,
   RepoSummary,
   Role,
   Snapshot,
@@ -392,6 +394,12 @@ export const api = {
   changePassword: (payload: { currentPassword: string; newPassword: string }) =>
     request<{ ok: true; token: string }>('/api/auth/password', { method: 'POST', body: payload }),
 
+  /** 이 토큰을 서버에서 끊는다 (apiLevel 5). 옛 서버는 404 — 그때는 기기에서만 지운다. */
+  logout: () => request<{ ok: true }>('/api/auth/logout', { method: 'POST' }),
+
+  /** 다른 기기 모두 로그아웃 (apiLevel 5). 새 토큰으로 이 기기의 세션을 갈아 끼워야 한다. */
+  logoutOthers: () => request<{ token: string }>('/api/auth/logout-others', { method: 'POST' }),
+
   // 저장소 ----------------------------------------------------------------
   listRepos: () => request<{ repos: RepoSummary[] }>('/api/repos'),
 
@@ -422,6 +430,15 @@ export const api = {
       method: 'POST',
       body: { userId },
     }),
+
+  /** 활동 기록 — 멤버·초대 변화 (소유자, apiLevel 5). 옛 서버는 404. */
+  repoEvents: (repoId: string, before?: number | null) => {
+    const params = new URLSearchParams({ limit: '30' });
+    if (before != null) params.set('before', String(before));
+    return request<{ events: RepoEvent[]; next: { before: number } | null }>(
+      `/api/repos/${repoId}/events?${params.toString()}`,
+    );
+  },
 
   /** 변경 이력. `cursor` 는 이전 응답의 `next` 를 그대로 넘긴다 (더 보기). */
   history: (repoId: string, cursor?: { before: number; beforeId: string } | null) => {
@@ -592,8 +609,15 @@ export const api = {
       { method: 'POST' },
     ),
 
-  closeProposal: (proposalId: string) =>
-    request<{ proposal: ProposalDetail }>(`/api/proposals/${proposalId}/close`, { method: 'POST' }),
+  /** 이유는 apiLevel 5 서버만 의견으로 남긴다. 옛 서버는 무시하고 닫는다. */
+  closeProposal: (proposalId: string, reason?: string) =>
+    request<{ proposal: ProposalDetail }>(`/api/proposals/${proposalId}/close`, {
+      method: 'POST',
+      body: reason ? { reason } : {},
+    }),
+
+  /** 내가 올린 제안, 저장소를 가로질러 (apiLevel 5). 옛 서버는 404. */
+  myProposals: () => request<{ proposals: MyProposal[] }>('/api/proposals/mine'),
 
   reopenProposal: (proposalId: string) =>
     request<{ proposal: ProposalDetail }>(`/api/proposals/${proposalId}/reopen`, { method: 'POST' }),

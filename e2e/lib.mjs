@@ -28,7 +28,7 @@ export function screen(page) {
     path: () => new URL(page.url()).pathname,
     openSettings: async () => {
       await page.getByLabel('내 정보').click();
-      await page.getByRole('button', { name: '로그아웃' }).waitFor();
+      await page.getByRole('button', { name: '로그아웃', exact: true }).waitFor();
     },
     openServerList: async () => {
       await page.getByLabel('내 정보').click();

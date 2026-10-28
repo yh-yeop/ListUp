@@ -5,6 +5,7 @@ import type { AppContext } from '../context.ts';
 import { badRequest, conflict, forbidden, notFound } from '../lib/errors.ts';
 import { newId, newInviteCode } from '../lib/ids.ts';
 import { body, requireUser } from '../lib/request.ts';
+import { recordEvent } from '../services/events.ts';
 import { getRepoRow, getRole, requireAccess, toRepoSummary } from '../services/repos.ts';
 import { snapshotStats } from '../services/snapshots.ts';
 
@@ -114,6 +115,12 @@ export async function registerInviteRoutes(app: FastifyInstance, ctx: AppContext
            VALUES (@id, @repo_id, @code, @role, @created_by, @created_at, @expires_at, @max_uses, @use_count, @revoked_at)`,
         ).run(candidate);
         row = candidate;
+        recordEvent(
+          db,
+          repoId,
+          { kind: 'invite_created', actorId: user.id, role, inviteId: candidate.id },
+          candidate.created_at,
+        );
       } catch (err) {
         const code = (err as { code?: string }).code;
         if (code !== 'SQLITE_CONSTRAINT_UNIQUE') throw err;
@@ -149,7 +156,10 @@ export async function registerInviteRoutes(app: FastifyInstance, ctx: AppContext
       throw forbidden('내가 만든 초대만 회수할 수 있습니다.');
     }
     if (row.revoked_at === null) {
-      db.prepare(`UPDATE invites SET revoked_at = ? WHERE id = ?`).run(Date.now(), inviteId);
+      db.transaction(() => {
+        db.prepare(`UPDATE invites SET revoked_at = ? WHERE id = ?`).run(Date.now(), inviteId);
+        recordEvent(db, row.repo_id, { kind: 'invite_revoked', actorId: user.id, role: row.role, inviteId });
+      })();
     }
     return { ok: true };
   });
@@ -226,6 +236,7 @@ export async function registerInviteRoutes(app: FastifyInstance, ctx: AppContext
       db.prepare(
         `INSERT INTO repo_members (repo_id, user_id, role, joined_at) VALUES (?, ?, ?, ?)`,
       ).run(repoId, user.id, row.role, now);
+      recordEvent(db, repoId, { kind: 'member_joined', actorId: user.id, role: row.role, inviteId: row.id }, now);
     })();
 
     return { repo: toRepoSummary(db, getRepoRow(db, repoId)!, row.role), alreadyMember: false };

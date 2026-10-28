@@ -44,7 +44,7 @@ export default async function run(t, env) {
 
   // 로그아웃 → 서버 목록으로 (마인크래프트의 타이틀 화면)
   await s.openSettings();
-  await page.getByRole('button', { name: '로그아웃' }).click();
+  await page.getByRole('button', { name: '로그아웃', exact: true }).click();
   await s.listIntro().waitFor();
   t.must(s.path() === '/servers', '로그아웃 → 서버 목록');
   t.must((await s.visibleCount(page.getByText(/^alice 님으로 로그인됨 · /))) === 1, 'A 로그인은 그대로');
@@ -78,7 +78,7 @@ export default async function run(t, env) {
 
   // 세션 없이 다시 열면 목록부터
   await s.openSettings();
-  await page.getByRole('button', { name: '로그아웃' }).click();
+  await page.getByRole('button', { name: '로그아웃', exact: true }).click();
   await s.listIntro().waitFor();
   await page.reload();
   await s.listIntro().waitFor();

@@ -2,7 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { Stack, router, useFocusEffect } from 'expo-router';
 import { useCallback, useRef, useState } from 'react';
 import { Pressable, RefreshControl, View } from 'react-native';
-import { ROLE_LABEL, formatBytes, formatRelativeTime, type RepoSummary } from '@listup/shared';
+import { ROLE_LABEL, formatBytes, formatRelativeTime, type MyProposal, type RepoSummary } from '@listup/shared';
 import {
   Badge,
   Body,
@@ -35,6 +35,14 @@ export default function ReposScreen() {
   const [query, setQuery] = useState('');
 
   const state = useAsync(async () => (await api.listRepos()).repos, []);
+  // 내 제안은 곁들이는 안내라, 못 받으면(옛 서버의 404 포함) 조용히 숨긴다.
+  const mine = useAsync(async () => {
+    try {
+      return (await api.myProposals()).proposals;
+    } catch {
+      return null;
+    }
+  }, []);
   const repos = state.data ?? [];
   const searchable = repos.length >= REPO_SEARCH_MIN;
   const shown = searchable ? searchRepos(repos, query) : repos;
@@ -49,6 +57,7 @@ export default function ReposScreen() {
         return;
       }
       state.refresh();
+      mine.refresh();
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []),
   );
@@ -82,7 +91,10 @@ export default function ReposScreen() {
       refreshControl={
         <RefreshControl
           refreshing={state.refreshing}
-          onRefresh={state.refresh}
+          onRefresh={() => {
+            state.refresh();
+            mine.refresh();
+          }}
           tintColor={colors.textMuted}
         />
       }
@@ -122,6 +134,8 @@ export default function ReposScreen() {
           onPress={() => router.push('/join')}
         />
       </Row>
+
+      {mine.data && mine.data.length > 0 ? <MyProposalsLink proposals={mine.data} /> : null}
 
       {creating ? (
         <Card style={{ gap: spacing.lg }}>
@@ -185,6 +199,36 @@ export default function ReposScreen() {
         </Card>
       )}
     </Screen>
+  );
+}
+
+/** 내 제안으로 가는 줄. 새 소식(반영·닫힘·남의 의견)이 있으면 그 수를 함께 보인다. */
+function MyProposalsLink({ proposals }: { proposals: MyProposal[] }) {
+  const { colors } = useTheme();
+  const unseen = proposals.filter((p) => p.unseen).length;
+  const open = proposals.filter((p) => p.status === 'open').length;
+
+  return (
+    <Pressable
+      onPress={() => router.push('/my-proposals')}
+      accessibilityRole="button"
+      accessibilityLabel={unseen > 0 ? `내 제안, 새 소식 ${unseen}건` : '내 제안'}
+      style={({ pressed }) => ({ opacity: pressed ? 0.85 : 1 })}
+    >
+      <Card style={{ paddingVertical: spacing.md }}>
+        <Row style={{ justifyContent: 'space-between' }}>
+          <Row gap={spacing.sm} style={{ flex: 1 }}>
+            <Ionicons name="git-pull-request-outline" size={18} color={colors.accent} />
+            <Body style={{ fontWeight: '600' }}>내 제안</Body>
+            <Caption>{open > 0 ? `검토 중 ${open}건` : `${proposals.length}건`}</Caption>
+          </Row>
+          <Row gap={spacing.xs}>
+            {unseen > 0 ? <Badge label={`새 소식 ${unseen}`} tone="accent" /> : null}
+            <Ionicons name="chevron-forward" size={16} color={colors.textFaint} />
+          </Row>
+        </Row>
+      </Card>
+    </Pressable>
   );
 }
 

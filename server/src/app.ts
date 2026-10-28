@@ -8,7 +8,7 @@ import Fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastif
 import { API_LEVEL, API_VERSION, type ApiErrorBody, type HealthResponse } from '@listup/shared';
 import type { AppContext } from './context.ts';
 import { ApiError } from './lib/errors.ts';
-import { verifyToken } from './lib/auth.ts';
+import { tokenHash, verifyToken } from './lib/auth.ts';
 import type { AuthUser } from './lib/request.ts';
 import { registerAuthRoutes } from './routes/auth.ts';
 import { registerRepoRoutes } from './routes/repos.ts';
@@ -121,7 +121,8 @@ export async function buildApp(ctx: AppContext, options: BuildOptions = {}): Pro
   app.addHook('onRequest', async (req) => {
     const header = req.headers.authorization;
     if (!header || !header.startsWith('Bearer ')) return;
-    const claims = verifyToken(header.slice(7).trim(), ctx.config.authSecret);
+    const token = header.slice(7).trim();
+    const claims = verifyToken(token, ctx.config.authSecret);
     if (!claims) return;
     const row = ctx.db
       .prepare<[string], { id: string; email: string; display_name: string; token_epoch: number }>(
@@ -131,7 +132,15 @@ export async function buildApp(ctx: AppContext, options: BuildOptions = {}): Pro
     if (!row) return;
     // 비밀번호를 바꾸면 세대가 올라간다 — 그 전에 나간 토큰은 서명이 맞아도 받지 않는다.
     if (row.token_epoch !== claims.epoch) return;
-    const user: AuthUser = { id: row.id, email: row.email, displayName: row.display_name };
+    // 로그아웃한 토큰 — 서명·세대가 맞아도 받지 않는다.
+    const hash = tokenHash(token);
+    if (ctx.db.prepare<[string], { ok: 1 }>(`SELECT 1 AS ok FROM revoked_tokens WHERE token_hash = ?`).get(hash)) return;
+    const user: AuthUser = {
+      id: row.id,
+      email: row.email,
+      displayName: row.display_name,
+      token: { hash, exp: claims.exp },
+    };
     req.user = user;
   });
 

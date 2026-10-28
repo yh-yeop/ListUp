@@ -133,7 +133,7 @@ export default async function run(t, env) {
   await s.card('B서버').click();
   await s.onRepos('bob').waitFor();
   await page.getByLabel('내 정보').click();
-  await page.getByRole('button', { name: '로그아웃' }).click();
+  await page.getByRole('button', { name: '로그아웃', exact: true }).click();
   await page.getByText('서버: B서버').waitFor();
   t.must(page.url().endsWith('/login'), '로그아웃 → 그 서버의 로그인 화면');
   t.must((await s.store()).servers.every((x) => x.token === null), '로그아웃한 B 토큰 삭제');

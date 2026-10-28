@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import type { ChangeOp, ProposalDetail, ProposalStatus } from '@listup/shared';
+import type { ChangeOp, MyProposal, ProposalDetail, ProposalStatus } from '@listup/shared';
 import {
   MAX_DESCRIPTION_LENGTH,
   MAX_FILES_PER_REPO,
@@ -33,6 +33,13 @@ import { assertRepoBytes, sendBlob } from './files.ts';
 const MAX_CHANGES = 200;
 const MAX_COMMENT_LENGTH = 2000;
 const MAX_TITLE_LENGTH = 120;
+
+/**
+ * 반영·닫기의 결정 기록. 바인딩 순서: decided_at, decided_by, 요청한 사람, 지금.
+ * 작성자가 스스로 닫았으면 자기 일이라 "내 제안"의 새 소식이 아니다 — 본 것으로 둔다.
+ */
+const DECIDED_SET = `decided_at = ?, decided_by = ?,
+  author_seen_at = CASE WHEN author_id = ? THEN ? ELSE author_seen_at END`;
 
 interface ChangeInput {
   path: string;
@@ -220,12 +227,48 @@ export async function registerProposalRoutes(app: FastifyInstance, ctx: AppConte
     };
   });
 
+  /**
+   * 내 제안 — 저장소를 가로질러, 최근에 바뀐 것부터. 열람자가 올린 제안이 반영·닫혔는지 저장소마다 찾아가지
+   * 않아도 알게 한다. 나간 저장소의 제안은 볼 권한이 없으므로 뺀다.
+   *
+   * unseen: 내가 마지막으로 상세를 연 뒤(연 적이 없으면 만든 뒤) 결정됐거나 남이 의견을 달았다.
+   */
+  app.get('/proposals/mine', async (req) => {
+    const user = requireUser(req);
+    const limit = queryInt(req, 'limit', 50, 100);
+    const rows = db
+      .prepare<[string, number], ProposalRow & { repo_name: string; unseen: number }>(
+        `SELECT p.*, r.name AS repo_name,
+                MAX(COALESCE(p.decided_at, 0),
+                    COALESCE((SELECT MAX(c.created_at) FROM proposal_comments c
+                               WHERE c.proposal_id = p.id AND c.author_id <> p.author_id), 0))
+                  > COALESCE(p.author_seen_at, p.created_at) AS unseen
+           FROM proposals p
+           JOIN repos r ON r.id = p.repo_id
+           JOIN repo_members m ON m.repo_id = p.repo_id AND m.user_id = p.author_id
+          WHERE p.author_id = ?
+          ORDER BY p.updated_at DESC
+          LIMIT ?`,
+      )
+      .all(user.id, limit);
+    const proposals: MyProposal[] = rows.map((row) => ({
+      ...toProposal(db, row),
+      repoName: row.repo_name,
+      unseen: row.unseen === 1,
+    }));
+    return { proposals };
+  });
+
   app.get('/proposals/:proposalId', async (req) => {
     const user = requireUser(req);
     const { proposalId } = req.params as { proposalId: string };
     const row = getProposalRow(db, proposalId);
     if (!row) throw notFound('제안을 찾을 수 없습니다.');
     requireAccess(db, row.repo_id, user.id, 'viewer');
+    // 작성자가 열어 봤으면 "내 제안"의 새 소식을 푼다.
+    if (row.author_id === user.id) {
+      db.prepare(`UPDATE proposals SET author_seen_at = ? WHERE id = ?`).run(Date.now(), proposalId);
+    }
     return { proposal: detail(ctx, proposalId) };
   });
 
@@ -326,8 +369,8 @@ export async function registerProposalRoutes(app: FastifyInstance, ctx: AppConte
       });
 
       db.prepare(
-        `UPDATE proposals SET status = 'merged', merged_snapshot_id = ?, updated_at = ? WHERE id = ?`,
-      ).run(snapshotId, now, proposalId);
+        `UPDATE proposals SET status = 'merged', merged_snapshot_id = ?, updated_at = ?, ${DECIDED_SET} WHERE id = ?`,
+      ).run(snapshotId, now, now, user.id, user.id, now, proposalId);
 
       return snapshotId;
     })();
@@ -335,7 +378,7 @@ export async function registerProposalRoutes(app: FastifyInstance, ctx: AppConte
     return { proposal: detail(ctx, proposalId), snapshotId: merged };
   });
 
-  /** 닫기 — 작성자 본인 또는 편집자 이상. */
+  /** 닫기 — 작성자 본인 또는 편집자 이상. 이유를 주면 닫은 사람의 의견으로 남긴다. */
   app.post('/proposals/:proposalId/close', async (req) => {
     const user = requireUser(req);
     const { proposalId } = req.params as { proposalId: string };
@@ -347,11 +390,26 @@ export async function registerProposalRoutes(app: FastifyInstance, ctx: AppConte
     }
     if (row.status === 'merged') throw conflict('이미 반영된 제안입니다.');
     if (row.status === 'closed') return { proposal: detail(ctx, proposalId) };
+    // 1.7 까지의 앱은 본문 없이 닫는다.
+    const input = req.body && typeof req.body === 'object' ? body(req) : {};
+    const reason = optionalString(input, 'reason', { max: MAX_COMMENT_LENGTH, label: '닫는 이유' });
 
-    db.prepare(`UPDATE proposals SET status = 'closed', updated_at = ? WHERE id = ?`).run(
-      Date.now(),
-      proposalId,
-    );
+    const now = Date.now();
+    db.transaction(() => {
+      if (reason) {
+        db.prepare(
+          `INSERT INTO proposal_comments (id, proposal_id, author_id, body, created_at) VALUES (?, ?, ?, ?, ?)`,
+        ).run(newId('cmt'), proposalId, user.id, reason, now);
+      }
+      db.prepare(`UPDATE proposals SET status = 'closed', updated_at = ?, ${DECIDED_SET} WHERE id = ?`).run(
+        now,
+        now,
+        user.id,
+        user.id,
+        now,
+        proposalId,
+      );
+    })();
     return { proposal: detail(ctx, proposalId) };
   });
 
@@ -366,10 +424,9 @@ export async function registerProposalRoutes(app: FastifyInstance, ctx: AppConte
     }
     if (row.status !== 'closed') throw conflict('닫힌 제안만 다시 열 수 있습니다.');
 
-    db.prepare(`UPDATE proposals SET status = 'open', updated_at = ? WHERE id = ?`).run(
-      Date.now(),
-      proposalId,
-    );
+    db.prepare(
+      `UPDATE proposals SET status = 'open', updated_at = ?, decided_at = NULL, decided_by = NULL WHERE id = ?`,
+    ).run(Date.now(), proposalId);
     return { proposal: detail(ctx, proposalId) };
   });
 

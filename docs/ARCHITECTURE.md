@@ -171,7 +171,9 @@ UPDATE invites SET use_count = use_count + 1
 | 토큰 위조 | HMAC-SHA256 서명, `timingSafeEqual` 비교 |
 | 약하거나 깨진 서명 키 | `LISTUP_AUTH_SECRET` 은 32자 이상(빈 값 거부, `config.ts`). `npm run serve`·PC 앱은 데이터 폴더의 `auth-secret.txt` 를 `server/src/lib/secret.ts` `ensureAuthSecret` 하나로 — 없으면 randomBytes(32) hex 를 원자적으로(0600) 만들고, 있는데 64자 16진수가 아니면 새로 만들지 않고 멈춘다(새 키는 전원 로그아웃) |
 | 비밀번호 대입 | 로그인 실패를 아이디·IP 기준으로 세어 한도를 넘으면 일정 시간 차단 (`lib/rate-limit.ts`) |
-| 유출된 토큰 | 사용자마다 토큰 세대(`users.token_epoch`)를 두고 토큰에 실어, 비밀번호를 바꾸면 세대를 올려 이전 토큰을 한 번에 끊는다 |
+| 유출된 토큰 | 사용자마다 토큰 세대(`users.token_epoch`)를 두고 토큰에 실어, 비밀번호를 바꾸거나 "다른 기기 모두 로그아웃"을 하면 세대를 올려 이전 토큰을 한 번에 끊는다 |
+| 로그아웃 뒤에도 살아 있는 토큰 | 토큰을 저장하지 않으므로 앱이 지우기만 하면 복사본이 만료(기본 30일)까지 통했다. `/auth/logout` 이 그 토큰의 SHA-256 을 만료 시각까지 `revoked_tokens` 에 적고 인증 훅이 거른다. 만료가 지나면 GC 가 지운다 |
+| 몰래 들어온 멤버 | 멤버 참여·내보내기·역할 변경·소유권 이전, 초대 발급·회수를 `repo_events` 에 같은 트랜잭션으로 남기고 소유자에게 보인다(`services/events.ts`) |
 | 계정 존재 여부 노출 | 로그인 실패 메시지를 하나로 통일하고, 없는 계정도 더미 해시를 검증해 응답 시간을 맞춤 |
 | 저장소 존재 여부 노출 | 비멤버에게 404 |
 | 파일명에 개행/따옴표 | `Content-Disposition` 에 ASCII 대체명 + RFC 5987 `filename*` 동시 사용 |
@@ -196,7 +198,8 @@ app/
 │  ├─ servers / server        서버 목록 · 서버 추가/수정 폼
 │  ├─ host                    PC 앱: 이 PC 에서 연 서버 관리
 │  ├─ login / signup / reset-password / join / settings / repos
-│  ├─ repo/[repoId]/          index(파일) · proposals · new-proposal · members · invites · history
+│  ├─ my-proposals            내 제안 — 저장소를 가로질러, 반영·닫힘·남의 의견을 새 소식으로
+│  ├─ repo/[repoId]/          index(파일) · proposals · new-proposal · members · invites · history · activity(소유자)
 │  └─ proposal/[proposalId]   제안 상세 · 리뷰 · 병합
 └─ src/
    ├─ api/client.ts           타입이 붙은 API 래퍼, 401 시 자동 로그아웃
@@ -224,8 +227,9 @@ app/
    │  ├─ transfer-plan.ts     이미 올라간 파일 건너뛰기 판정 ← transfer
    │  ├─ compare-core.ts      폴더 대조(이름 NFC/NFD 맞추기) ← folder-compare
    │  ├─ server-store.ts      서버 목록 읽기·정리, 예전 저장 키 이전 규칙(storeFromLegacy) ← state/servers
-   │  └─ repo-search.ts       저장소 찾기(이름 일치 먼저, 5개부터 칸을 보임) ← search
-   ├─ components/             공용 UI + 저장소 탭 네비게이션
+   │  ├─ repo-search.ts       저장소 찾기(이름 일치 먼저, 5개부터 칸을 보임) ← search
+   │  └─ events.ts            활동 기록 한 줄을 문장으로(모르는 종류는 "알 수 없는 활동") ← repo/[repoId]/activity
+   ├─ components/             공용 UI + 저장소 탭 네비게이션 + 제안 상태 배지
    └─ theme.ts                라이트/다크 팔레트
 ```
 

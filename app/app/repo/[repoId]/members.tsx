@@ -210,6 +210,15 @@ export default function MembersScreen() {
       ) : state.data ? (
         <>
           {isOwner ? (
+            <Button
+              label="활동 기록"
+              icon="pulse-outline"
+              variant="secondary"
+              compact
+              onPress={() => router.push(`/repo/${repoId}/activity`)}
+            />
+          ) : null}
+          {isOwner ? (
             <Card style={{ gap: spacing.lg }}>
               <Body style={{ fontWeight: '600', fontSize: fontSize.md }}>저장소 설정</Body>
               <Field label="저장소 이름">

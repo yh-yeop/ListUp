@@ -3,14 +3,11 @@ import { Stack, router, useFocusEffect, useLocalSearchParams } from 'expo-router
 import { useCallback, useState } from 'react';
 import { Pressable, RefreshControl, View } from 'react-native';
 import {
-  PROPOSAL_STATUS_LABEL,
   formatRelativeTime,
   type Proposal,
-  type ProposalStatus,
   type RepoSummary,
 } from '@listup/shared';
 import {
-  Badge,
   Body,
   Button,
   Caption,
@@ -22,6 +19,7 @@ import {
   Screen,
   Title,
 } from '../../../src/components/ui';
+import { ProposalStatusBadge } from '../../../src/components/ProposalStatusBadge';
 import { RepoNav } from '../../../src/components/RepoNav';
 import { api } from '../../../src/api/client';
 import { useAsync } from '../../../src/lib/useAsync';
@@ -145,18 +143,6 @@ export default function ProposalsScreen() {
   );
 }
 
-const STATUS_TONE: Record<ProposalStatus, 'warning' | 'success' | 'neutral'> = {
-  open: 'warning',
-  merged: 'success',
-  closed: 'neutral',
-};
-
-const STATUS_ICON: Record<ProposalStatus, 'ellipse-outline' | 'checkmark-circle' | 'close-circle'> = {
-  open: 'ellipse-outline',
-  merged: 'checkmark-circle',
-  closed: 'close-circle',
-};
-
 function ProposalCard({ proposal }: { proposal: Proposal }) {
   const { colors } = useTheme();
 
@@ -174,11 +160,7 @@ function ProposalCard({ proposal }: { proposal: Proposal }) {
               {proposal.title}
             </Body>
           </Row>
-          <Badge
-            label={PROPOSAL_STATUS_LABEL[proposal.status]}
-            tone={STATUS_TONE[proposal.status]}
-            icon={STATUS_ICON[proposal.status]}
-          />
+          <ProposalStatusBadge status={proposal.status} />
         </Row>
 
         <Row gap={spacing.md} wrap>

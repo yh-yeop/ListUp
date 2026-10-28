@@ -20,6 +20,7 @@ import {
   toRepoSummary,
   type RepoRow,
 } from '../services/repos.ts';
+import { listEvents, recordEvent } from '../services/events.ts';
 import { listFileVersions, listSnapshots, listTrash, type SnapshotCursor } from '../services/snapshots.ts';
 
 /** 이 사람이 만든 미회수 초대를 모두 회수한다. 추방·강등과 같은 트랜잭션 안에서 부른다. */
@@ -67,6 +68,7 @@ export async function registerRepoRoutes(app: FastifyInstance, ctx: AppContext):
       db.prepare(
         `INSERT INTO repo_members (repo_id, user_id, role, joined_at) VALUES (?, ?, 'owner', ?)`,
       ).run(id, user.id, now);
+      recordEvent(db, id, { kind: 'repo_created', actorId: user.id }, now);
     })();
 
     const row = getRepoRow(db, id)!;
@@ -147,6 +149,7 @@ export async function registerRepoRoutes(app: FastifyInstance, ctx: AppContext):
       );
       // 초대는 편집자 이상만 만들 수 있으므로, 열람자로 강등되면 그 사람의 초대도 거둔다.
       if (role === 'viewer') revokeInvitesBy(db, repoId, userId, Date.now());
+      recordEvent(db, repoId, { kind: 'role_changed', actorId: user.id, targetId: userId, role });
     })();
     return { members: listMembers(db, repoId, 'owner') };
   });
@@ -169,6 +172,11 @@ export async function registerRepoRoutes(app: FastifyInstance, ctx: AppContext):
       db.prepare(`DELETE FROM repo_members WHERE repo_id = ? AND user_id = ?`).run(repoId, userId);
       // 나간 사람이 만든 초대로 다시 들어오거나 남을 들일 수 없게 한다.
       revokeInvitesBy(db, repoId, userId, Date.now());
+      recordEvent(
+        db,
+        repoId,
+        isSelf ? { kind: 'member_left', actorId: user.id } : { kind: 'member_removed', actorId: user.id, targetId: userId },
+      );
     })();
     return { ok: true };
   });
@@ -198,9 +206,24 @@ export async function registerRepoRoutes(app: FastifyInstance, ctx: AppContext):
         now,
         repoId,
       );
+      recordEvent(db, repoId, { kind: 'owner_transferred', actorId: user.id, targetId }, now);
     })();
 
     return { repo: toRepoSummary(db, getRepoRow(db, repoId)!, 'editor') };
+  });
+
+  /** 활동 기록 — 멤버·초대 변화, 최근 것부터. 누가 언제 들어왔는지는 소유자만 본다. */
+  app.get('/repos/:repoId/events', async (req) => {
+    const user = requireUser(req);
+    const { repoId } = req.params as { repoId: string };
+    requireAccess(db, repoId, user.id, 'owner');
+    const limit = queryInt(req, 'limit', 30, 100);
+    const beforeRaw = queryString(req, 'before');
+    const before = beforeRaw === undefined ? undefined : Number.parseInt(beforeRaw, 10);
+    if (before !== undefined && !Number.isFinite(before)) throw badRequest('before 값이 올바르지 않습니다.');
+    const events = listEvents(db, repoId, limit, before);
+    const last = events[events.length - 1];
+    return { events, next: events.length === limit && last ? { before: last.seq } : null };
   });
 
   // -------------------------------------------------------------------------

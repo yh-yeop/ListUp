@@ -5,6 +5,8 @@ export interface AuthUser {
   id: string;
   email: string;
   displayName: string;
+  /** 이 요청에 쓴 토큰. 로그아웃이 바로 이 토큰을 끊는 데 쓴다. */
+  token: { hash: string; exp: number };
 }
 
 declare module 'fastify' {

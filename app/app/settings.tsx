@@ -28,7 +28,7 @@ import { spacing, useTheme } from '../src/theme';
 
 
 export default function SettingsScreen() {
-  const { user, updateProfile, logout, changePassword, activeServer } = useAuth();
+  const { user, updateProfile, logout, logoutOthers, changePassword, activeServer } = useAuth();
   const { colors } = useTheme();
   const [displayName, setDisplayName] = useState(user?.displayName ?? '');
   const [currentPassword, setCurrentPassword] = useState('');
@@ -37,6 +37,8 @@ export default function SettingsScreen() {
   const [passwordError, setPasswordError] = useState<string | null>(null);
   const [savingName, setSavingName] = useState(false);
   const [savingPassword, setSavingPassword] = useState(false);
+  const [devicesError, setDevicesError] = useState<string | null>(null);
+  const [signingOutOthers, setSigningOutOthers] = useState(false);
   const [hasSavedLogin, setHasSavedLogin] = useState(false);
   const [saveFolder, setSaveFolder] = useState<string | null>(null);
 
@@ -115,6 +117,32 @@ export default function SettingsScreen() {
     }
   };
 
+  const signOutOthers = async () => {
+    const ok = await confirmAction({
+      title: '다른 기기에서 모두 로그아웃할까요?',
+      message: '이 기기만 남기고 이 서버에 로그인한 다른 기기·브라우저를 모두 내보냅니다.',
+      confirmLabel: '모두 로그아웃',
+      destructive: true,
+    });
+    if (!ok) return;
+    setDevicesError(null);
+    setSigningOutOthers(true);
+    try {
+      await logoutOthers();
+      notifySuccess('다른 기기에서 모두 로그아웃했습니다.');
+    } catch (err) {
+      setDevicesError(
+        err instanceof ApiError && err.status === 404
+          ? '이 서버에는 아직 이 기능이 없습니다. 서버 주인에게 ListUp 서버를 1.8 이상으로 업데이트해 달라고 부탁하세요.'
+          : err instanceof ApiError
+            ? err.message
+            : '다른 기기에서 로그아웃하지 못했습니다.',
+      );
+    } finally {
+      setSigningOutOthers(false);
+    }
+  };
+
   const signOut = async () => {
     const ok = await confirmAction({
       title: '로그아웃할까요?',
@@ -175,6 +203,22 @@ export default function SettingsScreen() {
           onPress={savePassword}
           loading={savingPassword}
           disabled={!currentPassword || newPassword.length < 8}
+        />
+      </Card>
+
+      <Card style={{ gap: spacing.md }}>
+        <Body style={{ fontWeight: '600' }}>다른 기기의 로그인</Body>
+        <Caption>
+          이 기기만 남기고 다른 기기·브라우저의 로그인을 끊습니다. 비밀번호를 저장해 둔 기기는 그 비밀번호로
+          다시 들어오므로, 기기를 잃어버렸다면 비밀번호를 바꾸세요.
+        </Caption>
+        {devicesError ? <ErrorNotice message={devicesError} /> : null}
+        <Button
+          label="다른 기기 모두 로그아웃"
+          variant="secondary"
+          icon="phone-portrait-outline"
+          onPress={signOutOthers}
+          loading={signingOutOthers}
         />
       </Card>
 

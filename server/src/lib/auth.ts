@@ -1,4 +1,4 @@
-import { createHmac, randomBytes, scrypt, timingSafeEqual, type ScryptOptions } from 'node:crypto';
+import { createHash, createHmac, randomBytes, scrypt, timingSafeEqual, type ScryptOptions } from 'node:crypto';
 import { MAX_LOGIN_ID_LENGTH, MIN_LOGIN_ID_LENGTH } from '@listup/shared';
 
 const SCRYPT_KEYLEN = 64;
@@ -61,6 +61,8 @@ interface TokenPayload {
 export interface TokenClaims {
   userId: string;
   epoch: number;
+  /** 만료 시각(ms). 로그아웃한 토큰을 이때까지만 적어 둔다. */
+  exp: number;
 }
 
 function sign(data: string, secret: string): string {
@@ -102,10 +104,15 @@ export function verifyToken(
     if (payload.exp <= now) return null;
     // ep 가 없는 토큰은 세대 도입 전에 나간 것이라 0 세대로 본다.
     const epoch = typeof payload.ep === 'number' ? payload.ep : 0;
-    return { userId: payload.sub, epoch };
+    return { userId: payload.sub, epoch, exp: payload.exp };
   } catch {
     return null;
   }
+}
+
+/** 로그아웃한 토큰을 적어 둘 때의 키. 원문을 DB 에 두지 않는다. */
+export function tokenHash(token: string): string {
+  return createHash('sha256').update(token).digest('hex');
 }
 
 // ---------------------------------------------------------------------------

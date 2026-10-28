@@ -334,4 +334,43 @@ export const MIGRATIONS: {
       CREATE INDEX idx_snapchanges_path ON snapshot_changes(path);
     `,
   },
+  {
+    // 로그아웃한 토큰. 토큰은 서버에 저장하지 않으므로(lib/auth.ts) 하나만 끊으려면 끊은 것을 적어 둬야 한다.
+    // 토큰 원문이 아니라 SHA-256 만 두고, 토큰이 어차피 만료되는 시각이 지나면 GC 가 지운다.
+    //
+    // 제안의 결정 시각·결정한 사람·작성자가 마지막으로 본 시각. 작성자가 "내 제안"에서 반영·닫힘과 남의 의견을
+    // 새 소식으로 보려면 updated_at(내 의견·수정에도 바뀜)으로는 구분이 안 된다. 기존 제안은 이미 본 것으로 둔다
+    // — 업데이트하자마자 모든 옛 제안이 새 소식으로 뜨지 않게. 결정 시각은 그 전까지 updated_at 이 가장 가깝다.
+    //
+    // 저장소 활동 기록. 파일 변경은 스냅샷에 남지만 멤버·초대 변화는 어디에도 남지 않아 소유자가
+    // "누가 언제 들어왔나"를 볼 수 없었다. 순서·페이지 커서로 쓰려고 정수 키를 둔다.
+    version: 9,
+    up: `
+      CREATE TABLE revoked_tokens (
+        token_hash TEXT PRIMARY KEY,
+        user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        expires_at INTEGER NOT NULL
+      );
+      CREATE INDEX idx_revoked_tokens_expires ON revoked_tokens(expires_at);
+
+      ALTER TABLE proposals ADD COLUMN decided_at INTEGER;
+      ALTER TABLE proposals ADD COLUMN decided_by TEXT REFERENCES users(id);
+      ALTER TABLE proposals ADD COLUMN author_seen_at INTEGER;
+      UPDATE proposals SET author_seen_at = updated_at;
+      UPDATE proposals SET decided_at = updated_at WHERE status <> 'open';
+      CREATE INDEX idx_proposals_author ON proposals(author_id, updated_at DESC);
+
+      CREATE TABLE repo_events (
+        seq        INTEGER PRIMARY KEY AUTOINCREMENT,
+        repo_id    TEXT NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+        kind       TEXT NOT NULL,
+        actor_id   TEXT REFERENCES users(id),
+        target_id  TEXT REFERENCES users(id),
+        role       TEXT,
+        invite_id  TEXT,
+        created_at INTEGER NOT NULL
+      );
+      CREATE INDEX idx_repo_events_repo ON repo_events(repo_id, seq DESC);
+    `,
+  },
 ];
