@@ -391,7 +391,9 @@ try {
   // 목록을 당겨서 새로고침.
   adb(['shell', 'input', 'swipe', '540', '700', '540', '1700', '400']);
   await tap(/emu-repo/, { timeout: 30_000 });
-  await tap('a.txt 삭제', { timeout: 30_000 });
+  // 행에는 받기와 ⋯ 만 — 삭제는 ⋯ 를 펼쳐야 나온다.
+  await tap('a.txt 더보기', { timeout: 30_000 });
+  await tap('a.txt 삭제', { timeout: 10_000 });
   await waitFor('이 파일을 지울까요?');
   t.ok('지우기 전에 네이티브 대화상자로 묻는다');
   await tap('삭제');

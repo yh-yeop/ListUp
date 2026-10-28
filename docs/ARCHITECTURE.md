@@ -215,14 +215,16 @@ app/
    ├─ lib/updates.ts          설치형 클라이언트 업데이트 확인(GitHub 최신 릴리즈와 견주기), 소스 코드 링크(SOURCE_URL)
    ├─ lib/apk-update.ts       안드로이드 앱 안 업데이트 — 새 APK 를 받아 시스템 설치 화면 띄우기
    ├─ lib/restore.ts          되돌리기 — 이력의 내용(blobHash)으로 편집자는 커밋, 열람자는 제안
-   ├─ lib/search.ts           저장소 안 파일 이름 검색(낱말 모두 포함, 대소문자·NFC 무시, 파일 이름 일치 먼저)
+   ├─ lib/search.ts           저장소 안 파일 이름 검색(낱말 모두 포함, 대소문자·NFC 무시, 파일 이름 일치 먼저), 저장소 찾기 다시 내보내기
    ├─ lib/toast.ts            화면 밖에 두는 토스트 상태(notify 가 넣고 ToastHost 가 그림)
    ├─ lib/useAsync.ts         화면 데이터 불러오기 훅 — 늦게 온 이전 요청 결과는 버림, 당겨서 새로고침
+   ├─ lib/useMorePages.ts     '더 보기' 로 이어 받는 목록(이력·버전·제안) — 첫 페이지가 바뀌면 이어 받은 것은 버림
    ├─ lib/pure/               플랫폼 import 가 없는 순수 로직. 원래 파일이 다시 내보내고, app/test 가 node 로 검사
    │  ├─ versions.ts          버전 비교(compareVersions) ← updates
    │  ├─ transfer-plan.ts     이미 올라간 파일 건너뛰기 판정 ← transfer
    │  ├─ compare-core.ts      폴더 대조(이름 NFC/NFD 맞추기) ← folder-compare
-   │  └─ server-store.ts      서버 목록 읽기·정리, 예전 저장 키 이전 규칙(storeFromLegacy) ← state/servers
+   │  ├─ server-store.ts      서버 목록 읽기·정리, 예전 저장 키 이전 규칙(storeFromLegacy) ← state/servers
+   │  └─ repo-search.ts       저장소 찾기(이름 일치 먼저, 5개부터 칸을 보임) ← search
    ├─ components/             공용 UI + 저장소 탭 네비게이션
    └─ theme.ts                라이트/다크 팔레트
 ```

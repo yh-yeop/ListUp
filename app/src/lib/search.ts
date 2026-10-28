@@ -1,5 +1,7 @@
 import type { FileEntry } from '@listup/shared';
 
+export { REPO_SEARCH_MIN, searchRepos } from './pure/repo-search';
+
 /** 검색 결과로 한 번에 그리는 최대 수. 더 있으면 더 좁혀 달라고 한다. */
 export const MAX_SEARCH_RESULTS = 200;
 

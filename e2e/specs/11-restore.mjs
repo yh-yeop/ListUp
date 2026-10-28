@@ -76,10 +76,22 @@ export default async function run(t, env) {
     await page.getByText('1개 찾음').waitFor();
     t.ok('낱말 여럿은 모두 들어간 것만');
     await page.getByRole('button', { name: 'a.txt 이(가) 있는 폴더 열기' }).click();
-    await page.getByRole('button', { name: 'a.txt 버전' }).waitFor();
+    const more = page.getByRole('button', { name: 'a.txt 더보기' });
+    await more.waitFor();
     t.must((await search.inputValue()) === '', '폴더 열기 → 검색을 닫고 그 폴더로');
 
+    // 행에는 받기와 ⋯ 만 — 버전·이름 변경·삭제는 ⋯ 를 눌러야 글자 버튼으로 나온다.
+    t.must((await page.getByRole('button', { name: 'a.txt 버전' }).count()) === 0, '펼치기 전에는 버전 버튼이 없다');
+    await more.click();
+    t.must((await more.getAttribute('aria-expanded')) === 'true', '⋯ 가 펼침 상태를 알린다');
+    await page.getByRole('button', { name: 'a.txt 이름 변경' }).waitFor();
+    t.must((await page.getByRole('button', { name: 'a.txt 삭제' }).count()) === 1, '편집자에게는 이름 변경·삭제도');
+    await more.click();
+    await page.getByRole('button', { name: 'a.txt 이름 변경' }).waitFor({ state: 'detached' });
+    t.ok('다시 누르면 접힌다');
+
     // ① 파일 버전 — 예전 버전으로 되돌리기
+    await more.click();
     await page.getByRole('button', { name: 'a.txt 버전' }).click();
     await page.getByRole('button', { name: '이 버전 받기' }).first().waitFor();
     const nowCount = await page.getByText('지금', { exact: true }).filter({ visible: true }).count();

@@ -11,7 +11,7 @@ import type { AppContext } from '../context.ts';
 import { badRequest, conflict, forbidden, notFound } from '../lib/errors.ts';
 import { mimeForPath } from '../lib/mime.ts';
 import { newId } from '../lib/ids.ts';
-import { body, optionalString, queryString, requireUser, requiredString } from '../lib/request.ts';
+import { body, optionalString, queryInt, queryString, requireUser, requiredString } from '../lib/request.ts';
 import { getRepoRow, requireAccess } from '../services/repos.ts';
 import { readManifest, writeSnapshot } from '../services/snapshots.ts';
 import {
@@ -177,6 +177,10 @@ export async function registerProposalRoutes(app: FastifyInstance, ctx: AppConte
     return reply.code(201).send({ proposal: detail(ctx, proposalId) });
   });
 
+  /**
+   * 제안 목록, 번호 큰 것부터. `limit` 을 주면 나눠 주고 `next` 로 다음 커서(`before` = 마지막 번호)를 알린다.
+   * `limit` 이 없으면 전부 — 1.7 까지의 앱은 나눠 받을 줄 모른다.
+   */
   app.get('/repos/:repoId/proposals', async (req) => {
     const user = requireUser(req);
     const { repoId } = req.params as { repoId: string };
@@ -187,16 +191,33 @@ export async function registerProposalRoutes(app: FastifyInstance, ctx: AppConte
     if (statusFilter && !valid.includes(statusFilter as ProposalStatus)) {
       throw badRequest('status 값이 올바르지 않습니다.');
     }
+    const limit = queryString(req, 'limit') === undefined ? null : queryInt(req, 'limit', 30, 100);
+    const beforeRaw = queryString(req, 'before');
+    const before = beforeRaw === undefined ? null : Number.parseInt(beforeRaw, 10);
+    if (before !== null && !Number.isFinite(before)) throw badRequest('before 값이 올바르지 않습니다.');
 
-    const rows = (
-      statusFilter
-        ? db
-            .prepare(`SELECT * FROM proposals WHERE repo_id = ? AND status = ? ORDER BY number DESC`)
-            .all(repoId, statusFilter)
-        : db.prepare(`SELECT * FROM proposals WHERE repo_id = ? ORDER BY number DESC`).all(repoId)
-    ) as ProposalRow[];
+    const where = ['repo_id = ?'];
+    const params: (string | number)[] = [repoId];
+    if (statusFilter) {
+      where.push('status = ?');
+      params.push(statusFilter);
+    }
+    if (before !== null) {
+      where.push('number < ?');
+      params.push(before);
+    }
+    let sql = `SELECT * FROM proposals WHERE ${where.join(' AND ')} ORDER BY number DESC`;
+    if (limit !== null) {
+      sql += ' LIMIT ?';
+      params.push(limit);
+    }
+    const rows = db.prepare(sql).all(...params) as ProposalRow[];
+    const last = rows[rows.length - 1];
 
-    return { proposals: rows.map((row) => toProposal(db, row)) };
+    return {
+      proposals: rows.map((row) => toProposal(db, row)),
+      next: limit !== null && rows.length === limit && last ? { before: last.number } : null,
+    };
   });
 
   app.get('/proposals/:proposalId', async (req) => {

@@ -155,6 +155,9 @@ interface RequestOptions {
 /** 서버 응답을 기다리는 최대 시간. 파일 업로드(FormData)에는 적용하지 않는다. */
 const REQUEST_TIMEOUT_MS = 30_000;
 
+/** 제안 목록을 한 번에 받는 수. 변경 이력(서버 기본 30)과 같게. */
+const PROPOSAL_PAGE_SIZE = 30;
+
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   if (apiBaseUrl === null) {
     throw new ApiError(0, 'internal', '들어갈 서버를 먼저 골라 주세요.');
@@ -548,10 +551,22 @@ export const api = {
     ),
 
   // 변경 제안 --------------------------------------------------------------
-  listProposals: (repoId: string, status?: 'open' | 'merged' | 'closed') =>
-    request<{ proposals: Proposal[] }>(
-      `/api/repos/${repoId}/proposals${status ? `?status=${status}` : ''}`,
-    ),
+  /**
+   * 제안 목록 한 페이지(번호 큰 것부터). apiLevel 3 이하 서버는 limit 을 모르고 전부 주며 next 가 없다 — null 로 맞춘다.
+   */
+  listProposals: async (
+    repoId: string,
+    status?: 'open' | 'merged' | 'closed',
+    cursor?: { before: number } | null,
+  ) => {
+    const params = new URLSearchParams({ limit: String(PROPOSAL_PAGE_SIZE) });
+    if (status) params.set('status', status);
+    if (cursor) params.set('before', String(cursor.before));
+    const page = await request<{ proposals: Proposal[]; next?: { before: number } | null }>(
+      `/api/repos/${repoId}/proposals?${params.toString()}`,
+    );
+    return { proposals: page.proposals, next: page.next ?? null };
+  },
 
   createProposal: (
     repoId: string,

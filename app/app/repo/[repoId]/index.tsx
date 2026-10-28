@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Stack, router, useFocusEffect, useLocalSearchParams } from 'expo-router';
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useRef, useState, type ReactNode } from 'react';
 import { ActivityIndicator, Platform, Pressable, RefreshControl, Text, View } from 'react-native';
 import {
   ROLE_LABEL,
@@ -79,6 +79,8 @@ export default function RepoFilesScreen() {
   const [busyPath, setBusyPath] = useState<string | null>(null);
   const [editing, setEditing] = useState<Editing | null>(null);
   const [renaming, setRenaming] = useState(false);
+  /** ⋯ 로 펼친 행의 경로 — 그 행 아래에 버전·이름 변경·삭제를 글자 버튼으로 보인다. 한 번에 하나만. */
+  const [menuPath, setMenuPath] = useState<string | null>(null);
   /** 저장소 전체 파일 이름 검색어. 있으면 폴더 목록 대신 검색 결과를 보인다. */
   const [query, setQuery] = useState('');
 
@@ -116,7 +118,20 @@ export default function RepoFilesScreen() {
 
   function openFolder(nextPath: string) {
     setEditing(null);
+    setMenuPath(null);
     setPath(nextPath);
+  }
+
+  function toggleMenu(targetPath: string) {
+    setMenuPath((prev) => (prev === targetPath ? null : targetPath));
+  }
+
+  /** 펼친 메뉴의 동작 — 메뉴를 닫고 실행한다. */
+  function fromMenu(action: () => void) {
+    return () => {
+      setMenuPath(null);
+      action();
+    };
   }
 
   function openVersions(filePath: string) {
@@ -538,23 +553,36 @@ export default function RepoFilesScreen() {
                                 />
                               )}
                               {canEdit ? (
-                                <>
-                                  <IconButton
-                                    icon="create-outline"
-                                    label={`${dir.name} 폴더 이름 변경`}
-                                    onPress={() => startRename(dir.path, true)}
-                                  />
-                                  <IconButton
-                                    icon="trash-outline"
-                                    label={`${dir.name} 폴더 삭제`}
-                                    tone="danger"
-                                    onPress={() => void remove(dir.path, true)}
-                                  />
-                                </>
+                                <IconButton
+                                  icon="ellipsis-horizontal"
+                                  label={`${dir.name} 폴더 더보기`}
+                                  expanded={menuPath === dir.path}
+                                  onPress={() => toggleMenu(dir.path)}
+                                />
                               ) : null}
                               <Ionicons name="chevron-forward" size={18} color={colors.textFaint} />
                             </Pressable>
                           )}
+                          {menuPath === dir.path && canEdit && editing?.path !== dir.path ? (
+                            <RowMenu>
+                              <Button
+                                label="이름 변경"
+                                accessibilityLabel={`${dir.name} 폴더 이름 변경`}
+                                icon="create-outline"
+                                variant="secondary"
+                                compact
+                                onPress={fromMenu(() => startRename(dir.path, true))}
+                              />
+                              <Button
+                                label="삭제"
+                                accessibilityLabel={`${dir.name} 폴더 삭제`}
+                                icon="trash-outline"
+                                variant="danger"
+                                compact
+                                onPress={fromMenu(() => void remove(dir.path, true))}
+                              />
+                            </RowMenu>
+                          ) : null}
                         </View>
                       ))}
 
@@ -610,32 +638,52 @@ export default function RepoFilesScreen() {
                                     label={`${file.name} 내려받기`}
                                     onPress={() => void download(file.path, file.name)}
                                   />
-                                  {!snapshotId ? (
+                                  {!snapshotId || canEdit ? (
                                     <IconButton
-                                      icon="time-outline"
-                                      label={`${file.name} 버전`}
-                                      onPress={() => openVersions(file.path)}
+                                      icon="ellipsis-horizontal"
+                                      label={`${file.name} 더보기`}
+                                      expanded={menuPath === file.path}
+                                      onPress={() => toggleMenu(file.path)}
                                     />
-                                  ) : null}
-                                  {canEdit ? (
-                                    <>
-                                      <IconButton
-                                        icon="create-outline"
-                                        label={`${file.name} 이름 변경`}
-                                        onPress={() => startRename(file.path, false)}
-                                      />
-                                      <IconButton
-                                        icon="trash-outline"
-                                        label={`${file.name} 삭제`}
-                                        tone="danger"
-                                        onPress={() => void remove(file.path, false)}
-                                      />
-                                    </>
                                   ) : null}
                                 </>
                               )}
                             </Pressable>
                           )}
+                          {menuPath === file.path && editing?.path !== file.path ? (
+                            <RowMenu>
+                              {!snapshotId ? (
+                                <Button
+                                  label="버전"
+                                  accessibilityLabel={`${file.name} 버전`}
+                                  icon="time-outline"
+                                  variant="secondary"
+                                  compact
+                                  onPress={fromMenu(() => openVersions(file.path))}
+                                />
+                              ) : null}
+                              {canEdit ? (
+                                <>
+                                  <Button
+                                    label="이름 변경"
+                                    accessibilityLabel={`${file.name} 이름 변경`}
+                                    icon="create-outline"
+                                    variant="secondary"
+                                    compact
+                                    onPress={fromMenu(() => startRename(file.path, false))}
+                                  />
+                                  <Button
+                                    label="삭제"
+                                    accessibilityLabel={`${file.name} 삭제`}
+                                    icon="trash-outline"
+                                    variant="danger"
+                                    compact
+                                    onPress={fromMenu(() => void remove(file.path, false))}
+                                  />
+                                </>
+                              ) : null}
+                            </RowMenu>
+                          ) : null}
                         </View>
                       ))}
                     </>
@@ -699,6 +747,22 @@ function RenameRow({
         <Button label="확인" compact onPress={onConfirm} loading={busy} />
       </Row>
     </View>
+  );
+}
+
+/**
+ * ⋯ 로 펼친 행 동작. 좁은 폰에서 아이콘 넷이 이름을 가려, 행에는 받기와 ⋯ 만 두고 나머지는 여기 글자로 보인다.
+ * 왼쪽은 행의 이름 줄에 맞춘다(행 여백 + 아이콘 20 + 간격).
+ */
+function RowMenu({ children }: { children: ReactNode }) {
+  return (
+    <Row
+      gap={spacing.sm}
+      wrap
+      style={{ paddingLeft: spacing.lg + 20 + spacing.md, paddingRight: spacing.lg, paddingBottom: spacing.md }}
+    >
+      {children}
+    </Row>
   );
 }
 

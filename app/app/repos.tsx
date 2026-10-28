@@ -9,6 +9,7 @@ import {
   Button,
   Caption,
   Card,
+  EmptyState,
   ErrorNotice,
   Field,
   Input,
@@ -18,9 +19,10 @@ import {
   Title,
 } from '../src/components/ui';
 import { ApiError, api } from '../src/api/client';
+import { REPO_SEARCH_MIN, searchRepos } from '../src/lib/search';
 import { useAsync } from '../src/lib/useAsync';
 import { useAuth } from '../src/state/auth';
-import { fontSize, radius, spacing, useTheme } from '../src/theme';
+import { fontSize, spacing, useTheme } from '../src/theme';
 
 export default function ReposScreen() {
   const { colors } = useTheme();
@@ -30,8 +32,12 @@ export default function ReposScreen() {
   const [description, setDescription] = useState('');
   const [formError, setFormError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [query, setQuery] = useState('');
 
   const state = useAsync(async () => (await api.listRepos()).repos, []);
+  const repos = state.data ?? [];
+  const searchable = repos.length >= REPO_SEARCH_MIN;
+  const shown = searchable ? searchRepos(repos, query) : repos;
 
   // 다른 화면에서 저장소를 만들거나 나간 뒤 돌아오면 목록을 갱신한다.
   // 처음 포커스는 useAsync 의 첫 요청과 겹치므로 건너뛴다.
@@ -142,30 +148,39 @@ export default function ReposScreen() {
         <Loading />
       ) : state.error ? (
         <ErrorNotice message={state.error} onRetry={state.reload} />
-      ) : state.data && state.data.length > 0 ? (
+      ) : repos.length > 0 ? (
         <View style={{ gap: spacing.md }}>
-          {state.data.map((repo) => (
+          {searchable ? (
+            <Input
+              value={query}
+              onChangeText={setQuery}
+              placeholder="저장소 이름이나 설명으로 찾기"
+              accessibilityLabel="저장소 찾기"
+              autoCorrect={false}
+              autoCapitalize="none"
+              clearButtonMode="while-editing"
+            />
+          ) : null}
+          {shown.map((repo) => (
             <RepoCard key={repo.id} repo={repo} />
           ))}
+          {shown.length === 0 ? (
+            <Card>
+              <EmptyState
+                icon="search-outline"
+                title="찾는 저장소가 없습니다"
+                description="저장소 이름이나 설명에 들어간 낱말로 찾아 보세요. 띄어 쓴 낱말은 모두 들어 있어야 합니다."
+              />
+            </Card>
+          ) : null}
         </View>
       ) : (
-        <Card style={{ alignItems: 'center', gap: spacing.md, paddingVertical: spacing.xxl }}>
-          <View
-            style={{
-              width: 56,
-              height: 56,
-              borderRadius: radius.pill,
-              backgroundColor: colors.surfaceAlt,
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-          >
-            <Ionicons name="folder-outline" size={26} color={colors.textFaint} />
-          </View>
-          <Body style={{ fontWeight: '600' }}>아직 저장소가 없습니다</Body>
-          <Body muted style={{ textAlign: 'center' }}>
-            새 저장소를 만들거나, 받은 초대 코드로 다른 사람의 저장소에 참여해 보세요.
-          </Body>
+        <Card>
+          <EmptyState
+            icon="folder-outline"
+            title="아직 저장소가 없습니다"
+            description="새 저장소를 만들거나, 받은 초대 코드로 다른 사람의 저장소에 참여해 보세요."
+          />
         </Card>
       )}
     </Screen>

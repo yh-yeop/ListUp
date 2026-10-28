@@ -458,11 +458,12 @@ export const API_VERSION = 1;
  *
  * - 2 (1.2.0): 나눠 올리기, 여러 파일 커밋, 다운로드 링크·폴더 zip, Range, 비밀번호 재설정
  * - 3 (1.5.0): 파일 버전 목록(`/files/versions`), 휴지통(`/trash`). 없는 서버에서는 앱이 그 화면만 막는다.
+ * - 4 (1.8.0): 제안 목록 나눠 받기(`limit`·`before` → `next`). 옛 서버는 무시하고 전부 주므로 앱이 그대로 쓴다.
  *
  * API_VERSION 을 올리지 않은 이유: 옛 앱(1.1.0)은 API_VERSION 이 같아야만 들어가서, 올리면 멀쩡히
  * 쓸 수 있는 새 서버에서 옛 앱이 모두 막힌다.
  */
-export const API_LEVEL = 3;
+export const API_LEVEL = 4;
 
 /** 이 앱이 쓰는 기능이 있는 가장 낮은 서버 API_LEVEL. 앱의 업로드·내려받기가 수준 2 를 쓴다. */
 export const REQUIRED_SERVER_API_LEVEL = 2;

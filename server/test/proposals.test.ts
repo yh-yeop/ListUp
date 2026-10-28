@@ -638,6 +638,32 @@ describe('제안 목록 필터', () => {
     const res = await h.app.inject({ method: 'GET', url: `/api/repos/${repoId}`, headers: auth(owner) });
     assert.equal(res.json().repo.openProposalCount, 1);
   });
+
+  it('limit 을 주면 번호 큰 것부터 나눠 주고, 없으면 전부 준다', async () => {
+    // 지금 #1(열림)·#2(병합) — #3~#5 를 더한다.
+    for (const name of ['c', 'd', 'e']) {
+      const blob = await uploadBlob(h.app, owner, repoId, `${name}.txt`, name);
+      await createProposal(h, owner, repoId, { title: name, changes: [{ path: `${name}.txt`, blobHash: blob }] });
+    }
+    const page = async (query: string) => {
+      const res = await h.app.inject({ method: 'GET', url: `/api/repos/${repoId}/proposals?${query}`, headers: auth(owner) });
+      assert.equal(res.statusCode, 200);
+      const json = res.json() as { proposals: { number: number }[]; next: { before: number } | null };
+      return { numbers: json.proposals.map((p) => p.number), next: json.next };
+    };
+
+    assert.deepEqual(await page('limit=2'), { numbers: [5, 4], next: { before: 4 } });
+    assert.deepEqual(await page('limit=2&before=4'), { numbers: [3, 2], next: { before: 2 } });
+    assert.deepEqual(await page('limit=2&before=2'), { numbers: [1], next: null });
+    // 필터와 함께 — 병합된 #2 는 건너뛴다.
+    assert.deepEqual(await page('status=open&limit=3'), { numbers: [5, 4, 3], next: { before: 3 } });
+    assert.deepEqual(await page('status=open&limit=3&before=3'), { numbers: [1], next: null });
+    // limit 이 없으면 예전처럼 전부.
+    assert.deepEqual(await page(''), { numbers: [5, 4, 3, 2, 1], next: null });
+
+    const bad = await h.app.inject({ method: 'GET', url: `/api/repos/${repoId}/proposals?before=x`, headers: auth(owner) });
+    assert.equal(bad.statusCode, 400);
+  });
 });
 
 describe('용량 한도', () => {

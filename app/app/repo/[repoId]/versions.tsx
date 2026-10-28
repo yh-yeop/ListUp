@@ -19,6 +19,7 @@ import {
   Divider,
   EmptyState,
   ErrorNotice,
+  LoadMoreFooter,
   Loading,
   Row,
   Screen,
@@ -30,6 +31,7 @@ import { confirmAction, notify, notifyError, notifySuccess } from '../../../src/
 import { downloadFromRepo } from '../../../src/lib/files';
 import { MISSING_FEATURE_MESSAGE, isMissingFeature, restoreFiles } from '../../../src/lib/restore';
 import { useAsync } from '../../../src/lib/useAsync';
+import { useMorePages, type Page } from '../../../src/lib/useMorePages';
 import { monoFont, spacing, useTheme } from '../../../src/theme';
 
 type Cursor = { before: number; beforeId: string };
@@ -42,8 +44,7 @@ const OP: Record<FileVersion['op'], { label: string; tone: 'success' | 'accent' 
 
 interface VersionsView {
   repo: RepoSummary;
-  versions: FileVersion[];
-  next: Cursor | null;
+  page: Page<FileVersion, Cursor>;
   /** 이 기능이 없는 옛 서버 */
   missing: boolean;
 }
@@ -55,45 +56,28 @@ interface VersionsView {
 export default function VersionsScreen() {
   const { repoId, path } = useLocalSearchParams<{ repoId: string; path: string }>();
   const { colors } = useTheme();
-  const [more, setMore] = useState<{ from: FileVersion[]; versions: FileVersion[]; next: Cursor | null } | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
 
   const state = useAsync<VersionsView>(async () => {
     const { repo } = await api.getRepo(repoId);
     try {
-      const page = await api.fileVersions(repoId, path);
-      return { repo, ...page, missing: false };
+      const { versions, next } = await api.fileVersions(repoId, path);
+      return { repo, page: { items: versions, next }, missing: false };
     } catch (err) {
-      if (isMissingFeature(err)) return { repo, versions: [], next: null, missing: true };
+      if (isMissingFeature(err)) return { repo, page: { items: [], next: null }, missing: true };
       throw err;
     }
   }, [repoId, path]);
 
-  const firstPage = state.data?.versions;
-  const extra = more && more.from === firstPage ? more : null;
-  const versions = [...(firstPage ?? []), ...(extra?.versions ?? [])];
-  const next = extra ? extra.next : (state.data?.next ?? null);
+  const pages = useMorePages(state.data?.page, async (cursor: Cursor) => {
+    const { versions, next } = await api.fileVersions(repoId, path, cursor);
+    return { items: versions, next };
+  });
+  const versions = pages.items;
   const isEditor = hasRole(state.data?.repo.role, 'editor');
   // 맨 위 변경이 지금 상태다. 삭제면 지금은 파일이 없다.
   const current = versions[0] && versions[0].op !== 'deleted' ? versions[0] : null;
   const name = baseName(path);
-
-  async function loadMore() {
-    if (!firstPage || !next || busy) return;
-    setBusy('more');
-    try {
-      const page = await api.fileVersions(repoId, path, next);
-      setMore((prev) => ({
-        from: firstPage,
-        versions: [...(prev && prev.from === firstPage ? prev.versions : []), ...page.versions],
-        next: page.next,
-      }));
-    } catch (err) {
-      notifyError(err instanceof ApiError ? err.message : '더 불러오지 못했습니다.');
-    } finally {
-      setBusy(null);
-    }
-  }
 
   async function download(version: FileVersion) {
     setBusy(version.snapshotId);
@@ -129,7 +113,7 @@ export default function VersionsScreen() {
         return;
       }
       notifySuccess(`${when} 버전으로 되돌렸습니다.`);
-      setMore(null);
+      pages.reset();
       state.refresh();
     } catch (err) {
       notifyError('되돌리지 못했습니다.', err instanceof ApiError ? err.message : undefined);
@@ -212,21 +196,8 @@ export default function VersionsScreen() {
               </View>
             );
           })}
-          {next ? (
-            <>
-              <Divider />
-              <View style={{ paddingHorizontal: spacing.lg, paddingTop: spacing.md, paddingBottom: spacing.xs }}>
-                <Button
-                  label="더 보기"
-                  icon="chevron-down"
-                  variant="secondary"
-                  compact
-                  full
-                  loading={busy === 'more'}
-                  onPress={() => void loadMore()}
-                />
-              </View>
-            </>
+          {pages.next ? (
+            <LoadMoreFooter onPress={pages.loadMore} loading={pages.loadingMore} disabled={busy !== null} />
           ) : null}
         </Card>
       )}

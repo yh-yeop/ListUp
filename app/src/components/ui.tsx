@@ -156,6 +156,7 @@ export function Button({
   full,
   compact,
   style,
+  accessibilityLabel,
 }: {
   label: string;
   onPress?: () => void;
@@ -166,6 +167,8 @@ export function Button({
   full?: boolean;
   compact?: boolean;
   style?: StyleProp<ViewStyle>;
+  /** 화면 글자보다 자세한 이름(예: 목록 행의 "a.txt 삭제"). 보이는 글자를 담아야 한다. 없으면 label. */
+  accessibilityLabel?: string;
 }) {
   const { colors } = useTheme();
   const isDisabled = disabled || loading;
@@ -183,7 +186,7 @@ export function Button({
       onPress={isDisabled ? undefined : onPress}
       disabled={isDisabled}
       accessibilityRole="button"
-      accessibilityLabel={label}
+      accessibilityLabel={accessibilityLabel ?? label}
       accessibilityState={{ disabled: !!isDisabled, busy: !!loading }}
       style={({ pressed }) => [
         {
@@ -221,11 +224,14 @@ export function IconButton({
   onPress,
   label,
   tone,
+  expanded,
 }: {
   icon: IconName;
   onPress: () => void;
   label: string;
   tone?: 'default' | 'danger';
+  /** 펼치기 버튼이면 지금 펼쳐졌는지. */
+  expanded?: boolean;
 }) {
   const { colors } = useTheme();
   return (
@@ -233,6 +239,8 @@ export function IconButton({
       onPress={onPress}
       accessibilityRole="button"
       accessibilityLabel={label}
+      // accessibilityState 는 react-native-web 이 읽지 않는다 — aria-* 는 웹·네이티브 모두 알아듣는다.
+      aria-expanded={expanded}
       hitSlop={8}
       style={({ pressed }) => ({
         padding: spacing.sm,
@@ -434,6 +442,35 @@ export function ErrorNotice({ message, onRetry }: { message: string; onRetry?: (
 export function Divider() {
   const { colors } = useTheme();
   return <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: colors.border }} />;
+}
+
+/** 목록 카드(padded={false}) 맨 아래의 '더 보기' — 구분선과 함께. */
+export function LoadMoreFooter({
+  onPress,
+  loading,
+  disabled,
+}: {
+  onPress: () => void;
+  loading?: boolean;
+  disabled?: boolean;
+}) {
+  return (
+    <>
+      <Divider />
+      <View style={{ paddingHorizontal: spacing.lg, paddingTop: spacing.md, paddingBottom: spacing.xs }}>
+        <Button
+          label="더 보기"
+          icon="chevron-down"
+          variant="secondary"
+          compact
+          full
+          onPress={onPress}
+          loading={loading}
+          disabled={disabled}
+        />
+      </View>
+    </>
+  );
 }
 
 /** 좌우로 벌려 놓는 행. */

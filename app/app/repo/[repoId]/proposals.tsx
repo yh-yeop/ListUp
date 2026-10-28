@@ -25,22 +25,29 @@ import {
 import { RepoNav } from '../../../src/components/RepoNav';
 import { api } from '../../../src/api/client';
 import { useAsync } from '../../../src/lib/useAsync';
+import { useMorePages, type Page } from '../../../src/lib/useMorePages';
 import { fontSize, radius, spacing, useTheme } from '../../../src/theme';
 
 type Filter = 'open' | 'all';
+type Cursor = { before: number };
 
 export default function ProposalsScreen() {
   const { repoId } = useLocalSearchParams<{ repoId: string }>();
   const { colors } = useTheme();
   const [filter, setFilter] = useState<Filter>('open');
 
-  const state = useAsync<{ repo: RepoSummary; proposals: Proposal[] }>(async () => {
-    const [{ repo }, { proposals }] = await Promise.all([
+  const status = filter === 'open' ? 'open' : undefined;
+  const state = useAsync<{ repo: RepoSummary; page: Page<Proposal, Cursor> }>(async () => {
+    const [{ repo }, { proposals, next }] = await Promise.all([
       api.getRepo(repoId),
-      api.listProposals(repoId, filter === 'open' ? 'open' : undefined),
+      api.listProposals(repoId, status),
     ]);
-    return { repo, proposals };
+    return { repo, page: { items: proposals, next } };
   }, [repoId, filter]);
+  const pages = useMorePages(state.data?.page, async (cursor: Cursor) => {
+    const { proposals, next } = await api.listProposals(repoId, status, cursor);
+    return { items: proposals, next };
+  });
 
   useFocusEffect(
     useCallback(() => {
@@ -100,11 +107,23 @@ export default function ProposalsScreen() {
         <Loading />
       ) : state.error ? (
         <ErrorNotice message={state.error} onRetry={state.reload} />
-      ) : state.data && state.data.proposals.length > 0 ? (
+      ) : pages.items.length > 0 ? (
         <View style={{ gap: spacing.md }}>
-          {state.data.proposals.map((proposal) => (
+          {pages.items.map((proposal) => (
             <ProposalCard key={proposal.id} proposal={proposal} />
           ))}
+          {pages.next ? (
+            <Button
+              label="더 보기"
+              icon="chevron-down"
+              variant="secondary"
+              compact
+              full
+              onPress={pages.loadMore}
+              loading={pages.loadingMore}
+              disabled={state.refreshing}
+            />
+          ) : null}
         </View>
       ) : (
         <Card>

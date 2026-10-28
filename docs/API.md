@@ -50,7 +50,8 @@ Authorization: Bearer <token>
 - **`apiLevel`** — 기능 수준(`API_LEVEL`). 호환을 깨지 않고 기능을 더할 때 올립니다(옛 앱은 무시).
   앱은 자기가 쓰는 기능이 있는 수준(`REQUIRED_SERVER_API_LEVEL`) 미만 서버에는 "서버가 오래됨"으로
   들어가지 않습니다. 2 = 1.2.0 (나눠 올리기·여러 파일 커밋·다운로드 링크·zip·Range·재설정),
-  3 = 1.5.0 (파일 버전·휴지통 — 수준 2 서버에서는 앱이 그 화면에서만 "서버 업데이트 필요"를 보인다).
+  3 = 1.5.0 (파일 버전·휴지통 — 수준 2 서버에서는 앱이 그 화면에서만 "서버 업데이트 필요"를 보인다),
+  4 = 1.8.0 (제안 목록 나눠 받기 `limit`·`before` — 수준 3 서버는 이 값을 무시하고 전부 주므로 앱은 그대로 쓴다).
   **필드가 없는 서버(1.1.0 까지)는 `1`** 입니다.
 - `version` — 서버 버전(`server/package.json`). 사람에게 보여주는 용도이고 호환 판단에는 쓰지 않습니다.
 - `maxUploadBytes` — 파일 하나의 업로드 한도. 앱이 올리기 전에 검사합니다.
@@ -271,7 +272,7 @@ POST /api/repos/:repoId/files/commit
 
 | 메서드 | 경로 | 최소 권한 | 설명 |
 | --- | --- | --- | --- |
-| GET | `/repos/:repoId/proposals?status=` | viewer | 목록 (`open`/`merged`/`closed`) |
+| GET | `/repos/:repoId/proposals?status=&limit=&before=` | viewer | 목록, 번호 큰 것부터 (아래) |
 | POST | `/repos/:repoId/proposals` | **viewer** | 제안 만들기 |
 | GET | `/proposals/:proposalId` | viewer | 상세 + 충돌 여부 |
 | PATCH | `/proposals/:proposalId` | 작성자 | `{title?, description?}` — `open` 상태에서만 |
@@ -280,6 +281,17 @@ POST /api/repos/:repoId/files/commit
 | POST | `/proposals/:proposalId/merge` | **editor** | 저장소에 반영 |
 | POST | `/proposals/:proposalId/close` | 작성자 또는 editor | 닫기 |
 | POST | `/proposals/:proposalId/reopen` | 작성자 또는 editor | 다시 열기 |
+
+### 제안 목록
+
+`{proposals: Proposal[], next: {before} | null}`. `status` 는 `open`/`merged`/`closed` 중 하나(없으면 전부).
+
+- `limit` (최대 100) 을 주면 그만큼만 주고, 더 있을 수 있으면 `next` 에 다음 요청의 `before`(이번 마지막
+  제안 번호)를 담습니다. `before=N` 은 번호가 N 보다 작은 것부터입니다. 번호는 저장소마다 1 부터 늘기만 하므로
+  사이에 새 제안이 생겨도 페이지가 밀리지 않습니다.
+- **`limit` 이 없으면 전부**와 `next: null` — 1.7 까지의 앱이 이렇게 부릅니다. 1.8 앱은 `limit=30` 으로 부르고,
+  `apiLevel` 3 이하 서버는 `limit` 을 무시하고 전부 주며 `next` 가 없습니다(앱은 없음을 `null` 로 봅니다).
+- `before` 가 숫자가 아니면 400.
 
 ### 제안 만들기
 
