@@ -81,45 +81,14 @@ PC 실행이 가능하다. 코드를 만지면 테스트·타입 검사를 바�
   - 「호환」 — `apiLevel` 5. 마이그레이션 9(`revoked_tokens`, 제안의 `decided_at`·`decided_by`·`author_seen_at`, `repo_events`).
     업데이트 전에 있던 일은 활동 기록에 없고, 그 전에 결정된 제안은 결정한 사람을 모른다. 1.8 앱이 옛 서버에 붙으면 내 제안·
     활동 기록·다른 기기 로그아웃은 "서버를 1.8 이상으로" 안내만 하고, 로그아웃은 기기에서만 지운다.
+  - 「새 기능」 — 서버 주소를 `192.168.0.10`·`<내 노드>.<tailnet>.ts.net` 처럼 일부만 적어도 후보를 확인해 저장하고, 저장하며
+    연결도 확인한다. 초대 **QR 코드**와 저장소·권한·기한이 든 공유 문구. 초대 링크를 열면 로그인 전에 어떤 저장소인지 보이고,
+    가입·로그인하면 바로 참여. PC 앱 **처음 시작하기** 체크리스트, 비밀번호 칸의 **보기** 버튼.
+  - 「호환」 — `GET /invites/:code`(초대 미리보기)를 로그인 없이 연다(`currentRole` 은 `null`, `apiLevel` 5 에 포함). 없는 코드를
+    넣는 IP 는 로그인 실패와 같은 한도(`LISTUP_LOGIN_FAILURE_LIMIT`)로 429. 1.8 앱이 옛 서버에 붙으면 미리보기가 401 이라
+    로그인 전에는 코드만 보여 주고, 로그인 뒤 예전처럼 미리보기 → 참여.
 
 (토스트·멈추기 버튼은 2026-10-20 에 했다 — 완료 절 *사용 흐름 다듬기*.)
-
-### 사람 사이에 쓰기 편하게 (2026-10-28 결정)
-
-- [~] **서버 연결 쉽게** — 주소를 `http://…:4000` 까지 다 적어야 했다(`app/src/state/servers.ts` `normalizeServerUrl`). `192.168.0.10`,
-  `<내 노드>.<tailnet>.ts.net` 만 써도 후보를 차례로 확인하고, '연결 확인' 뒤 '저장하고 들어가기'를 따로 누르던 것을 한 번에.
-- [~] **초대 QR 코드** — PC 화면의 초대를 폰 카메라로 찍으면 바로 참여 링크가 열리게. 공유 문구에 저장소·권한·기한·앱 없이 여는 법.
-- [~] **가입 전 미리보기·바로 참여** — 초대 링크를 열면 어떤 저장소인지 모른 채 로그인/가입부터 했고, 가입 뒤 '참여'를 한 번 더
-  눌렀다. 코드만으로 미리보기(요청 제한), 가입·로그인하면 바로 참여.
-- [~] **PC 앱 첫 서버 안내** — 서버 켜기 → 밖에서 들어오게 → 내 계정 → 첫 저장소·초대를 체크리스트로. 비밀번호 보기 버튼.
-
-**이어 하기 (2026-10-29, 다른 기기에서 이어 하려고 미완성인 채로 커밋·푸시).** 네 항목의 코드는 다 들어갔지만 e2e 를 돌리기 전이라
-이 커밋의 CI(test:e2e)는 실패할 수 있다. 리팩터링 인계 파일 `REFACTOR.md` 도 이 커밋에서 처음 추적한다.
-
-- 들어간 것
-  - 서버: `GET /invites/:code` 를 로그인 없이(`currentRole` 은 `null`), 없는 코드(404)를 넣는 IP 는 로그인 제한과 같은 한도로 429
-    (`server/src/routes/invites.ts` `lookupLimited`). `API_LEVEL` 은 5 그대로(1.8 미출시라 수준 5 설명에 더함). `docs/API.md` 초대 절,
-    README 환경변수 표(`LISTUP_LOGIN_FAILURE_LIMIT`)에 적었다. `server/test/invites.test.ts` 에 미리보기·대입 제한 2개.
-  - 서버 연결: `app/src/lib/pure/server-url.ts` `serverUrlCandidates`(+ `app/test/server-url.test.ts`), `app/src/state/servers.ts`
-    `resolveServer`(후보를 한꺼번에 확인해 앞에서부터 처음 닿은 것). `app/app/server.tsx` — '저장하고 들어가기'가 확인 전이면 먼저 확인,
-    확인 실패면 입력을 고치기 전까지 저장 막힘(e2e 3 이 보는 동작 유지).
-  - 초대 QR: `app/src/components/QrCode.tsx`(View 로 그림, 의존성 `qrcode-generator@1.4.4` MIT), 초대 화면에 'QR 코드'/'QR 닫기',
-    공유 문구에 저장소·권한·기한·앱 없이 여는 법.
-  - 가입 전 미리보기·바로 참여: `app/src/components/InviteSummary.tsx`(`InviteSummary`·`usePendingInvitePreview`·`PendingInviteNote`) 를
-    참여·로그인·가입 화면이 쓴다. `app/src/lib/invite-link.ts` `markPendingInviteSeen`·`shouldAutoJoin` — 미리보기를 본 뒤 로그인·가입하면
-    참여 화면이 버튼 없이 바로 참여.
-  - PC 앱: `app/app/host.tsx` `FirstSteps`(내 계정이 생기면 사라짐), "들어가서 내 계정 만들기" → `HostCard.tsx` `takeSignupRequest` 로
-    로그인 화면이 가입 화면을 이어서 연다. `ui.tsx` `PasswordInput`(눈 버튼 '비밀번호 보기'/'비밀번호 숨기기')을 로그인·가입·재설정·설정에.
-- 확인한 것: `check:sync`, 앱·서버·desktop 타입 검사, 앱 단위 테스트 47개, `server/test/invites.test.ts` 20개.
-  예시 주소는 `check:sync [4]` 에 맞춰 `<내 노드>.<tailnet>.ts.net`·`example.com` 으로 적었다.
-- **돌리지 않은 것**: 서버 테스트 전체, e2e 전체. e2e 7(가입하면 바로 참여로 고침)·새 14(`14-onboarding.mjs` — 주소 일부만·한 번에 저장,
-  비밀번호 보기, 초대 QR)는 한 번도 안 돌렸다. 14 는 중단 중에 손으로 고친 것이 있으니 먼저 읽는다. `test:desktop` 도(`host.tsx` 를 바꿨다).
-- 남은 순서
-  1. `npm run test:e2e -- 7 14 13` → 고칠 것 고치기
-  2. `npm run check:sync`·`typecheck`·`npm test`·`npm run test:e2e` 전체, `npm run test:desktop`
-  3. `docs/ARCHITECTURE.md` 구조 블록(`lib/pure/server-url.ts`, `components/QrCode`·`InviteSummary`), README 「무엇을 할 수 있나」,
-     P1 「다음 릴리즈 노트에 넣을 것」에 「새 기능」·「호환」(로그인 없는 미리보기, 코드 대입 429)
-  4. 네 항목을 완료 절로 옮기고 이 「이어 하기」를 지운 뒤 커밋(`feat` 접두). 푸시는 묻고.
 
 ### 설치형 클라이언트 — 서버와 무관하게 늘 켜지는 클라
 
@@ -558,6 +527,12 @@ iCloud Keychain 으로 거의 자동 복구되는 반면 Android Keystore 는 �
 - [ ] 파일·폴더 행의 ⋯ → 아래로 펼친 글자 버튼(버전·이름 변경·삭제)이 좁은 화면에서 한 줄에 들어가는지, TalkBack 이 "펼침/접힘"을 읽는지
 - [ ] 저장소 5개 이상에서 찾기 칸 — 한글 입력 중(조합 중) 결과가 튀지 않는지
 
+### 사람 사이에 쓰기 — 폰·PC 앱에서 확인할 것 (2026-10-29)
+
+- [ ] PC 화면의 초대 QR 을 폰 기본 카메라로 찍으면 초대 링크가 열리는지(다크 모드에서도), 앱을 설치한 폰은 '설치한 앱에서 열기'로 이어지는지
+- [ ] 폰 앱 서버 추가에 `192.168.x.x` 만 적어 같은 공유기의 PC 서버로 들어가지는지, Tailscale 이름만 적어 https 로 들어가지는지
+- [ ] PC 앱 새 데이터 폴더에서 '처음 시작하기' 체크가 상태대로 바뀌고, 계정을 만들면 사라지는지
+
 ### 업데이트 — 다음 릴리즈 때 확인할 것 (2026-10-21)
 
 - [x] 1.7.0 설치본이 스스로 1.7.1 을 받고 "다시 시작해 설치" → 1.7.1 로 켜지고 켜 둔 서버(4000)가 다시 켜짐 — 2026-10-21,
@@ -671,6 +646,29 @@ Node 22 이상이 필요하다. `better-sqlite3` 는 네이티브 모듈이지�
 ---
 
 ## 완료
+
+- [x] **사람 사이에 쓰기 편하게 — 주소 일부만·초대 QR·가입 전 미리보기·PC 첫 서버 안내** — 2026-10-29 (2026-10-28 결정).
+  받는 사람이 막히던 곳 넷: 주소를 `http://…:4000` 까지 다 적어야 했고, 초대 링크를 열면 어떤 저장소인지 모른 채 가입부터 한 뒤
+  '참여'를 한 번 더 눌렀고, PC 앱으로 서버를 처음 여는 사람은 무엇부터 할지 몰랐다.
+  - **서버 연결 쉽게** — `app/src/lib/pure/server-url.ts` `serverUrlCandidates`(+ `app/test/server-url.test.ts`): `192.168.0.10`·
+    이름만 적으면 `http://…:4000` 먼저, `<내 노드>.<tailnet>.ts.net` 같은 이름 있는 주소는 `https` 먼저. `app/src/state/servers.ts`
+    `resolveServer` 가 후보를 한꺼번에 확인해 앞에서부터 처음 닿은 것. `app/app/server.tsx` 의 '저장하고 들어가기'가 확인 전이면
+    먼저 확인하고, 확인 실패면 입력을 고치기 전까지 저장을 막는다(e2e 3 이 보는 동작 유지).
+  - **초대 QR 코드** — `app/src/components/QrCode.tsx`(View 로 그림, 의존성 `qrcode-generator@1.4.4` MIT), 초대 화면에
+    'QR 코드'/'QR 닫기'. 공유 문구에 저장소·권한·기한·앱 없이 여는 법.
+  - **가입 전 미리보기·바로 참여** — 서버: `GET /invites/:code` 를 로그인 없이(`currentRole` 은 `null`), 없는 코드를 넣는 IP 는
+    로그인 제한과 같은 한도로 429(`server/src/routes/invites.ts` `lookupLimited`). `API_LEVEL` 은 5 그대로(1.8 미출시라 수준 5
+    설명에 더함). 앱: `app/src/components/InviteSummary.tsx` 를 참여·로그인·가입 화면이 쓰고, 미리보기를 본 뒤
+    로그인·가입하면 참여 화면이 버튼 없이 바로 참여(`app/src/lib/invite-link.ts` `markPendingInviteSeen`·`shouldAutoJoin`).
+    - e2e 가 잡은 결함: 가입 직후 `router.replace('/')` 사이에 밑에 깔린 참여 화면이 잠깐 포커스를 받아 조회를 시작한 채
+      사라지면서 들고 있던 초대를 지워, 새로 열린 참여 화면이 바로 참여하지 못했다. 떠날 때 지우기를 다음 차례로 미루고
+      (`clearPendingInviteSoon`, 참여 화면이 다시 열리면 `keepPendingInvite` 가 취소), 사라진 화면의 조회 결과로는 참여하지 않는다.
+  - **PC 앱 첫 서버 안내** — `app/app/host.tsx` `FirstSteps`(서버 켜기 → 밖에서 들어오게 → 서버 이름 → 내 계정, 내 계정이
+    생기면 사라짐). "들어가서 내 계정 만들기" → `HostCard.tsx` `takeSignupRequest` 로 로그인 화면이 가입 화면을 이어서 연다.
+    `ui.tsx` `PasswordInput`(눈 버튼 '비밀번호 보기'/'비밀번호 숨기기')을 로그인·가입·재설정·설정에.
+  - 테스트: `server/test/invites.test.ts` 에 미리보기·대입 제한 2개, `app/test/server-url.test.ts`, e2e 7 을 "가입하면 바로 참여"로
+    고치고 새 14(주소 일부만·한 번에 저장, 비밀번호 보기, 초대 QR). 문서: `docs/API.md` 초대 절, README 「무엇을 할 수 있나」·
+    PC 앱·서버 추가, 환경변수 표(`LISTUP_LOGIN_FAILURE_LIMIT`), `docs/ARCHITECTURE.md` 구조 블록. 다음 릴리즈 노트 항목은 P1 에.
 
 - [x] **계정·협업 보강 — 로그아웃이 토큰을 끊기, 내 제안, 활동 기록** — 2026-10-28. 보안 탐구(ListUp 보안 모델 분석)에서
   나온 빈곳 셋. `API_LEVEL` 5, 마이그레이션 9.

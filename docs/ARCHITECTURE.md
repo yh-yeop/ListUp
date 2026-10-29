@@ -228,8 +228,11 @@ app/
    │  ├─ compare-core.ts      폴더 대조(이름 NFC/NFD 맞추기) ← folder-compare
    │  ├─ server-store.ts      서버 목록 읽기·정리, 예전 저장 키 이전 규칙(storeFromLegacy) ← state/servers
    │  ├─ repo-search.ts       저장소 찾기(이름 일치 먼저, 5개부터 칸을 보임) ← search
-   │  └─ events.ts            활동 기록 한 줄을 문장으로(모르는 종류는 "알 수 없는 활동") ← repo/[repoId]/activity
+   │  ├─ events.ts            활동 기록 한 줄을 문장으로(모르는 종류는 "알 수 없는 활동") ← repo/[repoId]/activity
+   │  └─ server-url.ts        일부만 적은 서버 주소(192.168.0.10, 이름만)를 확인해 볼 후보로(serverUrlCandidates) ← state/servers
    ├─ components/             공용 UI + 저장소 탭 네비게이션 + 제안 상태 배지
+   │  ├─ InviteSummary.tsx    초대 미리보기(어떤 저장소·권한) — 참여·로그인·가입 화면이 같이 씀, 로그인 전 미리보기 훅
+   │  └─ QrCode.tsx           초대 링크 QR(qrcode-generator 로 칸을 계산해 View 로 그림)
    └─ theme.ts                라이트/다크 팔레트
 ```
 

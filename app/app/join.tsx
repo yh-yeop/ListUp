@@ -22,7 +22,14 @@ import {
 } from '../src/components/ui';
 import { ApiError, IS_CLIENT_BUILD, api } from '../src/api/client';
 import { confirmAction } from '../src/lib/dialogs';
-import { appLinkFor, clearPendingInvite, setPendingInvite, shouldAutoJoin } from '../src/lib/invite-link';
+import {
+  appLinkFor,
+  clearPendingInvite,
+  clearPendingInviteSoon,
+  keepPendingInvite,
+  setPendingInvite,
+  shouldAutoJoin,
+} from '../src/lib/invite-link';
 import { InviteSummary, usePendingInvitePreview } from '../src/components/InviteSummary';
 import { useAuth } from '../src/state/auth';
 import { checkServer, describeCheck, normalizeServerUrl, serverUrl } from '../src/state/servers';
@@ -95,13 +102,16 @@ export default function JoinScreen() {
   // 들고 온 초대 코드는 참여하거나, 코드를 조회까지 한 이 화면을 떠날 때 지운다. 조회하자마자 지우면
   // 로그인 직후 첫 화면이 한 번 더 그려질 때(보호 라우트) 초대를 잃고 저장소 목록으로 간다. 서버를
   // 옮기느라 조회 전에 이 화면이 사라지는 경우에는 지우지 않는다 — 옮긴 서버에서 로그인한 뒤 이어 간다.
+  // 떠날 때는 다음 차례에 지운다 — 가입 직후 밑의 참여 화면이 새 참여 화면으로 바뀌는 사이에 지우지 않게.
   const consumed = useRef(false);
-  useEffect(
-    () => () => {
-      if (consumed.current) clearPendingInvite();
-    },
-    [],
-  );
+  const alive = useRef(true);
+  useEffect(() => {
+    keepPendingInvite();
+    return () => {
+      alive.current = false;
+      if (consumed.current) clearPendingInviteSoon();
+    };
+  }, []);
   // 보이는 참여 화면만 조회한다 (가입 화면 밑에 깔린 이 화면은 하지 않는다).
   useFocusEffect(
     useCallback(() => {
@@ -136,7 +146,8 @@ export default function JoinScreen() {
       setBusy(false);
     }
     // 로그인·가입 전에 이미 미리보기를 보고 들어왔다 — 같은 것을 다시 묻지 않고 바로 참여한다.
-    if (found && shouldAutoJoin(found.code)) {
+    // 조회하는 사이에 사라진 화면은 참여하지 않는다(그 자리에 새로 열린 참여 화면이 한다).
+    if (found && alive.current && shouldAutoJoin(found.code)) {
       if (found.currentRole) {
         clearPendingInvite();
         router.replace(`/repo/${found.repo.id}`);

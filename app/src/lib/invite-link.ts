@@ -69,3 +69,23 @@ export function clearPendingInvite(): void {
   pendingInviteCode = null;
   pendingInviteSeen = false;
 }
+
+/**
+ * 참여 화면을 떠날 때는 바로 지우지 않고 다음 차례에 지운다. 가입·로그인 직후 밑에 깔려 있던 참여 화면이
+ * 잠깐 보였다가 첫 화면(index)이 보낸 새 참여 화면으로 바뀌는데, 그때 지우면 새 화면이 "바로 참여"를
+ * 잃는다. 그 사이에 참여 화면이 다시 열리면 `keepPendingInvite` 가 취소한다.
+ */
+let clearTimer: ReturnType<typeof setTimeout> | null = null;
+
+export function clearPendingInviteSoon(): void {
+  if (clearTimer) clearTimeout(clearTimer);
+  clearTimer = setTimeout(() => {
+    clearTimer = null;
+    clearPendingInvite();
+  }, 0);
+}
+
+export function keepPendingInvite(): void {
+  if (clearTimer) clearTimeout(clearTimer);
+  clearTimer = null;
+}
