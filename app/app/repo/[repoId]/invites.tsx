@@ -28,6 +28,7 @@ import {
   Subtitle,
   Title,
 } from '../../../src/components/ui';
+import { QrCode } from '../../../src/components/QrCode';
 import { RepoNav } from '../../../src/components/RepoNav';
 import { ApiError, api } from '../../../src/api/client';
 import { confirmAction, notifyError, notifySuccess } from '../../../src/lib/dialogs';
@@ -61,6 +62,8 @@ export default function InvitesScreen() {
   const [maxUses, setMaxUses] = useState<number | null>(null);
   const [creating, setCreating] = useState(false);
   const [revoking, setRevoking] = useState<string | null>(null);
+  /** QR 을 펼친 초대. PC 화면에 띄워 두면 받는 사람이 폰 카메라로 찍어 바로 연다. */
+  const [qrFor, setQrFor] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const state = useAsync<{ repo: RepoSummary; invites: Invite[] }>(async () => {
@@ -119,7 +122,17 @@ export default function InvitesScreen() {
       const ok = await confirmAction({ title: '같은 네트워크에서만 열리는 링크입니다', message: LOCAL_WARNING, confirmLabel: '그래도 공유' });
       if (!ok) return;
     }
-    await Share.share({ message: `ListUp 저장소 초대: ${link}` });
+    await Share.share({ message: inviteMessage(invite, link) });
+  }
+
+  /** 공유할 때 붙이는 문구 — 어떤 저장소에 어떤 권한으로, 언제까지, 앱 없이 여는 법까지. */
+  function inviteMessage(invite: Invite, link: string): string {
+    const until = invite.expiresAt === null ? '' : ` (${formatDateTime(invite.expiresAt)}까지)`;
+    return [
+      `ListUp 저장소 '${repo?.name ?? ''}' 에 ${ROLE_LABEL[invite.role]} 권한으로 초대합니다${until}.`,
+      link,
+      '링크를 열면 어떤 저장소인지 먼저 보이고, 가입하거나 로그인하면 바로 참여합니다. 앱이 없어도 브라우저에서 그대로 쓸 수 있습니다.',
+    ].join('\n');
   }
 
   async function revoke(invite: Invite) {
@@ -292,6 +305,15 @@ export default function InvitesScreen() {
                           onPress={() => void shareLink(invite)}
                         />
                       ) : null}
+                      {invite.active ? (
+                        <Button
+                          label={qrFor === invite.id ? 'QR 닫기' : 'QR 코드'}
+                          icon="qr-code-outline"
+                          variant="secondary"
+                          compact
+                          onPress={() => setQrFor((prev) => (prev === invite.id ? null : invite.id))}
+                        />
+                      ) : null}
                       <Button
                         label="코드 복사"
                         icon="copy-outline"
@@ -309,6 +331,17 @@ export default function InvitesScreen() {
                         />
                       ) : null}
                     </Row>
+
+                    {invite.active && qrFor === invite.id ? (
+                      <View style={{ alignItems: 'center', gap: spacing.sm, paddingVertical: spacing.sm }}>
+                        <QrCode value={linkFor(invite)} label={`${formatInviteCode(invite.code)} 초대 링크 QR 코드`} />
+                        <Caption style={{ textAlign: 'center' }}>
+                          {localOnly
+                            ? '같은 공유기에 연결된 폰의 카메라로 찍으면 참여 링크가 열립니다.'
+                            : '폰 카메라로 찍으면 참여 링크가 열립니다.'}
+                        </Caption>
+                      </View>
+                    ) : null}
                   </View>
                 </View>
               ))}

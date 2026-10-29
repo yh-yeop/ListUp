@@ -52,7 +52,8 @@ Authorization: Bearer <token>
   들어가지 않습니다. 2 = 1.2.0 (나눠 올리기·여러 파일 커밋·다운로드 링크·zip·Range·재설정),
   3 = 1.5.0 (파일 버전·휴지통 — 수준 2 서버에서는 앱이 그 화면에서만 "서버 업데이트 필요"를 보인다),
   4 = 1.8.0 (제안 목록 나눠 받기 `limit`·`before` — 수준 3 서버는 이 값을 무시하고 전부 주므로 앱은 그대로 쓴다),
-  5 = 1.8.0 (로그아웃·다른 기기 모두 로그아웃, 내 제안·제안의 `decidedAt`/`decidedBy`·닫을 때 `reason`, 저장소 활동 기록 —
+  5 = 1.8.0 (로그아웃·다른 기기 모두 로그아웃, 내 제안·제안의 `decidedAt`/`decidedBy`·닫을 때 `reason`, 저장소 활동 기록,
+  로그인 없는 초대 미리보기 —
   수준 4 이하 서버에서는 앱이 그 버튼·화면을 숨기고, 로그아웃은 기기에서만 지운다).
   **필드가 없는 서버(1.1.0 까지)는 `1`** 입니다.
 - `version` — 서버 버전(`server/package.json`). 사람에게 보여주는 용도이고 호환 판단에는 쓰지 않습니다.
@@ -291,12 +292,14 @@ POST /api/repos/:repoId/files/commit
 | POST | `/repos/:repoId/invites` | editor | `{role?, expiresInDays?, maxUses?}` |
 | GET | `/repos/:repoId/invites` | editor | 발급 목록 |
 | DELETE | `/invites/:inviteId` | 발급자 또는 owner | 회수 |
-| GET | `/invites/:code` | 로그인 | 참여 전 미리보기 |
+| GET | `/invites/:code` | — (수준 5 부터 로그인 없이도) | 참여 전 미리보기 |
 | POST | `/invites/:code/join` | 로그인 | 참여 |
 
 - `role` 은 `viewer`(기본) 또는 `editor`. **`owner` 는 줄 수 없습니다.**
 - 코드는 소문자·하이픈·공백을 섞어 보내도 됩니다 (`abcde-12345` → `ABCDE12345`).
-- 미리보기는 저장소 이름·소유자·멤버 수·파일 수와 `currentRole`(이미 멤버면 그 역할)을 줍니다.
+- 미리보기는 저장소 이름·소유자·멤버 수·파일 수와 `currentRole`(이미 멤버면 그 역할, 로그인하지 않았으면 `null`)을 줍니다.
+  수준 5 부터는 로그인하지 않아도 보여 줍니다 — 초대 링크를 연 사람이 어떤 저장소인지 보고 가입하게. 수준 4 이하 서버는 401.
+- 없는 코드(404)를 미리보기·참여에 여러 번 넣은 IP 는 로그인 제한과 같은 한도(`LISTUP_LOGIN_*`)로 잠시 `429` 입니다.
 - 이미 멤버인 사람이 다시 참여를 호출하면 `alreadyMember: true` 를 돌려주고 **사용 횟수를
   소모하지 않습니다.**
 - 초대를 만든 사람이 더 이상 그 저장소의 editor 이상 멤버가 아니면 그 초대는 쓸 수 없습니다

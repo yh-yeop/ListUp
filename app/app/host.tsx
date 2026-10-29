@@ -1,3 +1,4 @@
+import { Ionicons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
 import { useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
@@ -22,7 +23,9 @@ import {
   Title,
 } from '../src/components/ui';
 import { notifySuccess } from '../src/lib/dialogs';
-import { desktopBridge, desktopErrorMessage, useHostStatus } from '../src/lib/desktop';
+import { desktopBridge, desktopErrorMessage, isOwnHostUrl, useHostStatus } from '../src/lib/desktop';
+import { useAuth } from '../src/state/auth';
+import { serverUrl } from '../src/state/servers';
 import { fontSize, monoFont, radius, spacing, useTheme } from '../src/theme';
 
 /** PC 앱 — 이 PC 에서 연 서버를 켜고 끄고, 공개 방식·계정·데이터를 다룬다. */
@@ -77,6 +80,12 @@ function HostPanel({ status }: { status: HostStatus }) {
           계속 돕니다. 계정과 파일은 이 PC 의 데이터 폴더에 쌓입니다.
         </Subtitle>
       </View>
+
+      <FirstSteps
+        status={status}
+        entering={busy === 'signup'}
+        onEnter={() => void act('signup', () => enterOwnServer(status, { signup: true }))}
+      />
 
       {status.settingsNotice ? <ErrorNotice message={status.settingsNotice} /> : null}
       {error ? <ErrorNotice message={error} /> : null}
@@ -146,6 +155,64 @@ function CopyLine({ label, value }: { label: string; value: string }) {
         }}
       />
     </Row>
+  );
+}
+
+/**
+ * 처음 서버를 여는 사람을 위한 차례 — 켜기, 밖에서 들어오게, 이름, 내 계정. 이 PC 서버에 로그인한 적이
+ * 생기면(계정이 있으면) 사라진다. 저마다 상태에서 저절로 체크되므로 따로 저장하는 것은 없다.
+ */
+function FirstSteps({ status, entering, onEnter }: { status: HostStatus; entering: boolean; onEnter: () => void }) {
+  const { colors } = useTheme();
+  const { servers } = useAuth();
+  const running = status.state === 'running';
+  const hasAccount = servers.some((entry) => isOwnHostUrl(serverUrl(entry), status) && entry.user !== null);
+  if (hasAccount) return null;
+
+  const steps: { done: boolean; title: string; detail: string; optional?: boolean }[] = [
+    { done: running, title: '서버 켜기', detail: '아래 "서버 켜기"를 누릅니다. 이 PC 가 켜져 있는 동안 들어올 수 있습니다.' },
+    {
+      done: status.tunnel.state === 'on' && !!status.tunnel.url,
+      title: '밖에서 들어오게 하기',
+      detail: '다른 집·데이터로 들어올 사람이 있으면 "공개 방식"에서 고릅니다. 같은 공유기에서만 쓸 거면 건너뜁니다.',
+      optional: true,
+    },
+    {
+      done: status.serverName !== null,
+      title: '서버 이름 정하기',
+      detail: '들어오는 사람의 서버 목록에 이 이름으로 보입니다(예: 우리집 사진 서버).',
+      optional: true,
+    },
+    { done: false, title: '내 계정 만들기', detail: '들어가서 "회원가입"으로 이 서버의 첫 계정을 만듭니다. 그다음 저장소를 만들고 초대 화면의 링크·QR 로 사람을 부릅니다.' },
+  ];
+
+  return (
+    <Card style={{ gap: spacing.md }}>
+      <Body style={{ fontWeight: '600' }}>처음 시작하기</Body>
+      {steps.map((step) => (
+        <Row key={step.title} gap={spacing.sm} style={{ alignItems: 'flex-start' }}>
+          <Ionicons
+            name={step.done ? 'checkmark-circle' : 'ellipse-outline'}
+            size={18}
+            color={step.done ? colors.success : colors.textFaint}
+          />
+          <View style={{ flex: 1, gap: 2 }}>
+            <Body style={{ fontWeight: '600' }}>
+              {step.title}
+              {step.optional ? <Caption> · 선택</Caption> : null}
+            </Body>
+            <Caption>{step.detail}</Caption>
+          </View>
+        </Row>
+      ))}
+      <Button
+        label="들어가서 내 계정 만들기"
+        icon="person-add-outline"
+        onPress={onEnter}
+        loading={entering}
+        disabled={!running}
+      />
+    </Card>
   );
 }
 

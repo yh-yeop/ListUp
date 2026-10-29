@@ -9,16 +9,17 @@ import {
   ErrorNotice,
   Field,
   Input,
+  PasswordInput,
   Screen,
   Subtitle,
   Title,
 } from '../src/components/ui';
 import { RememberLogin } from '../src/components/RememberLogin';
 import { credentialsSupported, loadLogin } from '../src/lib/credentials';
-import { peekPendingInvite } from '../src/lib/invite-link';
-import { formatInviteCode } from '@listup/shared';
+import { PendingInviteNote } from '../src/components/InviteSummary';
 import { useAuth } from '../src/state/auth';
 import { ApiError, IS_CLIENT_BUILD } from '../src/api/client';
+import { takeSignupRequest } from '../src/components/HostCard';
 import { openServerList } from '../src/lib/server-list';
 import { serverTitle } from '../src/state/servers';
 import { fontSize, radius, spacing, useTheme } from '../src/theme';
@@ -34,6 +35,11 @@ export default function LoginScreen() {
 
   // 이 서버에 저장된 계정이 있으면 채워 둔다. 직접 로그아웃했거나 비밀번호가 바뀌어 자동 로그인이
   // 안 된 경우, 여기서 한 번 누르면 된다. 비밀번호가 지워진 경우(바뀌었음)는 이메일만 채운다.
+  // PC 앱 "들어가서 내 계정 만들기"로 왔으면 가입 화면을 이어서 연다(로그인 화면은 그 밑에 남는다).
+  useEffect(() => {
+    if (takeSignupRequest()) router.push('/signup');
+  }, []);
+
   const activeId = activeServer?.id;
   useEffect(() => {
     if (!activeId) return;
@@ -90,12 +96,8 @@ export default function LoginScreen() {
             </Subtitle>
           </View>
 
+          <PendingInviteNote action="로그인" />
           <Card style={{ gap: spacing.lg }}>
-            {peekPendingInvite() ? (
-              <Body muted>
-                로그인하면 초대 코드 {formatInviteCode(peekPendingInvite()!)} 로 참여를 이어 갑니다.
-              </Body>
-            ) : null}
             <Field label="아이디">
               <Input
                 value={email}
@@ -108,10 +110,9 @@ export default function LoginScreen() {
               />
             </Field>
             <Field label="비밀번호">
-              <Input
+              <PasswordInput
                 value={password}
                 onChangeText={setPassword}
-                secureTextEntry
                 autoComplete="current-password"
                 placeholder="8자 이상"
                 onSubmitEditing={submit}

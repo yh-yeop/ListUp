@@ -84,6 +84,43 @@ PC 실행이 가능하다. 코드를 만지면 테스트·타입 검사를 바�
 
 (토스트·멈추기 버튼은 2026-10-20 에 했다 — 완료 절 *사용 흐름 다듬기*.)
 
+### 사람 사이에 쓰기 편하게 (2026-10-28 결정)
+
+- [~] **서버 연결 쉽게** — 주소를 `http://…:4000` 까지 다 적어야 했다(`app/src/state/servers.ts` `normalizeServerUrl`). `192.168.0.10`,
+  `<내 노드>.<tailnet>.ts.net` 만 써도 후보를 차례로 확인하고, '연결 확인' 뒤 '저장하고 들어가기'를 따로 누르던 것을 한 번에.
+- [~] **초대 QR 코드** — PC 화면의 초대를 폰 카메라로 찍으면 바로 참여 링크가 열리게. 공유 문구에 저장소·권한·기한·앱 없이 여는 법.
+- [~] **가입 전 미리보기·바로 참여** — 초대 링크를 열면 어떤 저장소인지 모른 채 로그인/가입부터 했고, 가입 뒤 '참여'를 한 번 더
+  눌렀다. 코드만으로 미리보기(요청 제한), 가입·로그인하면 바로 참여.
+- [~] **PC 앱 첫 서버 안내** — 서버 켜기 → 밖에서 들어오게 → 내 계정 → 첫 저장소·초대를 체크리스트로. 비밀번호 보기 버튼.
+
+**이어 하기 (2026-10-29, 다른 기기에서 이어 하려고 미완성인 채로 커밋·푸시).** 네 항목의 코드는 다 들어갔지만 e2e 를 돌리기 전이라
+이 커밋의 CI(test:e2e)는 실패할 수 있다. 리팩터링 인계 파일 `REFACTOR.md` 도 이 커밋에서 처음 추적한다.
+
+- 들어간 것
+  - 서버: `GET /invites/:code` 를 로그인 없이(`currentRole` 은 `null`), 없는 코드(404)를 넣는 IP 는 로그인 제한과 같은 한도로 429
+    (`server/src/routes/invites.ts` `lookupLimited`). `API_LEVEL` 은 5 그대로(1.8 미출시라 수준 5 설명에 더함). `docs/API.md` 초대 절,
+    README 환경변수 표(`LISTUP_LOGIN_FAILURE_LIMIT`)에 적었다. `server/test/invites.test.ts` 에 미리보기·대입 제한 2개.
+  - 서버 연결: `app/src/lib/pure/server-url.ts` `serverUrlCandidates`(+ `app/test/server-url.test.ts`), `app/src/state/servers.ts`
+    `resolveServer`(후보를 한꺼번에 확인해 앞에서부터 처음 닿은 것). `app/app/server.tsx` — '저장하고 들어가기'가 확인 전이면 먼저 확인,
+    확인 실패면 입력을 고치기 전까지 저장 막힘(e2e 3 이 보는 동작 유지).
+  - 초대 QR: `app/src/components/QrCode.tsx`(View 로 그림, 의존성 `qrcode-generator@1.4.4` MIT), 초대 화면에 'QR 코드'/'QR 닫기',
+    공유 문구에 저장소·권한·기한·앱 없이 여는 법.
+  - 가입 전 미리보기·바로 참여: `app/src/components/InviteSummary.tsx`(`InviteSummary`·`usePendingInvitePreview`·`PendingInviteNote`) 를
+    참여·로그인·가입 화면이 쓴다. `app/src/lib/invite-link.ts` `markPendingInviteSeen`·`shouldAutoJoin` — 미리보기를 본 뒤 로그인·가입하면
+    참여 화면이 버튼 없이 바로 참여.
+  - PC 앱: `app/app/host.tsx` `FirstSteps`(내 계정이 생기면 사라짐), "들어가서 내 계정 만들기" → `HostCard.tsx` `takeSignupRequest` 로
+    로그인 화면이 가입 화면을 이어서 연다. `ui.tsx` `PasswordInput`(눈 버튼 '비밀번호 보기'/'비밀번호 숨기기')을 로그인·가입·재설정·설정에.
+- 확인한 것: `check:sync`, 앱·서버·desktop 타입 검사, 앱 단위 테스트 47개, `server/test/invites.test.ts` 20개.
+  예시 주소는 `check:sync [4]` 에 맞춰 `<내 노드>.<tailnet>.ts.net`·`example.com` 으로 적었다.
+- **돌리지 않은 것**: 서버 테스트 전체, e2e 전체. e2e 7(가입하면 바로 참여로 고침)·새 14(`14-onboarding.mjs` — 주소 일부만·한 번에 저장,
+  비밀번호 보기, 초대 QR)는 한 번도 안 돌렸다. 14 는 중단 중에 손으로 고친 것이 있으니 먼저 읽는다. `test:desktop` 도(`host.tsx` 를 바꿨다).
+- 남은 순서
+  1. `npm run test:e2e -- 7 14 13` → 고칠 것 고치기
+  2. `npm run check:sync`·`typecheck`·`npm test`·`npm run test:e2e` 전체, `npm run test:desktop`
+  3. `docs/ARCHITECTURE.md` 구조 블록(`lib/pure/server-url.ts`, `components/QrCode`·`InviteSummary`), README 「무엇을 할 수 있나」,
+     P1 「다음 릴리즈 노트에 넣을 것」에 「새 기능」·「호환」(로그인 없는 미리보기, 코드 대입 429)
+  4. 네 항목을 완료 절로 옮기고 이 「이어 하기」를 지운 뒤 커밋(`feat` 접두). 푸시는 묻고.
+
 ### 설치형 클라이언트 — 서버와 무관하게 늘 켜지는 클라
 
 **실행 계획: [docs/PLAN-CLIENT.md](docs/PLAN-CLIENT.md)** (2026-09-14)

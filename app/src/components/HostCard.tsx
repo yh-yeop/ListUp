@@ -19,13 +19,26 @@ export const HOST_STATE_BADGE: Record<HostState, { label: string; tone: 'neutral
  * 이 PC 서버로 들어간다 — 서버 목록에 `이 PC`(localhost) 항목이 없으면 더하고 그 서버로 전환한다.
  * 자기 PC 에는 공개 주소를 돌지 않고 곧장 붙는다.
  */
-export function useEnterOwnServer(): (status: HostStatus) => Promise<void> {
+export function useEnterOwnServer(): (status: HostStatus, options?: { signup?: boolean }) => Promise<void> {
   const { servers, saveServer, switchServer } = useAuth();
-  return async (status) => {
+  return async (status, options) => {
     const existing = servers.find((entry) => isOwnHostUrl(serverUrl(entry), status));
     const id = existing?.id ?? (await saveServer({ url: status.localUrl, label: '이 PC' }));
+    signupRequested = options?.signup === true;
     await switchServer(id);
   };
+}
+
+/**
+ * "들어가서 내 계정 만들기" — 서버를 옮기면 스택이 비워지고 로그인 화면부터 열리므로, 그 화면이 한 번만
+ * 가입 화면을 이어서 연다.
+ */
+let signupRequested = false;
+
+export function takeSignupRequest(): boolean {
+  const requested = signupRequested;
+  signupRequested = false;
+  return requested;
 }
 
 /** 서버 목록 맨 위 — 이 PC 에서 연 서버. PC 앱에서만 보인다. */

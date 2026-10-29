@@ -55,18 +55,18 @@ export default async function run(t, env) {
     t.must(await page.getByText('설치한 앱에서 열기').isVisible(), '웹에는 설치한 앱에서 열기 링크');
     const appHref = await page.getByText('설치한 앱에서 열기').evaluate((el) => el.closest('a')?.getAttribute('href') ?? el.getAttribute('href'));
     t.must(appHref === `listup://join?server=${encodeURIComponent(A)}&code=${invite.code}`, '앱 링크에 서버 주소와 코드');
+    await page.getByText('초대저장소').filter({ visible: true }).waitFor();
+    t.ok('로그인 전에 미리보기 — 어떤 저장소인지 먼저 보인다');
     await page.getByRole('button', { name: '가입하기' }).click();
     await page.getByRole('button', { name: '가입하고 시작하기' }).waitFor();
-    t.must(await page.getByText('가입하면 초대 코드', { exact: false }).isVisible(), '가입 화면에 이어 갈 초대 안내');
+    await page.getByText('가입하면 이 저장소에 바로 참여합니다.').waitFor();
+    t.ok('가입 화면에도 어떤 저장소인지');
     await s.inputs().nth(0).fill('guest');
     await s.inputs().nth(1).fill(`guest-${env.run}@a.test`);
     await s.inputs().nth(2).fill('password-1');
     await page.getByRole('button', { name: '가입하고 시작하기' }).click();
-    await page.getByText('초대저장소').waitFor({ timeout: 10000 });
-    t.must(s.path() === '/join', '가입하면 참여 화면으로 돌아와 미리보기');
-    await page.getByRole('button', { name: /코드로 참여하기$/ }).click();
-    await page.waitForURL(`**/repo/${repo.id}`);
-    t.ok('참여 → 저장소로');
+    await page.waitForURL(`**/repo/${repo.id}`, { timeout: 10000 });
+    t.ok('미리보기를 봤으니 가입하면 다시 묻지 않고 바로 참여 → 저장소로');
     const members = (await api(A, `/api/repos/${repo.id}/members`, undefined, owner.json.token)).json.members;
     t.must(members.some((m) => m.displayName === 'guest'), '멤버로 들어갔다');
     await ctx.close();
@@ -89,17 +89,16 @@ export default async function run(t, env) {
     t.must(s.path() === '/login', '더하고 들어가 그 서버 로그인 화면');
     const st = await s.store();
     t.must(st.servers.length === 1 && st.servers[0].url === A, '서버가 목록에 들어갔다');
-    t.must(await page.getByText('로그인하면 초대 코드', { exact: false }).isVisible(), '로그인 화면에 이어 갈 초대 안내');
+    await page.getByText('로그인하면 이 저장소에 바로 참여합니다.').waitFor();
+    t.ok('로그인 화면에 어떤 저장소인지(다른 서버에서도 로그인 없이 미리보기)');
     await page.getByText('회원가입').click();
     await page.getByRole('button', { name: '가입하고 시작하기' }).waitFor();
     await s.inputs().nth(0).fill('client');
     await s.inputs().nth(1).fill(`client-${env.run}@a.test`);
     await s.inputs().nth(2).fill('password-1');
     await page.getByRole('button', { name: '가입하고 시작하기' }).click();
-    await page.getByText('초대저장소').waitFor({ timeout: 10000 });
-    await page.getByRole('button', { name: /코드로 참여하기$/ }).click();
-    await page.waitForURL(`**/repo/${repo.id}`);
-    t.ok('클라이언트 모드: 서버 추가 → 가입 → 참여');
+    await page.waitForURL(`**/repo/${repo.id}`, { timeout: 10000 });
+    t.ok('클라이언트 모드: 서버 추가 → 가입 → 바로 참여');
     await ctx.close();
   }
 }

@@ -44,8 +44,11 @@ export function isLocalNetworkAddress(url: string): boolean {
  * 끝나면 첫 화면(index)이 참여 화면으로 다시 보낸다. 앱을 새로 열면 사라진다.
  */
 let pendingInviteCode: string | null = null;
+/** 그 초대가 어떤 저장소인지 미리보기로 보여 줬다 — 로그인·가입이 끝나면 다시 묻지 않고 바로 참여한다. */
+let pendingInviteSeen = false;
 
 export function setPendingInvite(code: string): void {
+  if (code !== pendingInviteCode) pendingInviteSeen = false;
   pendingInviteCode = code;
 }
 
@@ -53,6 +56,16 @@ export function peekPendingInvite(): string | null {
   return pendingInviteCode;
 }
 
+export function markPendingInviteSeen(code: string): void {
+  if (code === pendingInviteCode) pendingInviteSeen = true;
+}
+
+/** 미리보기를 본 뒤 로그인·가입했으면 참여 화면이 버튼을 기다리지 않고 바로 참여한다. */
+export function shouldAutoJoin(code: string): boolean {
+  return pendingInviteSeen && code === pendingInviteCode;
+}
+
 export function clearPendingInvite(): void {
   pendingInviteCode = null;
+  pendingInviteSeen = false;
 }

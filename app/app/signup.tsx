@@ -1,12 +1,12 @@
 import { router } from 'expo-router';
 import { useState } from 'react';
 import { KeyboardAvoidingView, Platform, View } from 'react-native';
-import { Body, Button, Card, ErrorNotice, Field, Input, Screen, Subtitle, Title } from '../src/components/ui';
+import { Button, Card, ErrorNotice, Field, Input, PasswordInput, Screen, Subtitle, Title } from '../src/components/ui';
 import { ApiError } from '../src/api/client';
 import { RememberLogin } from '../src/components/RememberLogin';
 import { credentialsSupported } from '../src/lib/credentials';
-import { peekPendingInvite } from '../src/lib/invite-link';
-import { LOGIN_ID_RULE, MAX_LOGIN_ID_LENGTH, formatInviteCode } from '@listup/shared';
+import { PendingInviteNote } from '../src/components/InviteSummary';
+import { LOGIN_ID_RULE, MAX_LOGIN_ID_LENGTH } from '@listup/shared';
 import { useAuth } from '../src/state/auth';
 import { spacing } from '../src/theme';
 
@@ -48,10 +48,8 @@ export default function SignupScreen() {
           <Subtitle>만든 계정으로 모바일과 PC 어디서든 같은 저장소를 볼 수 있습니다.</Subtitle>
         </View>
 
+        <PendingInviteNote action="가입" />
         <Card style={{ gap: spacing.lg }}>
-          {peekPendingInvite() ? (
-            <Body muted>가입하면 초대 코드 {formatInviteCode(peekPendingInvite()!)} 로 참여를 이어 갑니다.</Body>
-          ) : null}
           <Field label="이름" hint="다른 참여자에게 보이는 이름입니다.">
             <Input
               value={displayName}
@@ -72,10 +70,9 @@ export default function SignupScreen() {
             />
           </Field>
           <Field label="비밀번호" hint="8자 이상">
-            <Input
+            <PasswordInput
               value={password}
               onChangeText={setPassword}
-              secureTextEntry
               autoComplete="new-password"
               onSubmitEditing={submit}
             />

@@ -1,7 +1,7 @@
 import { router, useLocalSearchParams } from 'expo-router';
 import { useState } from 'react';
 import { KeyboardAvoidingView, Platform, View } from 'react-native';
-import { Body, Button, Card, ErrorNotice, Field, Input, Screen, Subtitle, Title } from '../src/components/ui';
+import { Body, Button, Card, ErrorNotice, Field, Input, PasswordInput, Screen, Subtitle, Title } from '../src/components/ui';
 import { ApiError } from '../src/api/client';
 import { RememberLogin } from '../src/components/RememberLogin';
 import { credentialsSupported } from '../src/lib/credentials';
@@ -77,10 +77,9 @@ export default function ResetPasswordScreen() {
             />
           </Field>
           <Field label="새 비밀번호" hint="8자 이상. 바꾸면 다른 기기의 로그인은 모두 끊깁니다.">
-            <Input
+            <PasswordInput
               value={password}
               onChangeText={setPassword}
-              secureTextEntry
               autoComplete="new-password"
               onSubmitEditing={submit}
             />

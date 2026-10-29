@@ -501,7 +501,8 @@ export const API_VERSION = 1;
  * - 3 (1.5.0): 파일 버전 목록(`/files/versions`), 휴지통(`/trash`). 없는 서버에서는 앱이 그 화면만 막는다.
  * - 4 (1.8.0): 제안 목록 나눠 받기(`limit`·`before` → `next`). 옛 서버는 무시하고 전부 주므로 앱이 그대로 쓴다.
  * - 5 (1.8.0): 로그아웃(`/auth/logout`)·다른 기기 모두 로그아웃(`/auth/logout-others`), 내 제안
- *   (`/proposals/mine`, 제안의 `decidedAt`·`decidedBy`, 닫을 때 `reason`), 저장소 활동 기록(`/repos/:id/events`).
+ *   (`/proposals/mine`, 제안의 `decidedAt`·`decidedBy`, 닫을 때 `reason`), 저장소 활동 기록(`/repos/:id/events`),
+ *   로그인 없는 초대 미리보기(`GET /invites/:code`).
  *   없는 서버에서는 앱이 그 버튼·화면만 숨기고, 로그아웃은 예전처럼 기기에서만 지운다.
  *
  * API_VERSION 을 올리지 않은 이유: 옛 앱(1.1.0)은 API_VERSION 이 같아야만 들어가서, 올리면 멀쩡히

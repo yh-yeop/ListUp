@@ -1,17 +1,14 @@
-import { Ionicons } from '@expo/vector-icons';
 import { Link, router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Platform, View } from 'react-native';
 import {
   INVITE_CODE_LENGTH,
-  ROLE_DESCRIPTION,
   ROLE_LABEL,
   formatInviteCode,
   parseInviteCode,
   type InvitePreview,
 } from '@listup/shared';
 import {
-  Badge,
   Body,
   Button,
   Caption,
@@ -19,17 +16,17 @@ import {
   ErrorNotice,
   Field,
   Input,
-  Row,
   Screen,
   Subtitle,
   Title,
 } from '../src/components/ui';
 import { ApiError, IS_CLIENT_BUILD, api } from '../src/api/client';
 import { confirmAction } from '../src/lib/dialogs';
-import { appLinkFor, clearPendingInvite, setPendingInvite } from '../src/lib/invite-link';
+import { appLinkFor, clearPendingInvite, setPendingInvite, shouldAutoJoin } from '../src/lib/invite-link';
+import { InviteSummary, usePendingInvitePreview } from '../src/components/InviteSummary';
 import { useAuth } from '../src/state/auth';
 import { checkServer, describeCheck, normalizeServerUrl, serverUrl } from '../src/state/servers';
-import { fontSize, monoFont, radius, spacing, useTheme } from '../src/theme';
+import { fontSize, monoFont, spacing, useTheme } from '../src/theme';
 
 /**
  * 초대 코드로 참여. 초대 링크(`/join?code=`)나 앱 링크(`listup://join?server=&code=`)로도 들어온다.
@@ -128,23 +125,33 @@ export default function JoinScreen() {
     }
     setBusy(true);
     setError(null);
+    let found: InvitePreview | null = null;
     try {
-      const { invite } = await api.previewInvite(clean);
-      setPreview(invite);
+      found = (await api.previewInvite(clean)).invite;
+      setPreview(found);
     } catch (err) {
       setPreview(null);
       setError(err instanceof ApiError ? err.message : '초대 코드를 확인하지 못했습니다.');
     } finally {
       setBusy(false);
     }
+    // 로그인·가입 전에 이미 미리보기를 보고 들어왔다 — 같은 것을 다시 묻지 않고 바로 참여한다.
+    if (found && shouldAutoJoin(found.code)) {
+      if (found.currentRole) {
+        clearPendingInvite();
+        router.replace(`/repo/${found.repo.id}`);
+      } else {
+        await join(found);
+      }
+    }
   }
 
-  async function join() {
-    if (!preview) return;
+  async function join(target: InvitePreview | null = preview) {
+    if (!target) return;
     setBusy(true);
     setError(null);
     try {
-      const result = await api.joinInvite(preview.code);
+      const result = await api.joinInvite(target.code);
       clearPendingInvite();
       router.replace(`/repo/${result.repo.id}`);
     } catch (err) {
@@ -199,34 +206,7 @@ export default function JoinScreen() {
 
       {preview ? (
         <Card style={{ gap: spacing.md }}>
-          <Row gap={spacing.sm}>
-            <Ionicons name="folder" size={22} color={colors.accent} />
-            <Body style={{ fontWeight: '700', fontSize: fontSize.lg, flex: 1 }}>
-              {preview.repo.name}
-            </Body>
-          </Row>
-
-          {preview.repo.description ? <Body muted>{preview.repo.description}</Body> : null}
-
-          <Row gap={spacing.md} wrap>
-            <Caption>소유자 {preview.owner.displayName}</Caption>
-            <Caption>멤버 {preview.memberCount}명</Caption>
-            <Caption>파일 {preview.fileCount}개</Caption>
-          </Row>
-
-          <View
-            style={{
-              backgroundColor: colors.surfaceAlt,
-              borderRadius: radius.md,
-              padding: spacing.md,
-              gap: spacing.xs,
-            }}
-          >
-            <Row gap={spacing.sm}>
-              <Badge label={`${ROLE_LABEL[preview.role]} 권한으로 참여`} tone="accent" />
-            </Row>
-            <Caption>{ROLE_DESCRIPTION[preview.role]}</Caption>
-          </View>
+          <InviteSummary preview={preview} />
 
           {preview.currentRole ? (
             <>
@@ -242,7 +222,7 @@ export default function JoinScreen() {
           ) : (
             <Button
               label={`${formatInviteCode(preview.code)} 코드로 참여하기`}
-              onPress={join}
+              onPress={() => void join()}
               loading={busy}
               full
             />
@@ -257,6 +237,9 @@ export default function JoinScreen() {
 function SignInFirst({ code, busy, error }: { code: string | null; busy: boolean; error: string | null }) {
   const { colors } = useTheme();
   const { activeServer } = useAuth();
+  // 코드를 먼저 들고 있어야 미리보기를 본 것이 로그인·가입 뒤 "바로 참여"로 이어진다.
+  if (code) setPendingInvite(code);
+  const { preview, error: previewError } = usePendingInvitePreview(code);
   const go = (href: '/login' | '/signup') => {
     if (code) setPendingInvite(code);
     if (href === '/login') router.replace(href);
@@ -271,11 +254,18 @@ function SignInFirst({ code, busy, error }: { code: string | null; busy: boolean
       <View style={{ gap: spacing.sm }}>
         <Title>초대받은 저장소에 참여</Title>
         <Subtitle>
-          {code ? `초대 코드 ${formatInviteCode(code)} 로 참여하려면` : '초대 코드로 참여하려면'} 이 서버에 로그인하거나
-          가입하세요. 계정은 서버마다 따로입니다.
+          {preview
+            ? '아래 저장소에 초대받았습니다. 이 서버에 로그인하거나 가입하면 바로 참여합니다. 계정은 서버마다 따로입니다.'
+            : `${code ? `초대 코드 ${formatInviteCode(code)} 로 참여하려면` : '초대 코드로 참여하려면'} 이 서버에 로그인하거나 가입하세요. 계정은 서버마다 따로입니다.`}
         </Subtitle>
       </View>
       {error ? <ErrorNotice message={error} /> : null}
+      {previewError ? <ErrorNotice message={previewError} /> : null}
+      {preview ? (
+        <Card style={{ gap: spacing.md }}>
+          <InviteSummary preview={preview} />
+        </Card>
+      ) : null}
       <Card style={{ gap: spacing.md }}>
         {activeServer ? <Caption>서버: {serverUrl(activeServer) || '이 사이트'}</Caption> : null}
         <Button label="로그인" icon="log-in-outline" onPress={() => go('/login')} loading={busy} full />

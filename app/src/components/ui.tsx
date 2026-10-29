@@ -318,6 +318,23 @@ export function Input(props: ComponentProps<typeof TextInput>) {
   );
 }
 
+/** 비밀번호 칸 — 눈 버튼으로 적은 것을 잠깐 볼 수 있다. 폰 자판으로 친 비밀번호를 확인하려고. */
+export function PasswordInput(props: Omit<ComponentProps<typeof TextInput>, 'secureTextEntry'>) {
+  const [shown, setShown] = useState(false);
+  return (
+    <View style={{ justifyContent: 'center' }}>
+      <Input {...props} secureTextEntry={!shown} style={[{ paddingRight: 48 }, props.style]} />
+      <View style={{ position: 'absolute', right: spacing.xs }}>
+        <IconButton
+          icon={shown ? 'eye-off-outline' : 'eye-outline'}
+          label={shown ? '비밀번호 숨기기' : '비밀번호 보기'}
+          onPress={() => setShown((prev) => !prev)}
+        />
+      </View>
+    </View>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // 상태 표시
 // ---------------------------------------------------------------------------

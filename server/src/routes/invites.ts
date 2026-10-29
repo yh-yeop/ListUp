@@ -2,7 +2,8 @@ import type { FastifyInstance } from 'fastify';
 import type { Invite, InvitePreview, Role } from '@listup/shared';
 import { hasRole, parseInviteCode } from '@listup/shared';
 import type { AppContext } from '../context.ts';
-import { badRequest, conflict, forbidden, notFound } from '../lib/errors.ts';
+import { ApiError, badRequest, conflict, forbidden, notFound, tooManyRequests } from '../lib/errors.ts';
+import { RateLimiter } from '../lib/rate-limit.ts';
 import { newId, newInviteCode } from '../lib/ids.ts';
 import { body, requireUser } from '../lib/request.ts';
 import { recordEvent } from '../services/events.ts';
@@ -62,7 +63,30 @@ const MAX_EXPIRY_DAYS = 365;
 const MAX_USES = 10_000;
 
 export async function registerInviteRoutes(app: FastifyInstance, ctx: AppContext): Promise<void> {
-  const { db } = ctx;
+  const { db, config } = ctx;
+
+  // 코드 대입 제한. 미리보기는 로그인 없이도 열리므로, 없는 코드를 여러 번 넣는 IP 는 로그인 제한과 같은 한도로 막는다.
+  // (10자·31글자라 무작위로 맞힐 수는 없지만, 코드로 열리는 문을 아무 제한 없이 두지 않는다)
+  const codeLimiter = new RateLimiter({
+    limit: config.loginFailureLimit,
+    windowMs: config.loginFailureWindowMs,
+    blockMs: config.loginBlockMs,
+  });
+  function lookupLimited(req: { ip: string }, rawCode: string): InviteView {
+    const key = `ip:${req.ip || 'unknown'}`;
+    const verdict = codeLimiter.check(key);
+    if (!verdict.allowed) {
+      throw tooManyRequests(`초대 코드를 너무 많이 틀렸습니다. ${verdict.retryAfterSeconds}초 뒤에 다시 시도해 주세요.`, {
+        retryAfterSeconds: verdict.retryAfterSeconds,
+      });
+    }
+    try {
+      return lookupInvite(db, rawCode);
+    } catch (err) {
+      if (err instanceof ApiError && err.statusCode === 404) codeLimiter.fail(key);
+      throw err;
+    }
+  }
 
   /** 초대 코드 발급. 편집자 이상이면 발급할 수 있다. */
   app.post('/repos/:repoId/invites', async (req, reply) => {
@@ -165,20 +189,21 @@ export async function registerInviteRoutes(app: FastifyInstance, ctx: AppContext
   });
 
   /**
-   * 참여 전 미리보기. 로그인은 필요하지만 멤버가 아니어도 볼 수 있다.
-   * (어떤 저장소에 들어가는지 모르고 참여하는 일을 막는다)
+   * 참여 전 미리보기 — 멤버가 아니어도, **로그인하지 않아도** 볼 수 있다(수준 5). 초대 링크를 연 사람이 어떤
+   * 저장소인지 보고 나서 가입하게 한다. 코드를 가진 사람은 원래 들어올 수 있는 사람이라 보여 줘도 되고,
+   * 없는 코드를 넣어 보는 것은 위의 제한으로 막는다.
    */
   app.get('/invites/:code', async (req) => {
-    const user = requireUser(req);
+    const user = req.user;
     const { code: rawCode } = req.params as { code: string };
-    const row = lookupInvite(db, rawCode);
+    const row = lookupLimited(req, rawCode);
     const repoId = row.repo_id;
 
     const repo = getRepoRow(db, repoId);
     if (!repo) throw notFound('저장소가 이미 삭제되었습니다.');
 
     // 이미 멤버라면 코드가 소진·만료됐어도 어떤 저장소인지 보여준다.
-    const currentRole = getRole(db, repoId, user.id);
+    const currentRole = user ? getRole(db, repoId, user.id) : null;
     if (!currentRole) assertUsable(row);
 
     const owner = db
@@ -204,7 +229,7 @@ export async function registerInviteRoutes(app: FastifyInstance, ctx: AppContext
   app.post('/invites/:code/join', async (req) => {
     const user = requireUser(req);
     const { code: rawCode } = req.params as { code: string };
-    const row = lookupInvite(db, rawCode);
+    const row = lookupLimited(req, rawCode);
     const repoId = row.repo_id;
 
     const repo = getRepoRow(db, repoId);

@@ -137,6 +137,38 @@ describe('초대 코드', () => {
     assert.equal(notFound.statusCode, 404);
   });
 
+  it('로그인하지 않아도 코드로 미리보기를 볼 수 있다 — 가입 전에 어떤 저장소인지', async () => {
+    const invite = await createInvite(h.app, owner, repoId, { role: 'viewer' });
+    const res = await h.app.inject({ method: 'GET', url: `/api/invites/${invite.code}` });
+    assert.equal(res.statusCode, 200);
+    const preview = res.json().invite;
+    assert.equal(preview.repo.name, '공유 폴더');
+    assert.equal(preview.owner.displayName, '소유자');
+    assert.equal(preview.role, 'viewer');
+    assert.equal(preview.currentRole, null);
+    // 참여는 여전히 로그인해야 한다.
+    const joinAnon = await h.app.inject({ method: 'POST', url: `/api/invites/${invite.code}/join` });
+    assert.equal(joinAnon.statusCode, 401);
+  });
+
+  it('없는 코드를 여러 번 넣는 IP 는 막힌다', async () => {
+    const h2 = await createHarness({ loginFailureLimit: 3 });
+    try {
+      const o = await signup(h2.app, '주인');
+      const r = await createRepo(h2.app, o, '저장소');
+      const invite = await createInvite(h2.app, o, r);
+      const look = (code: string, ip = '203.0.113.7') =>
+        h2.app.inject({ method: 'GET', url: `/api/invites/${code}`, remoteAddress: ip });
+      for (let i = 0; i < 3; i += 1) assert.equal((await look('2222222222')).statusCode, 404);
+      // 맞는 코드라도 막힌 동안은 429.
+      assert.equal((await look(invite.code)).statusCode, 429);
+      // 다른 IP 는 그대로.
+      assert.equal((await look(invite.code, '198.51.100.9')).statusCode, 200);
+    } finally {
+      await h2.close();
+    }
+  });
+
   it('열람 권한만 있는 사람은 초대를 만들 수 없다', async () => {
     const viewer = await signup(h.app, '초대불가');
     const invite = await createInvite(h.app, owner, repoId, { role: 'viewer' });

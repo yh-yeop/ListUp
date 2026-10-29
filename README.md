@@ -150,7 +150,7 @@ npm run server        # http://localhost:4000
 | `LISTUP_WEB_DIR` | `app/dist` | 함께 서빙할 웹 빌드 위치 |
 | `LISTUP_TRUST_PROXY` | `loopback` | 접속자 IP(`X-Forwarded-For`)를 믿을 프록시. 기본은 이 PC 에서 붙는 터널만. `0` 끔, `1` 전부, 또는 IP·CIDR 목록 |
 | `LISTUP_LOG_LEVEL` | `info` | 로그 레벨 (`debug`, `warn`, `error` …) |
-| `LISTUP_LOGIN_FAILURE_LIMIT` | `10` | 이만큼 로그인에 실패하면 잠시 막습니다 |
+| `LISTUP_LOGIN_FAILURE_LIMIT` | `10` | 이만큼 로그인에 실패하면 잠시 막습니다(없는 초대 코드를 넣는 것도 같은 한도로 IP 기준) |
 | `LISTUP_LOGIN_FAILURE_WINDOW_MIN` | `15` | 이 시간 동안 조용하면 실패 횟수를 잊습니다(분) |
 | `LISTUP_LOGIN_BLOCK_MIN` | `15` | 막아 두는 시간(분) |
 | `LISTUP_GC_MIN_AGE_HOURS` | `24` | 참조되지 않는 파일을 지우기 전 유예 시간 |

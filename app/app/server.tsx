@@ -18,12 +18,12 @@ import { confirmAction } from '../src/lib/dialogs';
 import { openReleasePage, updateChecksEnabled } from '../src/lib/updates';
 import { useAuth } from '../src/state/auth';
 import {
-  checkServer,
   describeCheck,
   describeUrl,
   isDefaultServer,
-  normalizeServerUrl,
+  resolveServer,
   serverUrl,
+  serverUrlCandidates,
 } from '../src/state/servers';
 import { monoFont, spacing, useTheme } from '../src/theme';
 
@@ -44,12 +44,16 @@ export default function ServerFormScreen() {
   const [saving, setSaving] = useState(false);
   /** 연결 확인에 성공한 주소. 입력이 바뀌면 다시 확인해야 한다. */
   const [verified, setVerified] = useState<string | null>(null);
+  /** 지금 입력으로 확인했는데 들어갈 수 없었다 — 입력을 고치기 전에는 저장하지 못한다. */
+  const [failed, setFailed] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const normalized = isDefault ? serverUrl(editing!) : normalizeServerUrl(input);
+  // 일부만 적어도 된다(192.168.0.10, <내 노드>.<tailnet>.ts.net). 첫 후보가 대표, 확인하면 실제로 닿은 주소.
+  const candidates = isDefault ? [serverUrl(editing!)] : serverUrlCandidates(input);
+  const normalized = verified ?? candidates[0] ?? null;
   const urlChanged = !editing || (!isDefault && normalized !== editing.url);
-  // 주소가 그대로면(이름만 바꿀 때) 다시 확인하지 않아도 된다.
-  const canSave = !saving && normalized !== null && (!urlChanged || verified === normalized);
+  // 확인하지 않았으면 저장할 때 먼저 확인한다. 주소가 그대로면(이름만 바꿀 때) 다시 확인하지 않는다.
+  const canSave = !saving && !checking && normalized !== null && !failed;
 
   if (id && !editing) {
     return (
@@ -64,27 +68,33 @@ export default function ServerFormScreen() {
   const onChangeUrl = (text: string) => {
     setInput(text);
     setVerified(null);
+    setFailed(false);
     setError(null);
   };
 
-  const check = async () => {
-    if (checking) return;
+  /** 연결을 확인하고, 들어갈 수 있으면 실제로 닿은 주소를 돌려준다. */
+  const check = async (): Promise<string | null> => {
+    if (checking) return null;
     setError(null);
-    if (!normalized) {
-      setError('주소는 http:// 또는 https:// 로 시작해야 합니다.');
-      return;
+    if (candidates.length === 0) {
+      setError('주소를 확인해 주세요. 예: 192.168.0.10, <내 노드>.<tailnet>.ts.net, https://listup.example.com');
+      return null;
     }
     setChecking(true);
     try {
       // 닿지 않거나 API 버전이 다르면 저장하지 못하게 한다.
-      const result = await checkServer(normalized);
-      const problem = describeCheck(result, normalized);
-      setVerified(problem ? null : normalized);
+      const resolved = (await resolveServer(input))!;
+      const problem = describeCheck(resolved.check, resolved.url);
+      setVerified(problem ? null : resolved.url);
+      setFailed(problem !== null);
       setError(problem);
+      // 일부만 적었으면 실제로 닿은 주소로 채워 보여 준다.
+      if (!problem) setInput(resolved.url);
       // 서버 주인이 이름을 정해 두었으면, 비어 있는 이름 칸에 넣어 준다. 사용자가 적은 이름은 건드리지 않는다.
-      if (result.status === 'ok' && result.name && !label.trim()) setLabel(result.name);
+      if (resolved.check.status === 'ok' && resolved.check.name && !label.trim()) setLabel(resolved.check.name);
       // 앱이 이 서버보다 오래됐다 — 업데이트가 꼭 필요하므로 릴리즈 페이지를 바로 연다.
-      if (result.status === 'app-older' && updateChecksEnabled()) void openReleasePage();
+      if (resolved.check.status === 'app-older' && updateChecksEnabled()) void openReleasePage();
+      return problem ? null : resolved.url;
     } finally {
       setChecking(false);
     }
@@ -92,6 +102,13 @@ export default function ServerFormScreen() {
 
   const save = async () => {
     if (!canSave || normalized === null) return;
+    // 확인하지 않은 새 주소는 저장하기 전에 확인한다 — 연결 확인을 따로 누르지 않아도 된다.
+    let target = normalized;
+    if (urlChanged && verified === null) {
+      const url = await check();
+      if (!url) return;
+      target = url;
+    }
     // 주소를 바꾸면 그 서버의 토큰을 지운다 — 토큰은 발급한 서버에만 보낸다.
     if (editing && urlChanged && editing.token) {
       const ok = await confirmAction({
@@ -106,7 +123,7 @@ export default function ServerFormScreen() {
     try {
       // 새 서버로 들어가거나 지금 서버의 주소를 바꾸면 _layout 이 스택을 비우고 그 서버로
       // 들여보낸다. 그 밖의 수정은 목록으로 돌아간다.
-      const savedId = await saveServer({ id: editing?.id, url: normalized, label });
+      const savedId = await saveServer({ id: editing?.id, url: target, label });
       if (!editing) await switchServer(savedId);
       else if (!(urlChanged && editing.id === activeServer?.id)) router.back();
     } catch (err) {
@@ -166,7 +183,7 @@ export default function ServerFormScreen() {
               <Body style={{ fontFamily: monoFont }}>{describeUrl(normalized ?? '')}</Body>
             </Field>
           ) : (
-            <Field label="주소" hint="예: http://192.168.0.10:4000 또는 https://listup.example.com">
+            <Field label="주소" hint="받은 그대로 적으세요. 예: 192.168.0.10, <내 노드>.<tailnet>.ts.net — http(s)·포트는 비워 두면 찾아 봅니다.">
               <Input
                 value={input}
                 onChangeText={onChangeUrl}
@@ -174,8 +191,8 @@ export default function ServerFormScreen() {
                 autoCorrect={false}
                 keyboardType="url"
                 inputMode="url"
-                placeholder="http://"
-                onSubmitEditing={check}
+                placeholder="192.168.0.10"
+                onSubmitEditing={() => void check()}
               />
             </Field>
           )}
@@ -193,9 +210,9 @@ export default function ServerFormScreen() {
                 label="연결 확인"
                 variant="secondary"
                 icon="pulse-outline"
-                onPress={check}
+                onPress={() => void check()}
                 loading={checking}
-                disabled={!normalized || !urlChanged}
+                disabled={candidates.length === 0 || !urlChanged}
               />
             ) : null}
             <Button

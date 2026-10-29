@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { API_VERSION, REQUIRED_SERVER_API_LEVEL, type HealthResponse } from '@listup/shared';
 import { DEFAULT_API_BASE_URL, IS_CLIENT_BUILD } from '../api/client';
+import { serverUrlCandidates } from '../lib/pure/server-url';
 import {
   DEFAULT_SERVER_ID,
   LEGACY_KEYS,
@@ -117,6 +118,21 @@ export async function checkServer(url: string): Promise<ServerCheck> {
   } finally {
     clearTimeout(timer);
   }
+}
+
+export { DEFAULT_SERVER_PORT, serverUrlCandidates } from '../lib/pure/server-url';
+
+/**
+ * 사람이 적은 주소(일부만 적어도 된다)를 실제로 닿는 서버 주소로. 후보를 한꺼번에 확인해 앞에서부터 처음
+ * 닿은 것을 고른다 — 차례로 하면 닿지 않는 후보마다 기다려야 한다. 주소가 아니면 null, 아무 데도 안 닿으면
+ * 첫 후보와 unreachable.
+ */
+export async function resolveServer(raw: string): Promise<{ url: string; check: ServerCheck } | null> {
+  const candidates = serverUrlCandidates(raw);
+  if (candidates.length === 0) return null;
+  const checks = await Promise.all(candidates.map((url) => checkServer(url)));
+  const index = checks.findIndex((check) => check.status !== 'unreachable');
+  return index >= 0 ? { url: candidates[index], check: checks[index] } : { url: candidates[0], check: checks[0] };
 }
 
 /** 들어갈 수 없는 서버를 고를 때 던진다. 화면이 이유(check)를 보고 할 일을 정한다. */

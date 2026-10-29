@@ -10,6 +10,7 @@ import {
   ErrorNotice,
   Field,
   Input,
+  PasswordInput,
   Row,
   Screen,
   Subtitle,
@@ -177,19 +178,17 @@ export default function SettingsScreen() {
       <Card style={{ gap: spacing.lg }}>
         <Body style={{ fontWeight: '600' }}>비밀번호 변경</Body>
         <Field label="현재 비밀번호">
-          <Input
+          <PasswordInput
             value={currentPassword}
             onChangeText={setCurrentPassword}
-            secureTextEntry
             autoComplete="current-password"
             textContentType="password"
           />
         </Field>
         <Field label="새 비밀번호" hint="8자 이상">
-          <Input
+          <PasswordInput
             value={newPassword}
             onChangeText={setNewPassword}
-            secureTextEntry
             autoComplete="new-password"
             textContentType="newPassword"
             onSubmitEditing={() => {
