@@ -57,6 +57,22 @@ PC 실행이 가능하다. 코드를 만지면 테스트·타입 검사를 바�
 
 ## P1 — 다음에 할 것
 
+### MCP 2차 — 편집·관리 도구 (1차는 완료 절 *MCP 서버 1차*)
+
+1차는 열람자도 쓸 수 있는 읽기·제안·의견뿐이다. 편집자·소유자 계정을 AI 에 줄 사람을 위한 도구가 남았다.
+권한은 지금처럼 서버가 계정 역할로 판정하므로 MCP 쪽에 역할 검사를 더하지 않는다. 이 도구들에는
+`destructiveHint` 를 정직하게 단다(클라이언트가 확인을 묻게).
+
+- [ ] **직접 편집** — 여러 파일 커밋(`/files/commit`: 글·이 PC 파일·`blobHash` 되돌리기·삭제), 이동·이름 바꾸기(`/files/move`),
+  파일·폴더 삭제. 휴지통 보기(`/trash`)는 읽기라 열람자도 되므로 함께 넣는다. 왜: 편집자 계정이면 제안을 거치지 않고 정리할 수 있다.
+- [ ] **제안 처리** — 반영(`merge`, 409 충돌 경로를 그대로 보이기), 닫기(`reason`)·다시 열기, 제안 제목·설명 고치기(작성자).
+  왜: 사람이 올린 제안을 AI 가 검토·정리하는 흐름.
+- [ ] **관리** — 멤버 목록·역할 바꾸기·내보내기, 초대 만들기·회수, 저장소 만들기·설명 고치기, 활동 기록(`events`, 소유자).
+  삭제·소유권 넘기기는 되돌릴 수 없어 넣지 않는 쪽으로 본다(넣는다면 확인 인자를 따로).
+- [ ] **폴더 내려받기** — `download-link` `archive: true` 로 zip 을 받아 이 PC 에 저장. 1차의 `download_file` 은 파일 하나만.
+- [ ] **배포 묶음에 넣을지** — 지금은 리포를 받아 `npm ci` 해야 쓴다. 릴리즈의 서버 묶음에 `mcp/` 를 넣거나 npm 패키지로
+  낼지 정한다(`scripts/publish-release.mjs`). 쓰는 사람이 생기면.
+
 ### 설치형 클라이언트 — 서버와 무관하게 늘 켜지는 클라
 
 **실행 계획: [docs/PLAN-CLIENT.md](docs/PLAN-CLIENT.md)** (2026-09-14)
@@ -423,8 +439,12 @@ iCloud Keychain 으로 거의 자동 복구되는 반면 Android Keystore 는 �
   Haiku 찾기 → Opus 검증 → Sonnet 수정 순으로 진행 중. 기록은 `REFACTOR.md`.
   2026-10-28: 1단계(파일 하나·라벨 불변) 41건을 고쳤다(`3429426`) — 지적 103건 중 2단계 48·3단계 6·기각 5가 남았다
   (REFACTOR.md §2c·§2d). 다음은 2단계 묶음(공용 칩·compact 버튼 높이·행 구조·오류 자리)부터.
+- [ ] **1.5단계 리팩터링 — 저장소 로직 최적화·단계별 절차적 UX 검증** (2026-11-02 결정) — 찾기를 Haiku 대신 Sonnet 이 맡는
+  Sonnet 찾기 → Opus 검증 → Sonnet 수정. 왜: 국소 결함이 아니라 흐름을 따라가며 판단해야 하는 검토라(저장소·스냅샷·업로드
+  로직의 불필요한 일, 사용자가 단계별로 밟는 절차의 막힘). 기록은 `REFACTOR.md`.
 - [ ] **`docs/API.md` 와 실제 라우트 재대조** — 이번 변경(커서·용량 한도·ETag·400·`repo_blobs`)은
-  반영했지만, 전체를 라우트별로 다시 훑은 적은 없다.
+  반영했지만, 전체를 라우트별로 다시 훑은 적은 없다. MCP 를 만들며 본 것: 응답의 감싸개(`GET /files` → `{tree}`,
+  `/repos` → `{repos}`, 의견 달기 → `{comments}` 전체)가 표에 없다.
 - [ ] **앱 접근성 마무리** — 목록 행에는 역할·라벨을 넣었지만 스크린리더로 실제 확인은 못 했다.
   라이트 테마 `accent` 는 1.7.1 에서 #2660d8 로 — accentSoft·bg·surface·흰 글자 모두 AA(최저 4.89). 다크는 통과.
 
@@ -613,6 +633,26 @@ Node 22 이상이 필요하다. `better-sqlite3` 는 네이티브 모듈이지�
 ---
 
 ## 완료
+
+- [x] **MCP 서버 1차 — 읽기·제안 도구** — 2026-11-02. ListUp HTTP API 를 감싸는 stdio MCP 서버를 `mcp/` 워크스페이스로.
+  서버 변경 없음. 왜: AI(Claude 등)가 저장소를 읽고 변경 제안을 올리게 — AI 전용 계정을 열람자로 초대하면 저장소는 사람이
+  반영하기 전까지 바뀌지 않는다(권한 경계는 계정 역할, 서버 판정은 v1.8.0 보안 검증에서 확인).
+  - 도구: 읽기 10개(`readOnlyHint`) — `server_info`·`list_repos`·`get_repo`·`list_files`·`read_file`(Range 로 앞부분, 그림은
+    그림으로, 과거 시점·제안 내용)·`list_history`·`list_file_versions`·`list_proposals`·`get_proposal`·`list_my_proposals`(수준 5).
+    쓰기 3개 — `download_file`(절대 경로만, `overwrite` 없이는 덮지 않음), `propose_changes`(`/uploads` 조각 → proposals; 글·이 PC
+    파일·`blobHash`·삭제), `add_comment`.
+  - 실행은 `node mcp/bin/listup-mcp.mjs`(tsx 를 `tsx/esm/api` 로 직접 등록 — stdout 이 프로토콜 전용이라 `npm run` 을 안 쓴다).
+    설정은 env(`LISTUP_URL`, `LISTUP_TOKEN` 또는 `LISTUP_USERNAME`/`LISTUP_PASSWORD`). 켤 때 `/api/health` 로 apiVersion·apiLevel(2+)
+    확인, 로그인 확인. 토큰·비밀번호는 로그에 남기지 않는다(테스트가 stderr 를 본다).
+  - **zod**: 처음 깔린 `mcp/node_modules/zod` 4.6.5 는 SDK(루트 zod 3.25.76 을 씀)와 인스턴스가 달라 인자 검증은 됐지만
+    `describe`·`min`·`int`·`max` 가 `tools/list` 의 JSON Schema 에서 빠졌다. `mcp` 의 zod 를 루트와 같은 3.25.76 으로 맞추고
+    `zod/v4` 로 가져와 해결, 테스트가 설명·제약이 남는지 본다.
+  - 버전 목록에 mcp: `scripts/versions.mjs`(`LOCK_PACKAGES`·`readVersions`), `scripts/set-version.mjs`, CLAUDE.md "package.json 6곳".
+    루트 `npm test`·`typecheck` 에 mcp 워크스페이스.
+  - 테스트 `mcp/test/mcp.test.ts` 14건 — `createHarness` 서버를 `listen({port:0})` 으로 열고 InMemoryTransport 로 도구를 하나씩,
+    bin 은 실제 프로세스로 stdio 연결·실패 시 stderr·stdout 비어 있음.
+  - 문서: README 「무엇을 할 수 있나」·구성·*7. AI 에게 맡기기*(설치·Claude Code/데스크톱 설정), `docs/ARCHITECTURE.md` *MCP 서버*.
+    2차(편집·관리)는 P1 *MCP 2차*.
 
 - [x] **저장소 최대 용량 4GB → 10GB** — 2026-11-02. `LISTUP_MAX_REPO_MB` 기본값 4096 → 10240(`server/src/config.ts`),
   README 환경변수 표·`docs/API.md` 제한값. 왜: 한 저장소에 더 많이 담고 싶다는 요청(2026-11-02). 환경변수로 정한 서버는

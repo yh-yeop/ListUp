@@ -340,6 +340,34 @@ desktop/src/
   받는 파일은 `.listup-part` 로 쓴 뒤 이름을 바꿔, 끊겨도 반쯤 받은 파일이 진짜 이름으로 남지 않습니다.
 - **터널 뒤 IP** — 터널은 같은 PC 에서 붙어 모든 요청이 127.0.0.1 로 보입니다. 서버는 기본으로 루프백 프록시의
   `X-Forwarded-For` 를 믿어(`LISTUP_TRUST_PROXY=loopback`) 로그인 실패 제한이 사람마다 따로 셉니다.
+
+### MCP 서버
+
+`mcp/` 는 AI(MCP 클라이언트)가 띄우는 stdio 서버입니다. 서버 코드에 손대지 않고 HTTP API 를 그대로 부르는 또 하나의
+클라이언트라, 앱과 같은 권한 판정을 받습니다.
+
+```
+mcp/
+├─ bin/listup-mcp.mjs  진입점 — tsx 를 tsx/esm/api 로 직접 등록하고 src/main.ts 를 부른다 (npm run 을 거치지 않게)
+├─ src/main.ts         env 읽기 → /api/health 로 apiVersion·apiLevel 확인 → 로그인 확인 → stdio 연결. 사람에게 남기는 말은 stderr
+├─ src/config.ts       LISTUP_URL · LISTUP_TOKEN 또는 LISTUP_USERNAME/LISTUP_PASSWORD, 붙을 수 있는 서버인지(checkServer)
+├─ src/client.ts       HTTP 클라이언트 — 토큰을 붙이고 401 이면 비밀번호로 한 번 다시 로그인, 나눠 올리기(/uploads)
+├─ src/tools.ts        도구 등록 — 읽기(readOnlyHint)·내려받기·변경 제안·의견. 서버 오류 문장을 도구 오류로 그대로
+├─ src/local.ts        이 PC 의 파일 — 절대 경로만, overwrite 없이는 덮지 않음, 임시 파일에 받아 이름 바꾸기
+└─ test/mcp.test.ts    createHarness 서버를 포트로 열고 InMemoryTransport 로 도구를 하나씩, bin 은 stdio 로
+```
+
+- **권한은 계정의 역할로** — MCP 서버는 역할을 미리 막지 않습니다. AI 전용 계정을 열람자로 초대하면 읽기·제안·의견만
+  되고, 그 밖의 것은 서버가 403/404 로 거절합니다(보안 검증에서 서버 쪽 판정 확인, TODO 완료 절 *v1.8.0*).
+  1차 도구는 열람자가 쓸 수 있는 것뿐이고, 편집·병합·관리 도구는 2차입니다.
+- **zod 는 SDK 와 같은 인스턴스** — `@modelcontextprotocol/sdk` 는 루트에 깔린 zod 로 스키마를 JSON Schema 로 바꿉니다.
+  `mcp` 가 다른 버전의 zod 를 따로 가지면 인자 검증은 되지만 설명·최소/최대 같은 제약이 `tools/list` 에서 빠져, AI 가
+  인자 설명을 못 봅니다. 그래서 `mcp/package.json` 의 zod 는 루트 버전에 맞추고(`zod/v4` 로 가져온다), 테스트가 설명이
+  남는지 봅니다.
+- **읽기 크기** — `read_file` 은 Range 로 앞부분만(기본 200KB) 받아 AI 맥락을 한 파일이 다 먹지 않게 합니다. 서버의
+  Content-Type 은 확장자 화이트리스트라 형식 대신 내용(UTF-8 로 풀리는지, NUL 이 없는지)으로 텍스트를 가립니다.
+- **변경 제안** — 각 변경은 글·이 PC 파일·이력의 `blobHash`·삭제 중 하나이고, 모두 검사한 뒤에야 올리기 시작합니다
+  (잘못된 항목 때문에 하루 제안용 업로드 한도만 쓰지 않게). 올리다 실패하면 그 세션을 취소합니다.
 ---
 
 ## 남은 일

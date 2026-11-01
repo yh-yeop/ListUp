@@ -1,0 +1,25 @@
+{
+  "name": "@listup/mcp",
+  "version": "1.8.0",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "description": "ListUp 을 AI(MCP 클라이언트)가 도구로 다루게 하는 stdio MCP 서버",
+  "bin": {
+    "listup-mcp": "bin/listup-mcp.mjs"
+  },
+  "scripts": {
+    "test": "tsx --test test/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@listup/shared": "*",
+    "@modelcontextprotocol/sdk": "1.32.1",
+    "tsx": "^4.19.2",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "typescript": "^5.6.3"
+  }
+}

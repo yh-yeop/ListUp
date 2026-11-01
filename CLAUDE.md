@@ -29,7 +29,7 @@ CI 가 typecheck 앞에서 돌린다. 나머지는 수동이고, 타입 검사·
 | API 경로·응답 필드 추가/변경 | `docs/API.md` (+ 타입은 `shared/index.ts`) | 수동 |
 | 호환을 깨지 않는 기능 추가 | `shared` 의 `API_LEVEL` 상향 + 그 위 주석의 수준 목록 + `docs/API.md` `apiLevel` 설명. 새 앱이 그 기능에 기대면 `REQUIRED_SERVER_API_LEVEL` 도 | 수동 |
 | 옛 상대가 못 알아듣는 변경 | `API_VERSION` 상향 — 옛 앱이 전부 막히므로 웬만하면 `API_LEVEL` 로 (이유는 `shared/index.ts` 주석). `e2e/specs/3-version.mjs` | 수동 |
-| 버전 | **`npm run version:set -- <버전>`** 으로만 (package.json 5곳·lock·`app/app.json` version·versionCode) + `docs/releases/v<버전>.md` | `check:sync [2]`(전부 일치·versionCode 공식) `[3]`(노트). 릴리즈 때 `release:publish` 도 package.json·app.json version 과 노트를 다시 본다 |
+| 버전 | **`npm run version:set -- <버전>`** 으로만 (package.json 6곳·lock·`app/app.json` version·versionCode) + `docs/releases/v<버전>.md` | `check:sync [2]`(전부 일치·versionCode 공식) `[3]`(노트). 릴리즈 때 `release:publish` 도 package.json·app.json version 과 노트를 다시 본다 |
 | DB 스키마 | `server/src/db/schema.sql.ts` 의 `MIGRATIONS` 끝에 항목 추가(기존 항목은 고치지 않는다), 위에 **왜** 주석. 데이터를 옮기는(`run`) 마이그레이션은 `server/test/migrations.test.ts` 에 이전 전후 대조 | 수동 |
 | PC 앱 IPC (`window.listupDesktop`) | `shared/index.ts` `DesktopBridge` + `desktop/src/protocol.ts` `IPC` 채널 + `desktop/src/preload.ts` 구현 + `desktop/src/main.ts` `ipcMain.handle` | preload 는 typecheck, main 핸들러는 수동(`test:desktop`) |
 | 앱의 순수 로직(버전 비교·건너뛰기 판정·폴더 대조·서버 목록 읽기 같은 것) | `app/src/lib/pure/` 에 두고 원래 파일이 다시 내보낸다. 거기서는 react-native·expo·`api/client` 를 `import type` 으로만. 사례는 `app/test/*.test.ts` | `npm test` (값 import 가 섞이면 node 에서 불러오다 실패) |

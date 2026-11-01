@@ -27,6 +27,7 @@
 | 누가 내 저장소에 들어왔나 보기 | 소유자는 멤버 화면의 **활동 기록**에서 참여·나감·내보내기·권한 변경·초대 발급·회수를 봅니다. |
 | 기기를 잃어버렸을 때 | 내 정보의 **다른 기기 모두 로그아웃**으로 이 기기만 남기고 끊습니다(비밀번호를 저장해 둔 기기까지 막으려면 비밀번호도 바꿉니다). 로그아웃하면 그 기기의 토큰도 서버에서 끊깁니다. |
 | 실수로 덮어썼을 때 | 변경 이력에서 이전 시점의 파일을 그대로 내려받습니다. |
+| AI 에게 맡기기 | Claude 같은 AI 에 **MCP 서버**(`mcp/`)를 붙이면 저장소를 읽고 변경 제안·의견을 올립니다. AI 전용 계정을 열람자로 초대해 두면 저장소는 사람이 반영하기 전까지 바뀌지 않습니다([7. AI 에게 맡기기](#7-ai-에게-맡기기--mcp-서버)). |
 
 권한은 세 단계입니다.
 
@@ -46,7 +47,8 @@ listup/
 ├─ shared/    타입·권한 규칙·경로 정규화 (서버와 앱이 함께 씀)
 ├─ server/    Fastify + SQLite + 콘텐츠 주소 파일 저장소
 ├─ app/       Expo (React Native) — iOS / Android / 웹
-└─ desktop/   Electron PC 앱 — app 의 웹 빌드 + 앱 안에서 도는 server
+├─ desktop/   Electron PC 앱 — app 의 웹 빌드 + 앱 안에서 도는 server
+└─ mcp/       AI(MCP 클라이언트)용 stdio 서버 — 서버의 HTTP API 를 도구로
 ```
 
 - **서버**: Fastify 5, better-sqlite3, 로컬 파일 스토리지. 외부 서비스 없이 단독 실행됩니다.
@@ -307,6 +309,64 @@ Tailscale 을 쓴다면 `tailscale up` 으로 로그인만 해두고
 고정 주소가 생기면 `LISTUP_CORS_ORIGIN` 을 그 주소로 좁히고, 앱의 서버 주소를 한 번만
 넣으면 됩니다. Windows 서비스로 등록(`cloudflared service install`)하면 부팅 시 자동으로
 뜹니다. 이 과정을 스크립트로 자동화하는 것은 [TODO.md](TODO.md) 의 *고정 주소* 항목에 있습니다.
+
+### 7. AI 에게 맡기기 — MCP 서버
+
+`mcp/` 는 ListUp 의 HTTP API 를 MCP 도구로 감싼 stdio 서버입니다. Claude 같은 MCP 클라이언트가 이 PC 에서
+프로세스로 띄우고, 클라이언트는 그 계정으로 할 수 있는 일만 합니다 — 권한은 서버가 계정의 역할로 판정합니다.
+
+**AI 전용 계정을 만들어 열람자로 초대하기를 권합니다.** 열람자는 파일을 읽고 변경 제안·의견을 올릴 수 있지만
+저장소를 직접 바꾸지는 못하므로, AI 가 낸 변경은 편집자가 검토하고 반영하기 전까지 들어가지 않습니다.
+
+| 도구 | 하는 일 |
+| --- | --- |
+| `server_info` · `list_repos` · `get_repo` | 서버·계정 정보, 참여 중인 저장소와 내 역할, 저장소 요약 |
+| `list_files` · `read_file` | 폴더 목록(하위 폴더까지도), 파일 읽기 — 글은 글로, 그림은 그림으로, 과거 시점·제안에 담긴 내용도 |
+| `list_history` · `list_file_versions` | 변경 이력, 파일 하나의 버전 |
+| `list_proposals` · `get_proposal` · `list_my_proposals` | 제안 목록·상세(충돌 여부·의견), 내 제안(서버 1.8.0+) |
+| `download_file` | 파일을 이 PC 의 **절대 경로**에 저장. 이미 있으면 `overwrite: true` 일 때만 덮어씁니다 |
+| `propose_changes` | 변경 제안 — 글·이 PC 의 파일·이력의 옛 내용(되돌리기)·삭제. 내용은 나눠 올리기로 먼저 올립니다 |
+| `add_comment` | 제안에 의견 달기 |
+
+읽기 도구에는 `readOnlyHint` 가 붙어 있어 클라이언트가 확인 없이 부를 수 있습니다. 파일을 직접 고치는 편집·
+병합·멤버 관리 도구는 아직 없습니다([TODO.md](TODO.md) *MCP 2차*).
+
+설정은 MCP 서버 프로세스의 환경변수로 받습니다(위 서버 환경변수 표와는 별개입니다).
+
+- `LISTUP_URL` — 서버 주소 (`https://<내 노드>.<tailnet>.ts.net` 등, 끝의 `/api` 는 있어도 됨)
+- `LISTUP_TOKEN` — 로그인 토큰. 또는
+- `LISTUP_USERNAME` · `LISTUP_PASSWORD` — 아이디·비밀번호 (`npm run sync` 처럼 `LISTUP_EMAIL` 도 아이디로 받음).
+  토큰과 함께 주면 토큰이 만료됐을 때 다시 로그인합니다
+
+켤 때 `/api/health` 로 `apiVersion` 이 같은지, 기능 수준이 2 이상인지 보고 로그인까지 확인한 뒤 붙습니다.
+안 되면 이유를 stderr 에 남기고 끝납니다. 토큰·비밀번호는 로그에 찍지 않습니다.
+
+리포를 받아 `npm ci` 를 한 번 한 다음(Electron 이 필요 없으면 `ELECTRON_SKIP_BINARY_DOWNLOAD=1`), 클라이언트에
+`node <리포>/mcp/bin/listup-mcp.mjs` 로 등록합니다. **`npm run` 으로 띄우지 않습니다** — stdout 은 MCP 프로토콜
+전용인데 npm 이 머리말을 찍습니다(TypeScript 는 이 파일이 tsx 를 직접 등록해 불러옵니다).
+
+Claude Code:
+
+```bash
+claude mcp add listup -e LISTUP_URL=https://<내 노드>.<tailnet>.ts.net -e LISTUP_USERNAME=ai -e LISTUP_PASSWORD=<비밀번호> -- node <리포>/mcp/bin/listup-mcp.mjs
+```
+
+Claude 데스크톱(`claude_desktop_config.json`, Windows 는 `%APPDATA%\Claude\`):
+
+```json
+{
+  "mcpServers": {
+    "listup": {
+      "command": "node",
+      "args": ["<리포>/mcp/bin/listup-mcp.mjs"],
+      "env": { "LISTUP_URL": "https://<내 노드>.<tailnet>.ts.net", "LISTUP_USERNAME": "ai", "LISTUP_PASSWORD": "<비밀번호>" }
+    }
+  }
+}
+```
+
+비밀번호가 설정 파일에 평문으로 남으므로, 그 파일이 남에게 가지 않게 하고 AI 전용 계정은 다른 곳에서 쓰지
+않는 비밀번호로 만드세요. Node 22 이상이 필요합니다.
 
 ---
 

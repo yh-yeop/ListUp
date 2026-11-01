@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 /** package-lock.json 의 packages 중 버전을 맞추는 항목 ('' 는 루트). */
-export const LOCK_PACKAGES = ['', 'app', 'server', 'shared', 'desktop'];
+export const LOCK_PACKAGES = ['', 'app', 'server', 'shared', 'desktop', 'mcp'];
 
 const readJson = (root, relative) => JSON.parse(fs.readFileSync(path.join(root, relative), 'utf8'));
 
@@ -18,7 +18,7 @@ export function versionCodeOf(v) {
   return major * 10000 + minor * 100 + patch;
 }
 
-/** package.json 5곳과 app/app.json 의 version → { 파일: 값 }. 기준은 루트 package.json. */
+/** package.json 6곳과 app/app.json 의 version → { 파일: 값 }. 기준은 루트 package.json. */
 export function readVersions(root) {
   return {
     'package.json': readJson(root, 'package.json').version,
@@ -26,6 +26,7 @@ export function readVersions(root) {
     'server/package.json': readJson(root, 'server/package.json').version,
     'shared/package.json': readJson(root, 'shared/package.json').version,
     'desktop/package.json': readJson(root, 'desktop/package.json').version,
+    'mcp/package.json': readJson(root, 'mcp/package.json').version,
     'app/app.json': readJson(root, 'app/app.json').expo.version,
   };
 }

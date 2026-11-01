@@ -8,7 +8,7 @@
  *
  * 검사 항목
  *   1. server/src/config.ts KNOWN_ENV  ↔  README 환경변수 표 · 서버가 읽는 LISTUP_*
- *   2. 버전 — package.json 5곳 · package-lock.json · app/app.json version · android.versionCode 공식
+ *   2. 버전 — package.json 6곳 · package-lock.json · app/app.json version · android.versionCode 공식
  *   3. docs/releases/v<버전>.md 존재                  (없으면 release:publish 가 멈춘다)
  *   4. 추적 파일에 실제 tailnet 주소 · Windows 개인 경로가 없음   (이 리포는 공개다)
  *   5. (경고만) docs/ARCHITECTURE.md 구조 블록  ↔  app/src/lib · desktop/src 파일
