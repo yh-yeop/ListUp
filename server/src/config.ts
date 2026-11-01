@@ -183,7 +183,7 @@ export function loadConfig(overrides: Partial<Config> = {}): Config {
     corsOrigin: process.env.LISTUP_CORS_ORIGIN ?? '*',
     // 앱은 조각으로 나눠 올리므로 프록시 요청 한도(Cloudflare 100MB)에 묶이지 않는다.
     maxUploadBytes: envInt('LISTUP_MAX_UPLOAD_MB', 2048, { min: 1 }) * 1024 * 1024,
-    maxRepoBytes: envInt('LISTUP_MAX_REPO_MB', 4096, { min: 1 }) * 1024 * 1024,
+    maxRepoBytes: envInt('LISTUP_MAX_REPO_MB', 10240, { min: 1 }) * 1024 * 1024,
     maxStagingBytesPerDay:
       envInt('LISTUP_MAX_STAGING_MB_PER_DAY', 1024, { min: 1 }) * 1024 * 1024,
     webDir: process.env.LISTUP_WEB_DIR ?? path.resolve(process.cwd(), '../app/dist'),

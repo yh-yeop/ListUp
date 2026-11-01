@@ -146,7 +146,7 @@ npm run server        # http://localhost:4000
 | `LISTUP_AUTH_SECRET` | (개발 시 자동 생성) | 토큰 서명 키. **32자 이상이어야 서버가 켜집니다**(빈 값은 개발 모드에서도 거부). **운영에서는 반드시 지정** — `npm run serve`·PC 앱은 데이터 폴더의 `auth-secret.txt`(64자 16진수)를 만들어 쓴다 |
 | `LISTUP_TOKEN_TTL_DAYS` | `30` | 로그인 유지 기간 |
 | `LISTUP_MAX_UPLOAD_MB` | `2048` | 파일 하나의 최대 크기 (앱은 조각으로 나눠 올리므로 터널의 100MB 요청 한도에 걸리지 않음) |
-| `LISTUP_MAX_REPO_MB` | `4096` | 저장소 하나의 총량 |
+| `LISTUP_MAX_REPO_MB` | `10240` | 저장소 하나의 총량 (10GB) |
 | `LISTUP_MAX_STAGING_MB_PER_DAY` | `1024` | 사용자별 하루 제안용 업로드 총량 |
 | `LISTUP_CORS_ORIGIN` | `*` | 허용 오리진 (쉼표로 여러 개) |
 | `LISTUP_WEB_DIR` | `app/dist` | 함께 서빙할 웹 빌드 위치 |
