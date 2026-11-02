@@ -10,7 +10,7 @@ import { Body, Button, Caption, Card, Row } from './ui';
  * 상태는 lib/transfer-store.ts 에 있고 이 카드는 그리기만 한다(루트의 TransferHost 가 쓴다).
  *
  * progressbar 이름은 단계와 상관없이 `${label} ${percent}%` 로 고정한다 — e2e 가 `/^올리는 중/` 으로 찾는다.
- * 제목 글자만 단계(마무리·반영)와 멈추는 중을 따라 바뀐다.
+ * 제목 글자만 단계(마무리·반영)와 멈추는 중을 따라 바뀌고, 마지막 파일을 마무리하는 중·반영하는 중에는 멈추기가 없다.
  */
 export function TransferProgress({ job, footnote }: { job: TransferJob; footnote?: string }) {
   const { colors } = useTheme();
@@ -18,7 +18,7 @@ export function TransferProgress({ job, footnote }: { job: TransferJob; footnote
   const fraction = progress.totalBytes > 0 ? Math.min(1, progress.sentBytes / progress.totalBytes) : 1;
   const percent = Math.floor(fraction * 100);
   const fileIndex = Math.min(progress.doneFiles + 1, progress.totalFiles);
-  const title = job.cancelling ? '멈추는 중' : phaseLabel(progress.phase, job.label);
+  const title = job.cancelling ? '멈추는 중' : phaseLabel(progress.phase, job.label, job.committingLabel);
 
   return (
     <Card style={{ gap: spacing.sm }}>

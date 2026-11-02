@@ -102,7 +102,26 @@ export default async function run(t, env) {
     // 올리기 — 편집자는 저장소에 바로, 폴더 구조 그대로
     await page.getByRole('tab', { name: /^내 폴더에만/ }).click();
     await page.getByRole('checkbox', { name: '모두 고르기' }).click();
+    // 마무리(complete)·반영(commit)을 늦춰 그 단계의 카드를 본다(U2-7).
+    const slow = async (route) => {
+      if (route.request().method() === 'POST') await new Promise((r) => setTimeout(r, 1500));
+      await route.continue().catch(() => {});
+    };
+    await page.route('**/api/uploads/*/complete', slow);
+    await page.route('**/api/repos/*/files/commit', slow);
+    const stopButtons = () => page.getByRole('button', { name: '멈추기' }).count();
     await page.getByRole('button', { name: '고른 2개 저장소에 올리기' }).click();
+    await page.getByText('서버에서 마무리하는 중 · 1/2').waitFor({ timeout: 10_000 });
+    t.must((await stopButtons()) === 1, '마무리: 뒤에 파일이 남았으면 멈출 수 있다');
+    await page.getByText('서버에서 마무리하는 중 · 2/2').waitFor({ timeout: 10_000 });
+    t.must((await stopButtons()) === 0, '마무리: 마지막 파일을 서버가 맞춰 보는 중에는 멈추기가 없다');
+    t.must((await page.getByRole('progressbar', { name: /^올리는 중/ }).count()) === 1, '마무리 중에도 progressbar 이름은 「올리는 중」');
+    await page.getByText('반영하는 중 · 2/2').waitFor({ timeout: 10_000 });
+    t.must((await stopButtons()) === 0, '반영하는 중에는 멈추기가 없다');
+    await page.getByText('2개를 올렸습니다.').waitFor({ timeout: 10_000 });
+    t.ok('편집자: 올린 뒤 「2개를 올렸습니다.」 토스트');
+    await page.unroute('**/api/uploads/*/complete');
+    await page.unroute('**/api/repos/*/files/commit');
     const untilUp = Date.now() + 20_000;
     let files = [];
     while (Date.now() < untilUp) {
@@ -126,12 +145,39 @@ export default async function run(t, env) {
     await (await vchooser).setFiles(local);
     await vpage.getByRole('tab', { name: /^내 폴더에만/ }).click();
     await vpage.getByRole('checkbox', { name: '모두 고르기' }).click();
+    let proposalDelay = 1500;
+    await vpage.route('**/api/repos/*/proposals', async (route) => {
+      if (route.request().method() === 'POST') await new Promise((r) => setTimeout(r, proposalDelay));
+      await route.continue().catch(() => {});
+    });
     await vpage.getByRole('button', { name: /변경 제안으로 올리기$/ }).click();
+    await vpage.getByText('제안 만드는 중', { exact: false }).waitFor({ timeout: 10_000 });
+    t.must((await vpage.getByRole('button', { name: '멈추기' }).count()) === 0, '열람자: 제안 만드는 중에는 멈추기가 없다');
     await vpage.waitForURL(/\/proposal\//, { timeout: 20_000 });
     const proposals = (await api(A, `/api/repos/${repo.id}/proposals`, undefined, owner.token)).json.proposals;
     t.must(proposals.length === 1 && proposals[0].title.startsWith('내 폴더에서'), '열람자: 변경 제안 하나로 올라가고 그 제안으로 간다');
     const stillMissing = (await api(A, `/api/repos/${repo.id}/files?recursive=1`, undefined, owner.token)).json.tree.files.some((f) => f.path === 'from-viewer.txt');
     t.must(!stillMissing, '열람자: 저장소는 그대로');
+
+    // 열람자가 제안을 만드는 중에 비교 화면을 떠나면 — 끝난 뒤 사라진 화면이 제안으로 끌고 가지 않고 알리기만 한다.
+    fs.writeFileSync(path.join(local, 'from-viewer-2.txt'), 'V2');
+    proposalDelay = 3000;
+    await vpage.goto(`${A}/repo/${repo.id}`);
+    await vpage.getByRole('button', { name: '내 폴더와 비교' }).click();
+    const vchooser2 = vpage.waitForEvent('filechooser');
+    await vpage.getByRole('button', { name: '폴더 고르기' }).click();
+    await (await vchooser2).setFiles(local);
+    await vpage.getByRole('tab', { name: /^내 폴더에만/ }).click();
+    await vpage.getByRole('checkbox', { name: '모두 고르기' }).click();
+    await vpage.getByRole('button', { name: /변경 제안으로 올리기$/ }).click();
+    await vpage.getByText('제안 만드는 중', { exact: false }).waitFor({ timeout: 10_000 });
+    await vpage.getByLabel(/back$/i).first().click();
+    await vpage.waitForURL((url) => !url.pathname.endsWith('/compare'), { timeout: 10_000 });
+    await vpage.getByText(/^제안 #\d+ 을 만들었습니다\.$/).waitFor({ timeout: 15_000 });
+    await vpage.waitForTimeout(500);
+    t.must(!/\/proposal\//.test(vpage.url()), `떠난 뒤 끝난 제안은 토스트만 — 제안 화면으로 끌고 가지 않는다 (${vpage.url()})`);
+    const after = (await api(A, `/api/repos/${repo.id}/proposals`, undefined, owner.token)).json.proposals;
+    t.must(after.length === 2, '떠나도 제안은 끝까지 만들어진다');
   } finally {
     fs.rmSync(work, { recursive: true, force: true });
   }

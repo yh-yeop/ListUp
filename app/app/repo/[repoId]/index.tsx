@@ -34,8 +34,9 @@ import { confirmAction, notify, notifyError } from '../../../src/lib/dialogs';
 import { downloadFromRepo, pickFiles, pickFolder } from '../../../src/lib/files';
 import { listRepoFolder } from '../../../src/lib/folder-compare';
 import { localFolderSupported } from '../../../src/lib/local-folder';
-import { MAX_FAILURES_SHOWN, describeUploadOutcome } from '../../../src/lib/pure/transfer-report';
+import { MAX_FAILURES_SHOWN, describeCommitFailure, describeUploadOutcome } from '../../../src/lib/pure/transfer-report';
 import {
+  CommitFailed,
   isAbandoned,
   remoteFilesOf,
   splitUnchanged,
@@ -195,7 +196,11 @@ export default function RepoFilesScreen() {
       if (notice) notify(notice.title, notice.message, notice.tone);
     } catch (err) {
       if (err instanceof TransferBusy) return;
-      notifyError('반영하지 못했습니다.', err instanceof ApiError ? err.message : undefined);
+      if (err instanceof CommitFailed) {
+        // 다 올렸는데 커밋이 막혔다(이름 겹침·한도 따위) — 올린 파일이 저장소에 없다는 것을 분명히.
+        const notice = describeCommitFailure(err.error, err.uploaded);
+        notify(notice.title, notice.message, notice.tone);
+      } else notifyError('반영하지 못했습니다.', err instanceof ApiError ? err.message : undefined);
     }
   }
 

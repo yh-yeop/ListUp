@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Stack, router, useLocalSearchParams } from 'expo-router';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Platform, Pressable, Switch, Text, View } from 'react-native';
 import { formatBytes, hasRole, normalizePath, type RepoSummary } from '@listup/shared';
 import {
@@ -22,7 +22,8 @@ import { ApiError, api, getMaxUploadBytes, resolveApiUrl } from '../../../src/ap
 import { confirmAction, notify, notifyError, notifySuccess } from '../../../src/lib/dialogs';
 import { compareFolder, listRepoFolder, type RepoFile } from '../../../src/lib/folder-compare';
 import { localFolderSupported, pickLocalFolder, type LocalEntry, type LocalFolder } from '../../../src/lib/local-folder';
-import { isAbandoned, uploadAndCommit, uploadMany } from '../../../src/lib/transfer';
+import { describeCommitFailure } from '../../../src/lib/pure/transfer-report';
+import { CommitFailed, committingProgress, isAbandoned, uploadAndCommit, uploadMany } from '../../../src/lib/transfer';
 import { TransferBusy, runTransfer, useTransfers } from '../../../src/lib/transfer-store';
 import { fontSize, monoFont, radius, spacing, useTheme } from '../../../src/theme';
 
@@ -52,6 +53,15 @@ export default function CompareScreen() {
   // 받기·올리기는 전송 스토어가 맡고 진행 카드는 루트의 TransferHost 가 그린다. 이 저장소에 전송이 있으면 막는다.
   const transfers = useTransfers(repoId);
   const busy = scanning || transfers.jobs.length > 0;
+  // 전송은 이 화면이 사라져도 끝까지 간다. 끝난 뒤의 이동·다시 견주기(setState)는 화면이 남아 있을 때만 —
+  // navigation.isFocused() 는 사라진 화면에서 믿을 수 없어 마운트 여부를 따로 적는다. 토스트는 늘 띄운다.
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   const loadRepo = useCallback(async () => {
     const [{ repo: summary }, files] = await Promise.all([api.getRepo(repoId), listRepoFolder(repoId, basePath)]);
@@ -142,6 +152,7 @@ export default function CompareScreen() {
               doneFiles: index,
               totalFiles: files.length,
               current: file.name,
+              phase: 'sending',
             });
           report(0);
           try {
@@ -177,7 +188,7 @@ export default function CompareScreen() {
       if (toFolder) notifySuccess(`${files.length}개를 받았습니다.`);
       else notifySuccess(`${files.length}개 받기를 시작했습니다.`, '브라우저의 내려받기 목록에서 확인하세요.');
     } else notifyError(`${received}개 받음, ${failures.length}개 실패`, details);
-    if (toFolder) await refresh();
+    if (toFolder && mountedRef.current) await refresh();
   }
 
   async function upload(entries: LocalEntry[]) {
@@ -232,17 +243,24 @@ export default function CompareScreen() {
         }
       } else {
         // 제안 만들기까지 한 전송으로 — 그동안에도 진행 카드가 남는다.
+        const folderLabel = folder?.label ?? '내 폴더';
         const handle = runTransfer({
           ...transfer,
+          committingLabel: '제안 만드는 중',
           task: async (report, signal) => {
             const outcome = await uploadMany(repoId, uploadItems, report, signal);
             if (outcome.uploaded.length === 0 || isAbandoned(signal)) return { ...outcome, proposal: null };
-            const created = await api.createProposal(repoId, {
-              title: `내 폴더에서 ${outcome.uploaded.length}개 추가`,
-              description: `'${folder?.label ?? '내 폴더'}' 와 견줘 저장소에 없던 파일입니다.`,
-              changes: outcome.uploaded.map(({ item, blob }) => ({ path: item.path, blobHash: blob.hash })),
-            });
-            return { ...outcome, proposal: created.proposal };
+            report(committingProgress(uploadItems));
+            try {
+              const created = await api.createProposal(repoId, {
+                title: `내 폴더에서 ${outcome.uploaded.length}개 추가`,
+                description: `'${folderLabel}' 와 견줘 저장소에 없던 파일입니다.`,
+                changes: outcome.uploaded.map(({ item, blob }) => ({ path: item.path, blobHash: blob.hash })),
+              });
+              return { ...outcome, proposal: created.proposal };
+            } catch (err) {
+              throw new CommitFailed(err, outcome.uploaded.length);
+            }
           },
         });
         const { uploaded, failures, cancelled, proposal } = await handle.promise;
@@ -252,7 +270,9 @@ export default function CompareScreen() {
             const why = failures.slice(0, 3).map((f) => `${f.item.path}: ${f.message}`).join('\n');
             notifyError(`${failures.length}개는 올리지 못했습니다.`, why);
           } else if (cancelled) notify(`멈췄습니다 — 다 올린 ${uploaded.length}개로 제안을 만들었습니다.`);
-          router.push(`/proposal/${proposal.id}`);
+          // 그사이 다른 화면으로 갔으면 끌고 가지 않고 알리기만 한다.
+          if (mountedRef.current) router.push(`/proposal/${proposal.id}`);
+          else notifySuccess(`제안 #${proposal.number} 을 만들었습니다.`);
           return;
         }
         if (cancelled) notify('멈췄습니다.', '제안을 만들지 않았습니다.');
@@ -260,9 +280,15 @@ export default function CompareScreen() {
       }
     } catch (err) {
       if (err instanceof TransferBusy) return;
-      notifyError(isEditor ? '반영하지 못했습니다.' : '제안을 만들지 못했습니다.', err instanceof ApiError ? err.message : undefined);
+      if (err instanceof CommitFailed) {
+        // 다 올렸는데 커밋·제안이 막혔다 — 올린 파일이 저장소(제안)에 없다는 것을 분명히.
+        const notice = describeCommitFailure(err.error, err.uploaded, isEditor ? 'commit' : 'proposal');
+        notify(notice.title, notice.message, notice.tone);
+      } else {
+        notifyError(isEditor ? '반영하지 못했습니다.' : '제안을 만들지 못했습니다.', err instanceof ApiError ? err.message : undefined);
+      }
     }
-    await refresh();
+    if (mountedRef.current) await refresh();
   }
 
   if (!localFolderSupported) {

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
   canCancel,
+  describeCommitFailure,
   describeUploadOutcome,
   phaseLabel,
   type UploadSummary,
@@ -73,6 +74,44 @@ describe('canCancel', () => {
 
   it('커밋 중에는 멈추지 못한다', () => {
     assert.equal(canCancel({ phase: 'committing', doneFiles: 3, totalFiles: 3 }), false);
+  });
+
+  it('다 보내고 커밋으로 넘어가기 직전에는 멈출 것이 없다', () => {
+    assert.equal(canCancel({ phase: 'sending', doneFiles: 3, totalFiles: 3 }), false);
+    // 첫 보고 전(파일 수를 모름)에는 멈출 수 있다.
+    assert.equal(canCancel({ phase: 'sending', doneFiles: 0, totalFiles: 0 }), true);
+  });
+});
+
+describe('describeCommitFailure', () => {
+  const serverError = (message: string, details?: unknown) => Object.assign(new Error(message), { status: 409, details });
+
+  it('올린 파일이 반영되지 않았다는 것을 제목에, 서버 메시지를 본문에', () => {
+    const notice = describeCommitFailure(serverError('상위 경로에 파일이 있습니다: 사진'), 2);
+    assert.equal(notice.tone, 'error');
+    assert.equal(notice.title, '반영하지 못했습니다 — 올린 2개는 반영되지 않았습니다.');
+    assert.equal(notice.message, '상위 경로에 파일이 있습니다: 사진');
+  });
+
+  it('겹친 경로는 3개까지, 나머지는 건수로', () => {
+    const notice = describeCommitFailure(serverError('이름이 겹칩니다.', { conflicts: ['a', 'b/c', 'd', 'e', 'f'] }), 5);
+    assert.equal(notice.message, '이름이 겹칩니다.\na\nb/c\nd\n외 2건 더');
+  });
+
+  it('메시지에 이미 나온 경로는 다시 적지 않는다', () => {
+    const notice = describeCommitFailure(
+      serverError('기존 파일·폴더와 이름이 겹치는 경로가 있습니다: x/y.txt', { conflicts: ['x/y.txt'] }),
+      1,
+      'proposal',
+    );
+    assert.equal(notice.title, '제안을 만들지 못했습니다 — 올린 1개는 제안에 담기지 않았습니다.');
+    assert.equal(notice.message, '기존 파일·폴더와 이름이 겹치는 경로가 있습니다: x/y.txt');
+  });
+
+  it('서버 오류가 아니면 제목만', () => {
+    const notice = describeCommitFailure(new TypeError('x is undefined'), 3);
+    assert.equal(notice.title, '반영하지 못했습니다 — 올린 3개는 반영되지 않았습니다.');
+    assert.equal(notice.message, undefined);
   });
 });
 

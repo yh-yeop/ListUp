@@ -3,6 +3,7 @@ import { ApiError, api, type UploadSource } from '../api/client';
 import { desktopBridge } from './desktop';
 import type { CommitResult, UploadedBlob } from '@listup/shared';
 import type { UploadItem } from './pure/transfer-plan';
+import type { TransferPhase } from './pure/transfer-report';
 
 export { remoteFilesOf, splitUnchanged, type RemoteFiles, type UploadItem } from './pure/transfer-plan';
 
@@ -24,7 +25,12 @@ export interface UploadProgress {
   totalFiles: number;
   /** 지금 올리는 파일 이름 */
   current: string;
+  /** 보내는 중·서버에서 마무리하는 중·커밋(제안) 만드는 중 — 카드 제목과 멈추기 버튼이 따른다(pure/transfer-report). */
+  phase: TransferPhase;
 }
+
+/** uploadInChunks 가 알리는 단계 — 파일 하나 안에서는 보내는 중이거나 마무리하는 중이다. */
+export type ChunkPhase = Extract<TransferPhase, 'sending' | 'finishing'>;
 
 /** 조각을 다시 보내는 최대 횟수 (연속 실패). */
 const MAX_RETRIES = 5;
@@ -102,13 +108,14 @@ const wait = (ms: number, signal?: AbortSignal) =>
   });
 
 /**
- * 파일 하나를 나눠 올려 blob 을 받는다. onSent 에는 이 파일에서 보낸 바이트를 알려 준다.
+ * 파일 하나를 나눠 올려 blob 을 받는다. onSent 에는 이 파일에서 보낸 바이트와 단계를 알려 준다 — 마지막 조각을
+ * 보낸 뒤 complete 를 기다리는 동안은 finishing(큰 파일은 서버가 해시를 맞춰 보느라 시간이 걸린다).
  * signal 로 멈추면 보내던 조각을 끊고 TransferCancelled 를 던진다(서버의 세션은 치운다).
  */
 export async function uploadInChunks(
   repoId: string,
   source: UploadSource,
-  onSent: (bytes: number) => void,
+  onSent: (bytes: number, phase: ChunkPhase) => void,
   signal?: AbortSignal,
 ): Promise<UploadedBlob> {
   throwIfCancelled(signal);
@@ -128,12 +135,12 @@ export async function uploadInChunks(
           upload.id,
           offset,
           bytes,
-          (loaded) => onSent(base + loaded),
+          (loaded) => onSent(base + loaded, 'sending'),
           signal,
         );
         offset = next.received;
         retries = 0;
-        onSent(offset);
+        onSent(offset, 'sending');
       } catch (err) {
         // 멈춰서 끊긴 것은 다시 보내지 않는다.
         throwIfCancelled(signal);
@@ -159,6 +166,8 @@ export async function uploadInChunks(
       }
     }
     throwIfCancelled(signal);
+    // 다 보냈다 — 서버가 맞춰 보는 동안 멈추기는 (마지막 파일이면) 숨는다.
+    onSent(upload.size, 'finishing');
     const { blob } = await api.completeUpload(upload.id);
     finished = true;
     return blob;
@@ -196,15 +205,16 @@ export async function uploadMany(
       outcome.cancelled = true;
       break;
     }
-    const report = (sent: number) =>
+    const report = (sent: number, phase: ChunkPhase) =>
       onProgress({
         sentBytes: doneBytes + sent,
         totalBytes,
         doneFiles: index,
         totalFiles: items.length,
         current: item.source.name,
+        phase,
       });
-    report(0);
+    report(0, 'sending');
     try {
       const blob = await uploadInChunks(repoId, item.source, report, signal);
       outcome.uploaded.push({ item, blob });
@@ -221,8 +231,32 @@ export async function uploadMany(
     }
     doneBytes += item.source.size;
   }
-  onProgress({ sentBytes: totalBytes, totalBytes, doneFiles: items.length, totalFiles: items.length, current: '' });
+  onProgress({ ...committingProgress(items), phase: 'sending' });
   return outcome;
+}
+
+/** 다 올린 뒤 커밋·제안을 만드는 중이라고 알릴 진행 정보 — 이때는 멈추기가 없다. */
+export function committingProgress(items: UploadItem[]): UploadProgress {
+  const totalBytes = items.reduce((sum, item) => sum + item.source.size, 0);
+  return { sentBytes: totalBytes, totalBytes, doneFiles: items.length, totalFiles: items.length, current: '', phase: 'committing' };
+}
+
+/**
+ * 다 올린 파일을 커밋(제안)하지 못했다. 올린 blob 은 서버에 남지만 저장소에는 없으므로, 몇 개가 반영되지
+ * 않았는지 알릴 수 있게 그 수를 같이 들고 간다(pure/transfer-report describeCommitFailure).
+ */
+export class CommitFailed extends Error {
+  /** 서버가 돌려준 오류(대개 ApiError) */
+  readonly error: unknown;
+  /** 다 올렸지만 반영되지 않은 파일 수 */
+  readonly uploaded: number;
+
+  constructor(error: unknown, uploaded: number) {
+    super(error instanceof Error ? error.message : '반영하지 못했습니다.');
+    this.name = 'CommitFailed';
+    this.error = error;
+    this.uploaded = uploaded;
+  }
 }
 
 /**
@@ -237,9 +271,14 @@ export async function uploadAndCommit(
 ): Promise<UploadOutcome & { commit: CommitResult | null }> {
   const outcome = await uploadMany(repoId, items, onProgress, signal);
   if (outcome.uploaded.length === 0 || isAbandoned(signal)) return { ...outcome, commit: null };
-  const commit = await api.commitFiles(
-    repoId,
-    outcome.uploaded.map(({ item, blob }) => ({ path: item.path, blobHash: blob.hash })),
-  );
-  return { ...outcome, commit };
+  onProgress(committingProgress(items));
+  try {
+    const commit = await api.commitFiles(
+      repoId,
+      outcome.uploaded.map(({ item, blob }) => ({ path: item.path, blobHash: blob.hash })),
+    );
+    return { ...outcome, commit };
+  } catch (err) {
+    throw new CommitFailed(err, outcome.uploaded.length);
+  }
 }

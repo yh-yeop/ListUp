@@ -1,7 +1,6 @@
 import { useMemo, useSyncExternalStore } from 'react';
 import { onApiTargetChange } from '../api/client';
 import { confirmAction, notify } from './dialogs';
-import type { TransferPhase } from './pure/transfer-report';
 import { abandonTransfer, type UploadProgress } from './transfer';
 
 /**
@@ -14,8 +13,8 @@ import { abandonTransfer, type UploadProgress } from './transfer';
 
 export type TransferKind = 'upload' | 'download';
 
-/** 카드에 보일 진행 정보. phase 가 없으면 보내는 중이다. */
-export type TransferJobProgress = UploadProgress & { phase?: TransferPhase };
+/** 카드에 보일 진행 정보 — 올리기의 진행 정보와 같은 모양이다. 받기는 늘 phase 'sending'. */
+export type TransferJobProgress = UploadProgress;
 
 export interface TransferJob {
   id: number;
@@ -23,6 +22,8 @@ export interface TransferJob {
   repoId: string;
   /** 보내는 중일 때 카드 제목 — 올리는 중·담는 중·받는 중. progressbar 이름의 앞부분이다(e2e 가 찾는다). */
   label: string;
+  /** 다 올린 뒤 커밋 단계의 카드 제목 — 반영하는 중(기본)·제안 만드는 중 */
+  committingLabel?: string;
   /** 멈출지 물을 때 무엇이 남고 무엇이 사라지는지 알려 주는 문구 */
   cancelMessage: string;
   /**
@@ -83,6 +84,7 @@ export function runTransfer<T>(input: {
   kind: TransferKind;
   repoId: string;
   label: string;
+  committingLabel?: string;
   cancelMessage: string;
   owner?: 'store' | 'screen';
   /** 첫 진행 보고 전에 카드에 보일 파일 수 */
@@ -102,9 +104,10 @@ export function runTransfer<T>(input: {
     kind,
     repoId,
     label: input.label,
+    committingLabel: input.committingLabel,
     cancelMessage: input.cancelMessage,
     owner: input.owner ?? 'store',
-    progress: { sentBytes: 0, totalBytes: 0, doneFiles: 0, totalFiles: input.totalFiles ?? 0, current: '' },
+    progress: { sentBytes: 0, totalBytes: 0, doneFiles: 0, totalFiles: input.totalFiles ?? 0, current: '', phase: 'sending' },
     cancelling: false,
   };
   setState({ ...state, jobs: [...state.jobs, job] });

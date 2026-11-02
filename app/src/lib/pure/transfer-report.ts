@@ -20,11 +20,12 @@ export interface PhasedProgress {
 /**
  * 멈추기 버튼을 보일지. 커밋 중이나 마지막 파일을 마무리하는 중에 멈추면 다 보낸 것을 버리게 되거나
  * 서버는 이미 반영했는데 화면만 「멈췄습니다」가 되므로 막는다. 중간 파일의 마무리는 멈춰도 그 뒤 파일만 안 보낸다.
+ * 파일을 다 보내고 커밋으로 넘어가기 직전(보내는 중인데 남은 파일이 없음)도 멈출 것이 없다.
  */
 export function canCancel(progress: PhasedProgress): boolean {
   switch (progress.phase ?? 'sending') {
     case 'sending':
-      return true;
+      return progress.totalFiles === 0 || progress.doneFiles < progress.totalFiles;
     case 'finishing':
       return progress.doneFiles + 1 < progress.totalFiles;
     default:
@@ -103,4 +104,43 @@ export function describeUploadOutcome(summary: UploadSummary): Notice | null {
     return { tone: 'info', title: '바뀐 파일이 없습니다.', message: '올린 파일이 저장소에 있는 것과 같습니다.' };
   }
   return null;
+}
+
+/** 서버 오류처럼 보이는 것(ApiError 의 모양) — 이 파일은 api/client 를 값으로 불러오지 않는다. */
+interface ServerErrorLike {
+  status: number;
+  message: string;
+  details?: unknown;
+}
+
+function asServerError(err: unknown): ServerErrorLike | null {
+  if (typeof err !== 'object' || err === null) return null;
+  const { status, message } = err as Partial<ServerErrorLike>;
+  return typeof status === 'number' && typeof message === 'string' ? (err as ServerErrorLike) : null;
+}
+
+/**
+ * 다 올린 뒤 커밋(제안)을 못 했을 때의 토스트. 올린 파일이 저장소에 없다는 것을 제목에 분명히 하고, 서버 메시지와
+ * 이름이 겹친 경로(서버가 details.conflicts 로 주면, 메시지에 이미 없는 것만 MAX_FAILURES_SHOWN 개)를 붙인다.
+ * 서버 오류가 아니면(코드 오류 따위) 제목만.
+ */
+export function describeCommitFailure(
+  err: unknown,
+  uploadedCount: number,
+  target: 'commit' | 'proposal' = 'commit',
+): Notice {
+  const title =
+    target === 'proposal'
+      ? `제안을 만들지 못했습니다 — 올린 ${uploadedCount}개는 제안에 담기지 않았습니다.`
+      : `반영하지 못했습니다 — 올린 ${uploadedCount}개는 반영되지 않았습니다.`;
+  const server = asServerError(err);
+  if (!server) return { tone: 'error', title };
+  const lines = [server.message];
+  const raw = (server.details as { conflicts?: unknown } | undefined)?.conflicts;
+  const conflicts = Array.isArray(raw)
+    ? raw.filter((path): path is string => typeof path === 'string' && !server.message.includes(path))
+    : [];
+  lines.push(...conflicts.slice(0, MAX_FAILURES_SHOWN));
+  if (conflicts.length > MAX_FAILURES_SHOWN) lines.push(`외 ${conflicts.length - MAX_FAILURES_SHOWN}건 더`);
+  return { tone: 'error', title, message: lines.filter(Boolean).join('\n') || undefined };
 }

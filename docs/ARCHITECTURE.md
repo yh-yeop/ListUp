@@ -230,7 +230,7 @@ app/
    ├─ lib/pure/               플랫폼 import 가 없는 순수 로직. 원래 파일이 다시 내보내고, app/test 가 node 로 검사
    │  ├─ versions.ts          버전 비교(compareVersions) ← updates
    │  ├─ transfer-plan.ts     이미 올라간 파일 건너뛰기 판정 ← transfer
-   │  ├─ transfer-report.ts   전송 단계 이름·멈출 수 있는지, 올린 결과 토스트 문구 ← TransferProgress·repo/[repoId]/index
+   │  ├─ transfer-report.ts   전송 단계 이름·멈출 수 있는지, 올린 결과·커밋 실패 토스트 문구 ← TransferProgress·repo/[repoId]/index·compare
    │  ├─ compare-core.ts      폴더 대조(이름 NFC/NFD 맞추기) ← folder-compare
    │  ├─ server-store.ts      서버 목록 읽기·정리, 예전 저장 키 이전 규칙(storeFromLegacy) ← state/servers
    │  ├─ repo-search.ts       저장소 찾기(이름 일치 먼저, 5개부터 칸을 보임) ← search
