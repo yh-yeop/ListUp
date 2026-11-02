@@ -191,6 +191,7 @@ export default function RepoFilesScreen() {
         uploaded: result.uploaded.length,
         failures: result.failures.map((f) => ({ name: f.item.source.name, message: f.message })),
         cancelled: result.cancelled,
+        offline: result.offline,
         commit: result.commit,
       });
       if (notice) notify(notice.title, notice.message, notice.tone);

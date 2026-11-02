@@ -23,6 +23,7 @@ import {
 import { ApiError, api, getMaxUploadBytes } from '../../../src/api/client';
 import { confirmAction, notify, notifyError } from '../../../src/lib/dialogs';
 import { pickFiles } from '../../../src/lib/files';
+import { OFFLINE_HINT } from '../../../src/lib/pure/transfer-report';
 import { isAbandoned, uploadMany } from '../../../src/lib/transfer';
 import { TransferBusy, runTransfer, useTransfers, type TransferHandle } from '../../../src/lib/transfer-store';
 import { useAsync } from '../../../src/lib/useAsync';
@@ -151,10 +152,11 @@ export default function NewProposalScreen() {
         }
         jobRef.current = handle;
         setJobId(handle.id);
-        const { uploaded, failures, cancelled } = await handle.promise;
+        const { uploaded, failures, cancelled, offline } = await handle.promise;
         // 화면을 버려 멈췄거나, 서버를 바꿔 그만뒀다 — 담을 곳이 없다.
         if (!mountedRef.current || isAbandoned(handle.signal)) return;
         if (cancelled) notify(`멈췄습니다 — ${uploaded.length}/${accepted.length}개 담음`);
+        if (offline) notifyError(`연결이 끊겼습니다 — ${uploaded.length}/${accepted.length}개 담음`, OFFLINE_HINT);
         for (const { item, blob } of uploaded) {
           keySeq.current += 1;
           added.push({

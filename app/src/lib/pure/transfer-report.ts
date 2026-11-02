@@ -66,6 +66,8 @@ export interface UploadSummary {
   failures: { name: string; message: string }[];
   /** 사용자가 도중에 멈췄다 */
   cancelled: boolean;
+  /** 연결이 오래 끊겨 그만뒀다(lib/transfer.ts TransferOffline). 끊긴 파일의 세션은 서버와 기기에 남아 있다. */
+  offline?: boolean;
   /** 커밋 결과. 하나도 못 올렸으면 null */
   commit: { added: number; updated: number } | null;
 }
@@ -73,18 +75,30 @@ export interface UploadSummary {
 /** 실패 안내에 나열할 최대 건수. 나머지는 'n건 더' 로 줄인다. */
 export const MAX_FAILURES_SHOWN = 3;
 
+/** 연결이 끊겨 그만뒀을 때 덧붙이는 안내 — 같은 파일을 다시 고르면 기억해 둔 세션에 이어 보낸다. */
+export const OFFLINE_HINT = '연결되면 같은 파일을 다시 올리세요. 받은 데서 이어 갑니다.';
+
 /**
  * 파일 화면에서 올리고 커밋한 결과를 토스트 하나로. 1개를 그대로 올린 것처럼 목록만 봐도 알 수 있으면 null
  * (토스트 없음). 멈춘 경우의 제목 `멈췄습니다 — N/M개 올림` 은 e2e(10-polish)가 그대로 찾는다.
+ * 연결이 끊겨 그만둔 경우는 `연결이 끊겼습니다 — N/M개 올림` 과 다시 올리면 이어 간다는 안내.
  */
 export function describeUploadOutcome(summary: UploadSummary): Notice | null {
-  const { total, uploaded, failures, cancelled, commit } = summary;
+  const { total, uploaded, failures, cancelled, offline, commit } = summary;
   if (cancelled) {
     return {
       tone: 'info',
       title: `멈췄습니다 — ${uploaded}/${total}개 올림`,
       message:
         uploaded > 0 ? '다 올린 파일은 저장소에 반영했습니다. 나머지는 올리지 않았습니다.' : '저장소는 그대로입니다.',
+    };
+  }
+  if (offline) {
+    return {
+      tone: 'error',
+      title: `연결이 끊겼습니다 — ${uploaded}/${total}개 올림`,
+      message: uploaded > 0 && commit ? `다 올린 파일은 저장소에 반영했습니다.
+${OFFLINE_HINT}` : OFFLINE_HINT,
     };
   }
   if (failures.length > 0) {

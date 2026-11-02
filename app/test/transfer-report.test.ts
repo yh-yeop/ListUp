@@ -55,6 +55,22 @@ describe('describeUploadOutcome', () => {
   it('1개를 그대로 올렸으면 토스트 없음', () => {
     assert.equal(describeUploadOutcome(summary({ total: 1, uploaded: 1, commit: { added: 1, updated: 0 } })), null);
   });
+
+  it('연결이 끊겨 그만뒀으면 몇 개 올렸는지와 다시 올리면 이어 간다는 안내', () => {
+    const failures = [
+      { name: 'b', message: '연결이 끊겼습니다.' },
+      { name: 'c', message: '연결이 끊겨 보내지 못했습니다' },
+    ];
+    const none = describeUploadOutcome(summary({ uploaded: 0, failures, offline: true, commit: null }));
+    assert.deepEqual(none, {
+      tone: 'error',
+      title: '연결이 끊겼습니다 — 0/3개 올림',
+      message: '연결되면 같은 파일을 다시 올리세요. 받은 데서 이어 갑니다.',
+    });
+    const some = describeUploadOutcome(summary({ uploaded: 1, failures, offline: true, commit: { added: 1, updated: 0 } }));
+    assert.equal(some?.title, '연결이 끊겼습니다 — 1/3개 올림');
+    assert.equal(some?.message, '다 올린 파일은 저장소에 반영했습니다.\n연결되면 같은 파일을 다시 올리세요. 받은 데서 이어 갑니다.');
+  });
 });
 
 describe('canCancel', () => {

@@ -72,8 +72,18 @@ users ──┬─< repo_members >─┬── repos ──┬─< repo_files >�
   때만 바꿔 끼우므로, 끊긴 조각을 같은 위치에서 다시 보내도 이어 계산이 살아 있습니다. 서버를 다시 켜 이어
   계산이 없으면 완료 때 파일 전체를 다시 읽습니다. 완료 결과는 10분 동안 기억해, 응답을 못 받은 앱이 다시
   complete 를 불러도 같은 blob 을 받습니다(같은 사용자·아직 멤버일 때만).
-- **앱** — 조각을 `XMLHttpRequest` 로 보내 조각 안 진행률까지 합산하고, 실패하면 서버에 받은 길이를
-  물어 이어 보냅니다(`lib/transfer.ts`).
+- **앱** — 조각을 `XMLHttpRequest` 로 보내 조각 안 진행률까지 합산하고, 연결이 끊기면 5분 동안
+  (1·2·4·8·15·15…초 간격) 서버에 받은 길이를 물어 이어 보냅니다(`lib/transfer.ts`). complete 의 응답을 못
+  받았거나 `409`(조각을 받는 중)면 그 창 안에서 다시 부르고, 덜 받았다는 `409` 면 조각으로 돌아갑니다.
+  5분을 넘기면 그만두되 서버의 세션은 **지우지 않고** 기기에 기억해 둡니다(`lib/upload-sessions.ts`,
+  `listup.uploadSessions`, 20시간·200개). 키는 서버 주소·저장소·경로(`relativePath` 없으면 이름, NFC)·크기·
+  고친 시각이고, 고친 시각을 모르면 기억하지 않습니다 — 서버는 offset 만 보므로 같은 크기로 고친 파일을 옛
+  세션에 이어 붙이면 조용히 틀린 파일이 되기 때문입니다. 같은 파일을 다시 올리면 기억한 세션을 `GET` 으로
+  확인해(이름·크기가 같아야) 받은 데서 이어 가고, 그 세션의 첫 요청이 `409`(받은 위치) 아닌 오류면 치우고 새
+  세션으로 한 번 더 보냅니다. 세션을 서버에서 치우는(`DELETE`) 것은 사용자가 멈췄거나 다시 해도 안 되는
+  실패(4xx·파일을 못 읽음)일 때뿐이고, 끊김·5xx 에는 남깁니다. 여러 파일이면 끊긴 파일 뒤의 나머지는
+  「연결이 끊겨 보내지 못했습니다」로 남기고 멈춥니다. PC 앱 파일은 `folders.scan` 이 주는 `mtimeMs` 로
+  가르므로, 그것을 주지 않는 1.9 PC 앱에서는 이어 가지 않고 처음부터 보냅니다.
 - **내려받기** — 앱은 짧게 사는 다운로드 링크를 받아 브라우저(웹)·다운로드 작업(네이티브)에 넘깁니다.
   파일 전체를 메모리에 올리지 않고, 이어받기(`Range`)도 됩니다. 폴더는 같은 링크로 zip 을 흘려보냅니다
   (`yazl`, 압축 없이 담기, 미리 계산한 `Content-Length`, ZIP64).
@@ -212,7 +222,8 @@ app/
    ├─ lib/server-list.ts      서버 목록을 스택 맨 아래로 열기
    ├─ lib/files.ts            플랫폼별 파일·폴더 선택, 링크로 내려받기
    ├─ lib/save-folder.ts      안드로이드에서 받은 파일을 둘 폴더(한 번 고르고 기억)
-   ├─ lib/transfer.ts         나눠 올리기(진행률·이어 보내기)와 여러 파일 커밋
+   ├─ lib/transfer.ts         나눠 올리기(진행률·이어 보내기·끊기면 5분 다시 시도)와 여러 파일 커밋
+   ├─ lib/upload-sessions.ts  끊긴 올리기 세션을 기기에 기억(AsyncStorage listup.uploadSessions) — 다시 올리면 이어 감
    ├─ lib/transfer-store.ts   진행 중인 전송(진행률·멈추기)을 화면 밖에 — runTransfer, 저장소당 올리기 하나, 서버 전환·로그아웃 때 그만둠
    ├─ lib/invite-link.ts      초대 링크 만들기, 로그인 뒤까지 들고 가는 초대 코드
    ├─ lib/dialogs.ts          웹/네이티브 확인 대화상자
@@ -230,6 +241,7 @@ app/
    ├─ lib/pure/               플랫폼 import 가 없는 순수 로직. 원래 파일이 다시 내보내고, app/test 가 node 로 검사
    │  ├─ versions.ts          버전 비교(compareVersions) ← updates
    │  ├─ transfer-plan.ts     이미 올라간 파일 건너뛰기 판정 ← transfer
+   │  ├─ upload-sessions.ts   끊긴 세션 기억 키(서버·저장소·경로·크기·고친 시각, 시각 모르면 없음)·20시간/200개 정리 ← upload-sessions
    │  ├─ transfer-report.ts   전송 단계 이름·멈출 수 있는지, 올린 결과·커밋 실패 토스트 문구 ← TransferProgress·repo/[repoId]/index·compare
    │  ├─ compare-core.ts      폴더 대조(이름 NFC/NFD 맞추기) ← folder-compare
    │  ├─ server-store.ts      서버 목록 읽기·정리, 예전 저장 키 이전 규칙(storeFromLegacy) ← state/servers

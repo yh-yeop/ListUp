@@ -104,6 +104,119 @@ export default async function run(t, env) {
     t.must(aborted === 1, '두 번째 조각 요청을 한 번 끊었다');
     t.must((await rawHash('resume.bin')) === sha(resumeFile), '끊긴 뒤 이어서 올라가 내용이 그대로');
 
+    // 끊겨 그만둔 올리기를 다시 하면 처음부터가 아니라 받은 데서 이어 간다(U2-2) — 앱은 세션을 지우지 않고
+    // 기억해 둔다(listup.uploadSessions). 새로고침으로 앱이 올리던 것을 잊은 상황을 만든다.
+    const sessionsInApp = () => page.evaluate(() => JSON.parse(localStorage.getItem('listup.uploadSessions') ?? '{}'));
+    const uploadRequests = () => {
+      const seen = { posts: [], puts: [], deletes: [] };
+      const watch = (r) => {
+        if (r.method() === 'POST' && r.url().includes(`/api/repos/${repo.id}/uploads`)) seen.posts.push(r.url());
+        if (r.method() === 'PUT' && r.url().includes('/api/uploads/')) seen.puts.push(r.url());
+        if (r.method() === 'DELETE' && r.url().includes('/api/uploads/')) seen.deletes.push(r.url());
+      };
+      page.on('request', watch);
+      return { ...seen, stop: () => page.off('request', watch) };
+    };
+    const pickOne = async (file) => {
+      const chooser = page.waitForEvent('filechooser');
+      await page.getByRole('button', { name: '파일 올리기' }).click();
+      await (await chooser).setFiles(file);
+    };
+    /** 첫 조각을 보내고 둘째 조각을 붙잡은 채 새로고침한다. 그때 앱이 기억하던 세션 id 들을 돌려준다. */
+    const reloadMidUpload = async (file) => {
+      let hold;
+      const held = new Promise((resolve) => (hold = resolve));
+      await ctx.route('**/api/uploads/**', (route) => {
+        const req = route.request();
+        if (req.method() === 'PUT' && !req.url().includes('offset=0')) return hold(route);
+        return route.continue();
+      });
+      await pickOne(file);
+      const route = await held;
+      await page.waitForFunction(() => (localStorage.getItem('listup.uploadSessions') ?? '{}') !== '{}');
+      const ids = Object.values(await sessionsInApp()).map((entry) => entry.uploadId);
+      await page.reload();
+      await route.abort().catch(() => {});
+      await ctx.unroute('**/api/uploads/**');
+      await page.getByRole('button', { name: '파일 올리기' }).waitFor();
+      return ids;
+    };
+    const patterned = (seed) => {
+      const buffer = Buffer.alloc(20 * 1024 * 1024);
+      for (let i = 0; i < buffer.length; i += 4096) buffer.writeUInt32LE((i ^ seed) >>> 0, i);
+      return buffer;
+    };
+
+    // ① 새로고침 뒤 같은 파일을 다시 고르면 — 새 세션 없이 기억해 둔 세션의 받은 데(첫 조각 뒤)부터.
+    const againFile = patterned(0x5a5a5a5a);
+    fs.writeFileSync(path.join(work, 'again.bin'), againFile);
+    const [againId, ...extra] = await reloadMidUpload(path.join(work, 'again.bin'));
+    t.must(againId && extra.length === 0, '올리기를 시작하면 세션을 기억해 둔다');
+    const resumed = uploadRequests();
+    await pickOne(path.join(work, 'again.bin'));
+    await page.getByRole('button', { name: 'again.bin 내려받기' }).first().waitFor({ timeout: 60000 });
+    resumed.stop();
+    t.must(resumed.posts.length === 0, `다시 고르면 새 세션을 만들지 않는다 (POST ${resumed.posts.length}번)`);
+    t.must(
+      resumed.puts.length > 0 && resumed.puts[0].includes(againId) && !resumed.puts[0].includes('offset=0'),
+      `첫 조각 요청이 받은 데서부터 (${resumed.puts[0] ?? '없음'})`,
+    );
+    t.must((await rawHash('again.bin')) === sha(againFile), '이어 올린 파일 내용이 그대로');
+    t.must(Object.keys(await sessionsInApp()).length === 0, '다 올리면 기억에서 지운다');
+
+    // ② 연결이 계속 끊겨 있는 동안(조각 요청을 5초 동안 모두 끊음) 세션을 지우지 않고 기다렸다가, 풀리면 끝낸다.
+    const steadyFile = Buffer.alloc(12 * 1024 * 1024, 3);
+    fs.writeFileSync(path.join(work, 'steady.bin'), steadyFile);
+    let cutting = true;
+    let cut = 0;
+    await ctx.route('**/api/uploads/**', (route) => {
+      const req = route.request();
+      if (cutting && req.method() === 'PUT' && !req.url().includes('offset=0')) {
+        cut += 1;
+        return route.abort('connectionreset');
+      }
+      return route.continue();
+    });
+    const steady = uploadRequests();
+    await pickOne(path.join(work, 'steady.bin'));
+    while (cut === 0) await page.waitForTimeout(50);
+    await page.waitForTimeout(5000);
+    t.must(cut >= 2, `끊긴 동안 다시 보내 본다 (${cut}번)`);
+    t.must(steady.deletes.length === 0, '끊긴 동안 업로드 세션을 지우지 않는다 (DELETE 없음)');
+    cutting = false;
+    await page.getByRole('button', { name: 'steady.bin 내려받기' }).first().waitFor({ timeout: 60000 });
+    await ctx.unroute('**/api/uploads/**');
+    steady.stop();
+    t.must(steady.deletes.length === 0 && steady.posts.length === 1, '연결이 돌아오면 같은 세션으로 끝낸다');
+    t.must((await rawHash('steady.bin')) === sha(steadyFile), '오래 끊긴 뒤 올린 내용이 그대로');
+
+    // ③ 기억해 둔 세션이 첫 조각부터 막히면(서버 오류) 그 세션은 치우고 새 세션으로 처음부터 한 번 더.
+    const staleFile = patterned(0x0f0f0f0f);
+    fs.writeFileSync(path.join(work, 'stale.bin'), staleFile);
+    const [staleId] = await reloadMidUpload(path.join(work, 'stale.bin'));
+    let failed = 0;
+    await ctx.route('**/api/uploads/**', (route) => {
+      const req = route.request();
+      if (req.method() === 'PUT' && req.url().includes(staleId) && failed === 0) {
+        failed += 1;
+        return route.fulfill({
+          status: 500,
+          contentType: 'application/json',
+          body: JSON.stringify({ error: { code: 'internal', message: '시험용 서버 오류' } }),
+        });
+      }
+      return route.continue();
+    });
+    const restarted = uploadRequests();
+    await pickOne(path.join(work, 'stale.bin'));
+    await page.getByRole('button', { name: 'stale.bin 내려받기' }).first().waitFor({ timeout: 60000 });
+    await ctx.unroute('**/api/uploads/**');
+    restarted.stop();
+    t.must(failed === 1, '기억해 둔 세션의 첫 조각을 서버 오류로 막았다');
+    t.must(restarted.deletes.some((u) => u.includes(staleId)), '막힌 세션은 서버에서 치운다');
+    t.must(restarted.posts.length === 1, `새 세션을 한 번 만든다 (POST ${restarted.posts.length}번)`);
+    t.must((await rawHash('stale.bin')) === sha(staleFile), '새 세션으로 올린 내용이 그대로');
+
     // 폴더 올리기 — 구조 그대로, 커밋 하나
     fs.mkdirSync(path.join(work, '사진', '여름'), { recursive: true });
     fs.writeFileSync(path.join(work, '사진', '여름', 'a.txt'), 'A');

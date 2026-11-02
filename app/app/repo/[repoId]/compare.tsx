@@ -22,7 +22,7 @@ import { ApiError, api, getMaxUploadBytes, resolveApiUrl } from '../../../src/ap
 import { confirmAction, notify, notifyError, notifySuccess } from '../../../src/lib/dialogs';
 import { compareFolder, listRepoFolder, type RepoFile } from '../../../src/lib/folder-compare';
 import { localFolderSupported, pickLocalFolder, type LocalEntry, type LocalFolder } from '../../../src/lib/local-folder';
-import { describeCommitFailure } from '../../../src/lib/pure/transfer-report';
+import { OFFLINE_HINT, describeCommitFailure } from '../../../src/lib/pure/transfer-report';
 import { CommitFailed, committingProgress, isAbandoned, uploadAndCommit, uploadMany } from '../../../src/lib/transfer';
 import { TransferBusy, runTransfer, useTransfers } from '../../../src/lib/transfer-store';
 import { fontSize, monoFont, radius, spacing, useTheme } from '../../../src/theme';
@@ -227,11 +227,13 @@ export default function CompareScreen() {
           ...transfer,
           task: (report, signal) => uploadAndCommit(repoId, uploadItems, report, signal),
         });
-        const { uploaded, failures, cancelled } = await handle.promise;
+        const { uploaded, failures, cancelled, offline } = await handle.promise;
         // 서버를 바꿨거나 로그아웃해 그만뒀다 — 스토어가 이미 알렸다.
         if (isAbandoned(handle.signal)) return;
         const details = failures.slice(0, 3).map((f) => `${f.item.path}: ${f.message}`).join('\n') || undefined;
-        if (cancelled) {
+        if (offline) {
+          notifyError(`연결이 끊겼습니다 — ${uploaded.length}/${uploadItems.length}개 올림`, OFFLINE_HINT);
+        } else if (cancelled) {
           notify(
             `멈췄습니다 — ${uploaded.length}/${uploadItems.length}개 올림`,
             uploaded.length > 0 ? '다 올린 파일은 저장소에 반영했습니다.' : '저장소는 그대로입니다.',
@@ -263,10 +265,12 @@ export default function CompareScreen() {
             }
           },
         });
-        const { uploaded, failures, cancelled, proposal } = await handle.promise;
+        const { uploaded, failures, cancelled, offline, proposal } = await handle.promise;
         if (isAbandoned(handle.signal)) return;
         if (proposal) {
-          if (failures.length > 0) {
+          if (offline) {
+            notifyError(`연결이 끊겼습니다 — 다 올린 ${uploaded.length}개로 제안을 만들었습니다.`, OFFLINE_HINT);
+          } else if (failures.length > 0) {
             const why = failures.slice(0, 3).map((f) => `${f.item.path}: ${f.message}`).join('\n');
             notifyError(`${failures.length}개는 올리지 못했습니다.`, why);
           } else if (cancelled) notify(`멈췄습니다 — 다 올린 ${uploaded.length}개로 제안을 만들었습니다.`);
@@ -276,6 +280,7 @@ export default function CompareScreen() {
           return;
         }
         if (cancelled) notify('멈췄습니다.', '제안을 만들지 않았습니다.');
+        else if (offline) notifyError('연결이 끊겼습니다 — 제안을 만들지 않았습니다.', OFFLINE_HINT);
         else notifyError('올리지 못했습니다.', failures.slice(0, 3).map((f) => `${f.item.path}: ${f.message}`).join('\n'));
       }
     } catch (err) {

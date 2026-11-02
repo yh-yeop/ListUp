@@ -66,6 +66,14 @@ export const IS_CLIENT_BUILD =
 /** 요청을 보낼 서버. null 이면 아직 고른 서버가 없다(클라이언트 모드). */
 let apiBaseUrl: string | null = IS_CLIENT_BUILD ? null : DEFAULT_API_BASE_URL;
 let authToken: string | null = null;
+/**
+ * 지금 요청을 보내는 서버 주소(서버가 주는 웹이면 빈 문자열). 고른 서버가 없으면 null.
+ * 끊긴 올리기 세션을 서버마다 따로 기억하는 데 쓴다(lib/transfer.ts).
+ */
+export function currentApiBaseUrl(): string | null {
+  return apiBaseUrl;
+}
+
 /** setApiTarget 을 지켜보는 쪽(onApiTargetChange). */
 const targetListeners = new Set<(change: ApiTargetChange) => void>();
 
@@ -292,8 +300,11 @@ export type UploadSource =
       relativePath?: string;
       lastModified?: number;
     }
-  /** PC 앱에서 고른 폴더 안의 파일 — 창은 직접 못 읽고 PC 앱(main)이 조각을 읽어 준다. 나눠 올리기로만. */
-  | { kind: 'desktop'; root: string; relativePath: string; name: string; size: number };
+  /**
+   * PC 앱에서 고른 폴더 안의 파일 — 창은 직접 못 읽고 PC 앱(main)이 조각을 읽어 준다. 나눠 올리기로만.
+   * lastModified 는 끊긴 올리기를 이어 갈 때 같은 파일인지 보는 데만 쓴다(1.9 PC 앱은 주지 않는다).
+   */
+  | { kind: 'desktop'; root: string; relativePath: string; name: string; size: number; lastModified?: number };
 
 /** 조각 하나를 보내는 동안 기다리는 최대 시간. 느린 모바일 망에서 8MB 가 넉넉히 들어가게. */
 const CHUNK_TIMEOUT_MS = 120_000;

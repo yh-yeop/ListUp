@@ -667,6 +667,11 @@ export interface DesktopHost {
 export interface LocalFileEntry {
   relativePath: string;
   size: number;
+  /**
+   * 마지막으로 고친 때(ms). 끊긴 올리기를 이어 갈 때 같은 파일인지 보는 데 쓴다 — 없으면(1.9 PC 앱) 이어 가지
+   * 않고 처음부터 보낸다.
+   */
+  mtimeMs?: number;
 }
 
 /**

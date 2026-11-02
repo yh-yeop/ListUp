@@ -54,7 +54,8 @@ export async function scanFolder(root: string): Promise<{ entries: LocalFileEntr
       if (item.isDirectory()) await walk(full, relativePath);
       else if (item.isFile() && !JUNK.has(item.name.toLowerCase()) && !item.name.endsWith(PART_SUFFIX)) {
         try {
-          entries.push({ relativePath, size: (await fsp.stat(full)).size });
+          const stat = await fsp.stat(full);
+          entries.push({ relativePath, size: stat.size, mtimeMs: Math.floor(stat.mtimeMs) });
         } catch {
           // 훑는 사이 지워졌다.
         }

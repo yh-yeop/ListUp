@@ -78,7 +78,14 @@ async function scanDesktop(root: string): Promise<LocalFolder> {
         relativePath: entry.relativePath,
         name,
         size: entry.size,
-        source: { kind: 'desktop', root, relativePath: entry.relativePath, name, size: entry.size },
+        source: {
+          kind: 'desktop',
+          root,
+          relativePath: entry.relativePath,
+          name,
+          size: entry.size,
+          lastModified: entry.mtimeMs,
+        },
       };
     }),
     rescan: () => scanDesktop(root),
@@ -110,7 +117,8 @@ function scanAndroid(root: Directory): LocalFolder {
       if (item instanceof Directory) {
         walk(item, relativePath);
       } else if (!JUNK.has(item.name.toLowerCase())) {
-        const size = item.info().size ?? 0;
+        const info = item.info();
+        const size = info.size ?? 0;
         entries.push({
           relativePath,
           name: item.name,
@@ -122,6 +130,7 @@ function scanAndroid(root: Directory): LocalFolder {
             size,
             mimeType: 'application/octet-stream',
             relativePath,
+            lastModified: info.modificationTime ?? undefined,
           },
         });
       }
@@ -208,7 +217,7 @@ function pickOnWeb(): Promise<LocalFolder | null> {
           relativePath,
           name: file.name,
           size: file.size,
-          source: { kind: 'web', file, name: file.name, size: file.size, relativePath },
+          source: { kind: 'web', file, name: file.name, size: file.size, relativePath, lastModified: file.lastModified },
         });
       }
       finish({
