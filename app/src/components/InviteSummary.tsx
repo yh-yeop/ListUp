@@ -3,7 +3,9 @@ import { useEffect, useState } from 'react';
 import { View } from 'react-native';
 import { ROLE_DESCRIPTION, ROLE_LABEL, formatInviteCode, type InvitePreview } from '@listup/shared';
 import { ApiError, api } from '../api/client';
-import { markPendingInviteSeen, peekPendingInvite } from '../lib/invite-link';
+import { isUnusableInviteStatus, markPendingInviteSeen, peekPendingInvite } from '../lib/invite-link';
+import { useAuth } from '../state/auth';
+import { serverUrl } from '../state/servers';
 import { fontSize, radius, spacing, useTheme } from '../theme';
 import { Badge, Body, Caption, Card, Row } from './ui';
 
@@ -38,11 +40,17 @@ export function InviteSummary({ preview }: { preview: InvitePreview }) {
 /**
  * 로그인하지 않은 채 들고 있는 초대 코드의 미리보기(서버 수준 5부터 로그인 없이 열린다). 보여 주고 나면
  * 로그인·가입 뒤 다시 묻지 않고 바로 참여한다. 옛 서버(401)면 미리보기 없이 코드만으로 이어 간다.
+ * `unusable` 은 회수·만료·소진·없는 코드라 더 들고 갈 이유가 없다는 뜻이다.
  */
 export function usePendingInvitePreview(code: string | null) {
   const [preview, setPreview] = useState<InvitePreview | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [unusable, setUnusable] = useState(false);
   useEffect(() => {
+    // 같은 화면에 다른 코드가 오면 앞 코드의 결과를 지운다 — 앞 초대가 못 쓰는 것이었다고 새 초대까지 막지 않게.
+    setPreview(null);
+    setError(null);
+    setUnusable(false);
     if (!code) return;
     let cancelled = false;
     api
@@ -54,18 +62,21 @@ export function usePendingInvitePreview(code: string | null) {
       })
       .catch((err) => {
         // 401 은 로그인이 있어야 미리보기를 주는 옛 서버 — 알릴 일이 아니다.
-        if (!cancelled && err instanceof ApiError && err.status !== 401) setError(err.message);
+        if (cancelled || !(err instanceof ApiError) || err.status === 401) return;
+        setError(err.message);
+        setUnusable(isUnusableInviteStatus(err.status));
       });
     return () => {
       cancelled = true;
     };
   }, [code]);
-  return { preview, error };
+  return { preview, error, unusable };
 }
 
 /** 로그인·가입 화면 위의 "이 초대로 들어갑니다" 안내. */
 export function PendingInviteNote({ action }: { action: '로그인' | '가입' }) {
-  const code = peekPendingInvite();
+  const { activeServer } = useAuth();
+  const code = peekPendingInvite(activeServer ? serverUrl(activeServer) : null);
   const { preview, error } = usePendingInvitePreview(code);
   if (!code) return null;
   if (!preview) {

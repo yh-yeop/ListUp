@@ -26,7 +26,9 @@ import {
   appLinkFor,
   clearPendingInvite,
   clearPendingInviteSoon,
+  isUnusableInviteStatus,
   keepPendingInvite,
+  openJoinedRepo,
   setPendingInvite,
   shouldAutoJoin,
 } from '../src/lib/invite-link';
@@ -53,52 +55,58 @@ export default function JoinScreen() {
   const normalized = parseInviteCode(raw);
   const linkCode = params.code ? parseInviteCode(params.code) : null;
 
-  // 앱 링크로 다른 서버의 초대를 받았다 — 그 서버로 들어간 뒤 참여를 잇는다.
-  useEffect(() => {
-    if (loading || handledServer.current || !linkCode || !params.server) return;
-    const target = normalizeServerUrl(params.server);
-    if (!target) return;
-    // 서버가 주는 웹에서는 지금 주소가 곧 서버다.
-    if (!IS_CLIENT_BUILD && Platform.OS === 'web' && target === window.location.origin) return;
-    if (activeServer && serverUrl(activeServer) === target) return;
-    handledServer.current = true;
-    void (async () => {
-      const existing = servers.find((entry) => serverUrl(entry) === target);
-      if (!existing) {
-        const ok = await confirmAction({
-          title: '이 서버를 목록에 더할까요?',
-          message: `${target}\n초대받은 저장소가 이 서버에 있습니다. 목록에 더하고 들어갑니다.`,
-          confirmLabel: '더하고 들어가기',
-        });
-        if (!ok) return;
-      }
-      setBusy(true);
-      try {
-        const check = existing ? null : await checkServer(target);
-        const problem = check ? describeCheck(check, target) : null;
-        if (problem) {
-          setError(problem);
-          return;
-        }
-        // 초대 링크로 처음 더하는 서버는 서버 주인이 정한 이름으로 목록에 올린다.
-        const label = check?.status === 'ok' ? check.name : null;
-        const id = existing?.id ?? (await saveServer({ url: target, label }));
-        // 들어가면 화면이 처음부터 다시 그려진다 — 코드를 들고 가서 로그인 뒤 여기로 돌아온다.
-        setPendingInvite(linkCode);
-        await switchServer(id);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : '서버에 들어가지 못했습니다.');
-      } finally {
-        setBusy(false);
-      }
-    })();
-  }, [loading, linkCode, params.server, activeServer, servers, saveServer, switchServer]);
-
-  // 링크가 가리키는 서버가 지금 서버일 때만(아니면 위에서 옮겨 간다) 로그인 뒤 코드를 바로 조회한다.
+  const currentUrl = activeServer ? serverUrl(activeServer) : null;
+  // 앱 링크가 가리키는 서버. 주소가 올바르지 않으면 무시하고 지금 서버로 본다.
+  const linkTarget = params.server ? normalizeServerUrl(params.server) : null;
+  // 링크가 가리키는 서버가 지금 서버일 때만 로그인 뒤 코드를 조회한다. 아니면 그 서버로 옮겨 간다.
+  // 서버가 주는 웹에서는 지금 주소가 곧 서버다.
   const onLinkServer =
-    !params.server ||
-    normalizeServerUrl(params.server) === (activeServer ? serverUrl(activeServer) : null) ||
-    (!IS_CLIENT_BUILD && Platform.OS === 'web' && normalizeServerUrl(params.server) === window.location.origin);
+    !linkTarget ||
+    linkTarget === currentUrl ||
+    (!IS_CLIENT_BUILD && Platform.OS === 'web' && linkTarget === window.location.origin);
+
+  // 앱 링크로 다른 서버의 초대를 받았다 — 그 서버로 들어간 뒤 참여를 잇는다. 처음 한 번은 저절로, 취소하거나
+  // 연결 확인이 실패하면 「그 서버로 들어가기」로 다시 한다.
+  const enterLinkServer = useCallback(async () => {
+    if (!linkCode || !linkTarget || onLinkServer) return;
+    const target = linkTarget;
+    const existing = servers.find((entry) => serverUrl(entry) === target);
+    if (!existing) {
+      const ok = await confirmAction({
+        title: '이 서버를 목록에 더할까요?',
+        message: `${target}\n초대받은 저장소가 이 서버에 있습니다. 목록에 더하고 들어갑니다.`,
+        confirmLabel: '더하고 들어가기',
+      });
+      if (!ok) return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const check = existing ? null : await checkServer(target);
+      const problem = check ? describeCheck(check, target) : null;
+      if (problem) {
+        setError(problem);
+        return;
+      }
+      // 초대 링크로 처음 더하는 서버는 서버 주인이 정한 이름으로 목록에 올린다.
+      const label = check?.status === 'ok' ? check.name : null;
+      const id = existing?.id ?? (await saveServer({ url: target, label }));
+      // 들어가면 화면이 처음부터 다시 그려진다 — 코드를 그 서버와 함께 들고 가서 로그인 뒤 여기로 돌아온다.
+      setPendingInvite(linkCode, target);
+      await switchServer(id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '서버에 들어가지 못했습니다.');
+    } finally {
+      setBusy(false);
+    }
+  }, [linkCode, linkTarget, onLinkServer, servers, saveServer, switchServer]);
+
+  useEffect(() => {
+    if (loading || handledServer.current || onLinkServer || !linkCode) return;
+    handledServer.current = true;
+    void enterLinkServer();
+  }, [loading, onLinkServer, linkCode, enterLinkServer]);
+
   // 들고 온 초대 코드는 참여하거나, 코드를 조회까지 한 이 화면을 떠날 때 지운다. 조회하자마자 지우면
   // 로그인 직후 첫 화면이 한 번 더 그려질 때(보호 라우트) 초대를 잃고 저장소 목록으로 간다. 서버를
   // 옮기느라 조회 전에 이 화면이 사라지는 경우에는 지우지 않는다 — 옮긴 서버에서 로그인한 뒤 이어 간다.
@@ -122,6 +130,9 @@ export default function JoinScreen() {
     }, [user, linkCode, onLinkServer]),
   );
 
+  if (!loading && linkCode && linkTarget && !onLinkServer) {
+    return <OtherServerInvite target={linkTarget} busy={busy} error={error} onEnter={() => void enterLinkServer()} />;
+  }
   if (!loading && !user) {
     return <SignInFirst code={linkCode} busy={busy} error={error} />;
   }
@@ -142,6 +153,8 @@ export default function JoinScreen() {
     } catch (err) {
       setPreview(null);
       setError(err instanceof ApiError ? err.message : '초대 코드를 확인하지 못했습니다.');
+      // 못 쓰는 초대면 들고 있던 것도 버린다 — 안 그러면 첫 화면이 계속 여기로 되돌려 보낸다.
+      if (err instanceof ApiError && isUnusableInviteStatus(err.status)) clearPendingInvite();
     } finally {
       setBusy(false);
     }
@@ -149,8 +162,7 @@ export default function JoinScreen() {
     // 조회하는 사이에 사라진 화면은 참여하지 않는다(그 자리에 새로 열린 참여 화면이 한다).
     if (found && alive.current && shouldAutoJoin(found.code)) {
       if (found.currentRole) {
-        clearPendingInvite();
-        router.replace(`/repo/${found.repo.id}`);
+        openJoinedRepo(found.repo.id);
       } else {
         await join(found);
       }
@@ -163,10 +175,14 @@ export default function JoinScreen() {
     setError(null);
     try {
       const result = await api.joinInvite(target.code);
-      clearPendingInvite();
-      router.replace(`/repo/${result.repo.id}`);
+      openJoinedRepo(result.repo.id);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : '참여하지 못했습니다.');
+      // 그사이 회수·만료·소진됐다 — 같은 실패를 되풀이할 「참여하기」를 내린다.
+      if (err instanceof ApiError && isUnusableInviteStatus(err.status)) {
+        setPreview(null);
+        clearPendingInvite();
+      }
     } finally {
       setBusy(false);
     }
@@ -213,6 +229,10 @@ export default function JoinScreen() {
           disabled={!normalized || busy}
           full
         />
+        {/* 링크로 들어와 로그인·가입하면 이 화면이 스택의 첫 화면이라 뒤로 갈 곳이 없다. */}
+        {router.canGoBack() ? null : (
+          <Button label="내 저장소로" variant="ghost" onPress={() => router.replace('/repos')} disabled={busy} full />
+        )}
       </Card>
 
       {preview ? (
@@ -226,7 +246,7 @@ export default function JoinScreen() {
               </Body>
               <Button
                 label="저장소 열기"
-                onPress={() => router.replace(`/repo/${preview.repo.id}`)}
+                onPress={() => openJoinedRepo(preview.repo.id)}
                 full
               />
             </>
@@ -248,13 +268,18 @@ export default function JoinScreen() {
 function SignInFirst({ code, busy, error }: { code: string | null; busy: boolean; error: string | null }) {
   const { colors } = useTheme();
   const { activeServer } = useAuth();
-  // 코드를 먼저 들고 있어야 미리보기를 본 것이 로그인·가입 뒤 "바로 참여"로 이어진다.
-  if (code) setPendingInvite(code);
-  const { preview, error: previewError } = usePendingInvitePreview(code);
+  const server = activeServer ? serverUrl(activeServer) : null;
+  const { preview, error: previewError, unusable } = usePendingInvitePreview(code);
+  // 코드를 먼저 들고 있어야 미리보기를 본 것이 로그인·가입 뒤 "바로 참여"로 이어진다. 못 쓰는 초대면 들지 않는다 —
+  // 들면 로그인 화면이 "참여를 이어 갑니다" 라고 하고, 가입 뒤 같은 오류 화면으로 돌아온다.
+  if (code && !unusable) setPendingInvite(code, server);
+  useEffect(() => {
+    if (unusable) clearPendingInvite();
+  }, [unusable]);
   const go = (href: '/login' | '/signup') => {
-    if (code) setPendingInvite(code);
-    if (href === '/login') router.replace(href);
-    else router.push(href);
+    if (code && !unusable) setPendingInvite(code, server);
+    // 로그인과 같이 replace — push 로 가입 화면을 얹으면 이 화면이 밑에 남아, 참여 뒤 뒤로 가기가 여기로 온다.
+    router.replace(href);
   };
   // 서버가 주는 웹 페이지면 설치한 앱으로 넘기는 링크도 준다.
   const appLink =
@@ -265,7 +290,9 @@ function SignInFirst({ code, busy, error }: { code: string | null; busy: boolean
       <View style={{ gap: spacing.sm }}>
         <Title>초대받은 저장소에 참여</Title>
         <Subtitle>
-          {preview
+          {unusable
+            ? '이 초대는 쓸 수 없습니다. 보낸 사람에게 새 링크를 받아 주세요. 계정은 그대로 만들 수 있습니다.'
+            : preview
             ? '아래 저장소에 초대받았습니다. 이 서버에 로그인하거나 가입하면 바로 참여합니다. 계정은 서버마다 따로입니다.'
             : `${code ? `초대 코드 ${formatInviteCode(code)} 로 참여하려면` : '초대 코드로 참여하려면'} 이 서버에 로그인하거나 가입하세요. 계정은 서버마다 따로입니다.`}
         </Subtitle>
@@ -290,6 +317,33 @@ function SignInFirst({ code, busy, error }: { code: string | null; busy: boolean
           </Link>
         </Card>
       ) : null}
+    </Screen>
+  );
+}
+
+/** 앱 링크가 다른 서버의 초대일 때 — 그 서버로 들어가야 참여할 수 있다. 취소하거나 연결이 안 되면 여기서 다시 한다. */
+function OtherServerInvite({
+  target,
+  busy,
+  error,
+  onEnter,
+}: {
+  target: string;
+  busy: boolean;
+  error: string | null;
+  onEnter: () => void;
+}) {
+  return (
+    <Screen>
+      <View style={{ gap: spacing.sm }}>
+        <Title>다른 서버의 초대</Title>
+        <Subtitle>이 초대는 {target} 서버의 것입니다. 그 서버로 들어가야 참여할 수 있습니다.</Subtitle>
+      </View>
+      {error ? <ErrorNotice message={error} /> : null}
+      <Card style={{ gap: spacing.md }}>
+        <Button label="그 서버로 들어가기" icon="log-in-outline" onPress={onEnter} loading={busy} full />
+        <Button label="처음 화면으로" variant="ghost" onPress={() => router.replace('/')} disabled={busy} full />
+      </Card>
     </Screen>
   );
 }

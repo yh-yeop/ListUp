@@ -69,6 +69,36 @@ export default async function run(t, env) {
     t.ok('미리보기를 봤으니 가입하면 다시 묻지 않고 바로 참여 → 저장소로');
     const members = (await api(A, `/api/repos/${repo.id}/members`, undefined, owner.json.token)).json.members;
     t.must(members.some((m) => m.displayName === 'guest'), '멤버로 들어갔다');
+    // 링크로 들어와 참여하면 화면이 replace 로만 이어진다 — 저장소 목록을 밑에 깔아 돌아갈 곳이 있어야 한다.
+    await page.goBack();
+    await page.waitForURL('**/repos', { timeout: 10000 });
+    await page.getByText('초대저장소').filter({ visible: true }).first().waitFor();
+    t.ok('참여한 저장소에서 뒤로 가면 내 저장소 목록');
+    await ctx.close();
+  }
+
+  // 못 쓰는 초대(회수됨) 링크: 로그인 전에 알리고, 들고 가지 않는다
+  {
+    const invite = await makeInvite();
+    const revoked = await fetch(`${A}/api/invites/${invite.id}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${owner.json.token}` },
+    });
+    t.must(revoked.ok, '초대 회수');
+    const ctx = await env.newContext();
+    const page = await ctx.newPage();
+    page.on('dialog', (d) => d.accept());
+    await page.goto(`${A}/join?code=${invite.code}`);
+    await page.getByText('회수된 초대 코드입니다.').waitFor();
+    await page.getByText(/이 초대는 쓸 수 없습니다/).waitFor();
+    t.ok('회수된 초대 링크 → 로그인 전에 쓸 수 없다고 안내');
+    await page.getByRole('button', { name: '로그인' }).click();
+    await page.waitForURL('**/login', { timeout: 10000 });
+    await page.waitForTimeout(500);
+    t.must(
+      !(await page.getByText(/로 참여를 이어 갑니다|이 저장소에 바로 참여합니다/).count()),
+      '로그인 화면이 "참여를 이어 갑니다" 라고 하지 않는다',
+    );
     await ctx.close();
   }
 

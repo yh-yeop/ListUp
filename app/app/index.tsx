@@ -3,6 +3,7 @@ import { View } from 'react-native';
 import { Loading } from '../src/components/ui';
 import { peekPendingInvite } from '../src/lib/invite-link';
 import { useAuth } from '../src/state/auth';
+import { serverUrl } from '../src/state/servers';
 import { useTheme } from '../src/theme';
 
 /**
@@ -11,7 +12,7 @@ import { useTheme } from '../src/theme';
  * 고르게 한다. 서버를 고른 뒤나 한 서버에서 로그아웃한 뒤에는 그 서버의 로그인 화면으로 간다.
  */
 export default function Index() {
-  const { user, loading, startAtServerList } = useAuth();
+  const { user, loading, startAtServerList, activeServer } = useAuth();
   const { colors } = useTheme();
 
   if (loading) {
@@ -23,8 +24,8 @@ export default function Index() {
   }
 
   if (user) {
-    // 초대 링크로 들어와 로그인·가입했다면 참여 화면으로 돌아간다.
-    const pending = peekPendingInvite();
+    // 초대 링크로 들어와 로그인·가입했다면 참여 화면으로 돌아간다(그 초대를 낸 서버에 들어왔을 때만).
+    const pending = peekPendingInvite(activeServer ? serverUrl(activeServer) : null);
     if (pending) return <Redirect href={`/join?code=${encodeURIComponent(pending)}`} />;
     return <Redirect href="/repos" />;
   }

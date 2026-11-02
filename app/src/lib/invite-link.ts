@@ -1,4 +1,6 @@
+import { router } from 'expo-router';
 import { Platform } from 'react-native';
+import { clearPendingInvite } from './pure/pending-invite';
 
 /**
  * 초대 링크 — 서버 주소와 초대 코드를 한 번에 건넨다.
@@ -39,36 +41,15 @@ export function isLocalNetworkAddress(url: string): boolean {
   return a === 10 || a === 127 || (a === 192 && b === 168) || (a === 172 && b >= 16 && b <= 31);
 }
 
-/**
- * 링크로 들어왔는데 아직 로그인(또는 서버 추가)이 필요할 때 초대 코드를 들고 간다. 로그인·가입이
- * 끝나면 첫 화면(index)이 참여 화면으로 다시 보낸다. 앱을 새로 열면 사라진다.
- */
-let pendingInviteCode: string | null = null;
-/** 그 초대가 어떤 저장소인지 미리보기로 보여 줬다 — 로그인·가입이 끝나면 다시 묻지 않고 바로 참여한다. */
-let pendingInviteSeen = false;
-
-export function setPendingInvite(code: string): void {
-  if (code !== pendingInviteCode) pendingInviteSeen = false;
-  pendingInviteCode = code;
-}
-
-export function peekPendingInvite(): string | null {
-  return pendingInviteCode;
-}
-
-export function markPendingInviteSeen(code: string): void {
-  if (code === pendingInviteCode) pendingInviteSeen = true;
-}
-
-/** 미리보기를 본 뒤 로그인·가입했으면 참여 화면이 버튼을 기다리지 않고 바로 참여한다. */
-export function shouldAutoJoin(code: string): boolean {
-  return pendingInviteSeen && code === pendingInviteCode;
-}
-
-export function clearPendingInvite(): void {
-  pendingInviteCode = null;
-  pendingInviteSeen = false;
-}
+// 들고 가는 초대 코드(서버와 함께)는 node 에서 시험하려고 pure 로 뺐다.
+export {
+  clearPendingInvite,
+  isUnusableInviteStatus,
+  markPendingInviteSeen,
+  peekPendingInvite,
+  setPendingInvite,
+  shouldAutoJoin,
+} from './pure/pending-invite';
 
 /**
  * 참여 화면을 떠날 때는 바로 지우지 않고 다음 차례에 지운다. 가입·로그인 직후 밑에 깔려 있던 참여 화면이
@@ -88,4 +69,21 @@ export function clearPendingInviteSoon(): void {
 export function keepPendingInvite(): void {
   if (clearTimer) clearTimeout(clearTimer);
   clearTimer = null;
+}
+
+/**
+ * 참여한(또는 이미 멤버인) 저장소를 연다 — 저장소 목록을 밑에 깔고. 링크로 들어와 로그인·가입하면 화면이
+ * replace 로만 이어져 스택에 참여 화면 하나뿐이라, 그대로 replace 하면 저장소 화면에서 목록으로 돌아갈 길이
+ * 없다(안드로이드 뒤로가기는 앱 종료). 목록에서 코드를 넣어 왔으면(뒤로 갈 곳이 있으면) 참여 화면만 바꾼다.
+ * push 를 다음 차례로 미루는 것은 웹 때문이다 — 같은 차례에 replace·push 를 하면 브라우저 기록에 목록 대신
+ * 참여 화면이 남아, 브라우저 뒤로가기가 참여 화면으로 간다.
+ */
+export function openJoinedRepo(repoId: string): void {
+  clearPendingInvite();
+  if (router.canGoBack()) {
+    router.replace(`/repo/${repoId}`);
+    return;
+  }
+  router.replace('/repos');
+  setTimeout(() => router.push(`/repo/${repoId}`), 0);
 }
