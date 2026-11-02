@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import { UPLOAD_CHUNK_BYTES, baseName, hasRole, type UploadSession } from '@listup/shared';
+import { UPLOAD_CHUNK_BYTES, baseName, hasRole, type UploadSession, type UploadedBlob } from '@listup/shared';
 import type { AppContext } from '../context.ts';
 import { badRequest, conflict, notFound, tooLarge } from '../lib/errors.ts';
 import { newId } from '../lib/ids.ts';
@@ -21,6 +21,9 @@ import { requireAccess } from '../services/repos.ts';
  *
  * 편집 권한이 없는 사람(열람자)은 제안용으로만 올리므로, 반영되지 않는 업로드로 디스크를 채우지 못하게
  * 하루 업로드 총량(LISTUP_MAX_STAGING_MB_PER_DAY)을 본다. 편집자는 어차피 직접 커밋할 수 있어 세지 않는다.
+ *
+ * complete 는 같은 사용자가 10분 안에 다시 부르면 같은 결과(201)를 준다 — 응답이 끊겨 앱이 다시 물을 때
+ * 세션은 이미 지워져 있어, 그대로면 404 가 나 다 올린 파일을 처음부터 다시 보내야 한다.
  */
 
 interface SessionRow {
@@ -35,6 +38,8 @@ interface SessionRow {
 /** 서버가 받는 조각의 최대 크기 — 앱이 쓰는 크기보다 넉넉히. */
 const MAX_CHUNK_BYTES = UPLOAD_CHUNK_BYTES * 2;
 const DAY_MS = 24 * 60 * 60 * 1000;
+/** 완료 결과를 기억하는 시간. 앱이 complete 를 다시 부르는 창(5분)보다 넉넉히. */
+export const COMPLETE_CACHE_MS = 10 * 60 * 1000;
 
 function toSession(row: SessionRow): UploadSession {
   return {
@@ -109,6 +114,14 @@ export async function registerUploadRoutes(app: FastifyInstance, ctx: AppContext
   /** 이 세션을 한 요청씩만 — 같은 세션에 조각이 동시에 오면 파일이 섞인다. */
   const busy = new Set<string>();
 
+  /** 최근에 끝낸 세션의 결과(uploadId → …). 세션 행은 지워졌으므로 누가 어느 저장소에 올렸는지 같이 둔다. */
+  const recentlyCompleted = new Map<string, { userId: string; repoId: string; blob: UploadedBlob; at: number }>();
+  const pruneCompleted = (now: number) => {
+    for (const [id, entry] of recentlyCompleted) {
+      if (now - entry.at >= COMPLETE_CACHE_MS) recentlyCompleted.delete(id);
+    }
+  };
+
   app.put('/uploads/:uploadId', async (req) => {
     const { row } = requireSession(req);
     const stream = req.body as NodeJS.ReadableStream | undefined;
@@ -146,6 +159,15 @@ export async function registerUploadRoutes(app: FastifyInstance, ctx: AppContext
 
   app.post('/uploads/:uploadId/complete', async (req, reply) => {
     const user = requireUser(req);
+    // 이미 끝낸 세션이면 같은 결과. 다른 사용자면 모르는 척(아래 requireSession 이 404), 그사이 저장소에서
+    // 빠졌거나 저장소가 지워졌으면 requireAccess 가 막는다.
+    pruneCompleted(Date.now());
+    const { uploadId } = req.params as { uploadId: string };
+    const hit = recentlyCompleted.get(uploadId);
+    if (hit && hit.userId === user.id) {
+      requireAccess(db, hit.repoId, user.id, 'viewer');
+      return reply.code(201).send({ blob: hit.blob });
+    }
     const { row, role } = requireSession(req);
     if (row.received !== row.size) {
       throw conflict('아직 다 받지 못했습니다.', { received: row.received, size: row.size });
@@ -183,9 +205,11 @@ export async function registerUploadRoutes(app: FastifyInstance, ctx: AppContext
         if (isNewBlob) await blobs.remove(stored.hash);
         throw err;
       }
-      return reply.code(201).send({
-        blob: { hash: stored.hash, size: stored.size, mimeType, name: row.name },
-      });
+      const blob: UploadedBlob = { hash: stored.hash, size: stored.size, mimeType, name: row.name };
+      // 기록까지 된 것만 기억한다 — 한도 초과로 기록이 실패한 결과를 다시 주면 없는 blob 을 가리킨다.
+      pruneCompleted(now);
+      recentlyCompleted.set(row.id, { userId: user.id, repoId: row.repo_id, blob, at: now });
+      return reply.code(201).send({ blob });
     } finally {
       busy.delete(row.id);
     }

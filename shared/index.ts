@@ -504,11 +504,13 @@ export const API_VERSION = 1;
  *   (`/proposals/mine`, 제안의 `decidedAt`·`decidedBy`, 닫을 때 `reason`), 저장소 활동 기록(`/repos/:id/events`),
  *   로그인 없는 초대 미리보기(`GET /invites/:code`).
  *   없는 서버에서는 앱이 그 버튼·화면만 숨기고, 로그아웃은 예전처럼 기기에서만 지운다.
+ * - 6 (1.10.0): health 의 `maxRepoBytes`(저장소 용량 한도), 나눠 올리기 complete 멱등(같은 사용자가 10분 안에
+ *   다시 부르면 같은 blob 201), 조각별 해시 이어 계산. 없는 서버에서는 앱이 용량 사전 검사만 건너뛴다.
  *
  * API_VERSION 을 올리지 않은 이유: 옛 앱(1.1.0)은 API_VERSION 이 같아야만 들어가서, 올리면 멀쩡히
  * 쓸 수 있는 새 서버에서 옛 앱이 모두 막힌다.
  */
-export const API_LEVEL = 5;
+export const API_LEVEL = 6;
 
 /** 이 앱이 쓰는 기능이 있는 가장 낮은 서버 API_LEVEL. 앱의 업로드·내려받기가 수준 2 를 쓴다. */
 export const REQUIRED_SERVER_API_LEVEL = 2;
@@ -519,6 +521,8 @@ export interface HealthResponse {
   time: number;
   /** 파일 하나의 업로드 한도(바이트). 앱이 업로드 전에 검사하는 데 쓴다. */
   maxUploadBytes: number;
+  /** 저장소 하나의 용량 한도(바이트, LISTUP_MAX_REPO_MB). 앱이 올리기 전에 넘칠지 본다. API_LEVEL 6 미만 서버에는 없다. */
+  maxRepoBytes?: number;
   /** 이 서버가 말하는 API_VERSION. */
   apiVersion: number;
   /** 이 서버의 API_LEVEL. */

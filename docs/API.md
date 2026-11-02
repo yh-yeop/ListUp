@@ -38,10 +38,10 @@ Authorization: Bearer <token>
 
 | 메서드 | 경로 | 설명 |
 | --- | --- | --- |
-| GET | `/health` | 로그인 없이. `{ok, time, maxUploadBytes, apiVersion, apiLevel, version, serverName}` |
+| GET | `/health` | 로그인 없이. `{ok, time, maxUploadBytes, maxRepoBytes, apiVersion, apiLevel, version, serverName}` |
 
 ```json
-{ "ok": true, "time": 1789355589634, "maxUploadBytes": 2147483648, "apiVersion": 1, "apiLevel": 2, "version": "1.4.0", "serverName": "우리집 음악서버" }
+{ "ok": true, "time": 1789355589634, "maxUploadBytes": 2147483648, "maxRepoBytes": 10737418240, "apiVersion": 1, "apiLevel": 6, "version": "1.10.0", "serverName": "우리집 음악서버" }
 ```
 
 - **`apiVersion`** — API 호환 버전(`shared` 의 `API_VERSION`). 서버와 앱이 서로 알아듣지 못하게
@@ -54,10 +54,14 @@ Authorization: Bearer <token>
   4 = 1.8.0 (제안 목록 나눠 받기 `limit`·`before` — 수준 3 서버는 이 값을 무시하고 전부 주므로 앱은 그대로 쓴다),
   5 = 1.8.0 (로그아웃·다른 기기 모두 로그아웃, 내 제안·제안의 `decidedAt`/`decidedBy`·닫을 때 `reason`, 저장소 활동 기록,
   로그인 없는 초대 미리보기 —
-  수준 4 이하 서버에서는 앱이 그 버튼·화면을 숨기고, 로그아웃은 기기에서만 지운다).
+  수준 4 이하 서버에서는 앱이 그 버튼·화면을 숨기고, 로그아웃은 기기에서만 지운다),
+  6 = 1.10.0 (health 의 `maxRepoBytes`, 나눠 올리기 complete 멱등 — 같은 사용자가 10분 안에 다시 부르면 같은 blob,
+  조각별 해시 이어 계산 — 수준 5 이하 서버에서는 앱이 용량 사전 검사만 건너뛴다).
   **필드가 없는 서버(1.1.0 까지)는 `1`** 입니다.
 - `version` — 서버 버전(`server/package.json`). 사람에게 보여주는 용도이고 호환 판단에는 쓰지 않습니다.
 - `maxUploadBytes` — 파일 하나의 업로드 한도. 앱이 올리기 전에 검사합니다.
+- `maxRepoBytes` — 저장소 하나의 용량 한도(`LISTUP_MAX_REPO_MB`). 앱이 올리기 전에 넘칠지 봅니다.
+  `apiLevel` 6 미만 서버에는 없고, 그때 앱은 이 검사만 건너뜁니다(넘치면 서버가 커밋 때 `413`).
 - `serverName` — 서버 주인이 붙인 이름(`LISTUP_SERVER_NAME`, PC 앱은 관리 화면의 *서버 이름*). 정하지
   않았으면 `null`. 앱은 서버를 더할 때(연결 확인·초대 링크) 비어 있는 이름 칸에 넣습니다. 1.3.0 까지의
   서버에는 이 필드가 없습니다. 기능이 아니라 표시용이라 `apiLevel` 은 그대로입니다.
@@ -225,7 +229,7 @@ curl -X POST "http://localhost:4000/api/repos/$REPO/files?path=문서/계획.txt
 | POST | `/repos/:repoId/uploads` | `{name, size}` → `{upload: {id, size, received, chunkSize}}` (201). 최소 viewer |
 | PUT | `/uploads/:uploadId?offset=N` | `Content-Type: application/octet-stream` 조각 → `{upload}` |
 | GET | `/uploads/:uploadId` | 어디까지 받았는지 (`received`) |
-| POST | `/uploads/:uploadId/complete` | `{blob: {hash, size, mimeType, name}}` (201) |
+| POST | `/uploads/:uploadId/complete` | `{blob: {hash, size, mimeType, name}}` (201). 다 받기 전이거나 조각을 받는 중이면 `409` |
 | DELETE | `/uploads/:uploadId` | 취소 |
 
 - `offset` 이 서버가 받은 길이와 다르면 `409` 에 `details.received` — 그 위치부터 다시 보내면 됩니다.
@@ -234,6 +238,11 @@ curl -X POST "http://localhost:4000/api/repos/$REPO/files?path=문서/계획.txt
   오래 멈춘 세션은 정리 작업(GC)이 지웁니다.
 - 크기 한도는 세션을 만들 때 `size` 로 먼저 봅니다. **편집 권한이 없는 사람**(제안용)은 하루 업로드
   한도도 만들 때와 완료할 때 봅니다.
+- **complete 는 다시 불러도 됩니다.** 끝낸 뒤 10분 동안은 같은 사용자가 다시 부르면 같은 `{blob}` 을
+  `201` 로 줍니다(응답을 못 받고 다시 물은 경우). 다른 사용자는 `404`, 그사이 저장소에서 빠졌으면 `404`.
+  10분이 지나면 세션이 없어 `404` 입니다(`apiLevel` 6 미만 서버는 끝낸 즉시 `404`).
+- 해시는 조각을 받으면서 이어 계산하므로 complete 가 큰 파일을 처음부터 다시 읽지 않습니다. 서버를 다시
+  켠 뒤처럼 이어 계산이 없으면 그때만 전체를 읽습니다(결과는 같고 시간만 더 걸림).
 - 완료한 blob 은 아직 저장소에 들어간 것이 아닙니다. `files/commit` 이나 변경 제안에 `blobHash` 로 담습니다.
 
 ### 여러 파일 커밋 (`files/commit`)

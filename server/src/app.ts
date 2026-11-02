@@ -205,6 +205,8 @@ export async function buildApp(ctx: AppContext, options: BuildOptions = {}): Pro
     time: Date.now(),
     // 앱이 업로드 사전 검사에 쓰는 값. 서버 설정(LISTUP_MAX_UPLOAD_MB)을 따른다.
     maxUploadBytes: ctx.config.maxUploadBytes,
+    // 저장소 하나의 용량 한도(LISTUP_MAX_REPO_MB). 앱이 올리기 전에 넘칠지 미리 본다(API_LEVEL 6).
+    maxRepoBytes: ctx.config.maxRepoBytes,
     // 설치형 클라이언트가 들어오기 전에 견주는 값.
     apiVersion: API_VERSION,
     apiLevel: API_LEVEL,

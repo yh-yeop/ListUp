@@ -108,7 +108,8 @@ async function sweepUploadSessions(ctx: AppContext, cutoff: number): Promise<num
     if (live.has(id)) continue;
     try {
       if (fs.statSync(path.join(tmp, entry.name)).mtimeMs >= cutoff) continue;
-      fs.rmSync(path.join(tmp, entry.name), { force: true });
+      // removeSession 으로 지워 BlobStore 가 이 세션에 들고 있던 이어 계산 해시도 같이 놓게 한다.
+      await ctx.blobs.removeSession(id);
     } catch {
       // 방금 완료돼 옮겨 갔을 수 있다.
     }

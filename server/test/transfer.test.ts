@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
-import { after, before, describe, it } from 'node:test';
+import { createHash, randomBytes } from 'node:crypto';
+import { after, before, describe, it, mock } from 'node:test';
 import yauzl from 'yauzl';
 import { UPLOAD_CHUNK_BYTES } from '@listup/shared';
 import { issueDownloadLink } from '../src/lib/download-links.ts';
+import { COMPLETE_CACHE_MS } from '../src/routes/uploads.ts';
 import { collectGarbage } from '../src/services/gc.ts';
 import {
   auth,
@@ -176,6 +177,109 @@ describe('나눠 올리기', () => {
     const res = await h.app.inject({ method: 'DELETE', url: `/api/uploads/${session.id}`, headers: auth(owner) });
     assert.equal(res.statusCode, 200);
     assert.equal((await put(owner, session.id, 0, Buffer.alloc(5))).statusCode, 404);
+  });
+});
+
+describe('나눠 올리기 — 해시 이어 계산·complete 다시 부르기', () => {
+  let h: Harness;
+  let owner: Session;
+  let viewer: Session;
+  let repoId: string;
+  const maxRepoBytes = 3 * 1024 * 1024;
+
+  before(async () => {
+    h = await createHarness({ maxRepoBytes });
+    owner = await signup(h.app, '소유자');
+    viewer = await signup(h.app, '열람자');
+    repoId = await createRepo(h.app, owner, '멱등');
+    await join(h.app, viewer, (await createInvite(h.app, owner, repoId, { role: 'viewer' })).code);
+  });
+  after(async () => {
+    await h.close();
+  });
+
+  const start = (session: Session, name: string, size: number) =>
+    h.app.inject({ method: 'POST', url: `/api/repos/${repoId}/uploads`, headers: auth(session), payload: { name, size } });
+  const put = (session: Session, id: string, offset: number, chunk: Buffer) =>
+    h.app.inject({
+      method: 'PUT',
+      url: `/api/uploads/${id}?offset=${offset}`,
+      headers: { ...auth(session), 'content-type': 'application/octet-stream' },
+      payload: chunk,
+    });
+  const complete = (session: Session, id: string) =>
+    h.app.inject({ method: 'POST', url: `/api/uploads/${id}/complete`, headers: auth(session) });
+  /** 다 보내 complete 직전까지. 마지막 조각은 홀수 크기. */
+  const sendAll = async (session: Session, name: string, data: Buffer) => {
+    const id = (await start(session, name, data.length)).json().upload.id as string;
+    for (const [from, to] of [[0, 4096], [4096, 8192], [8192, data.length]]) {
+      const res = await put(session, id, from, data.subarray(from, to));
+      assert.equal(res.statusCode, 200, res.body);
+    }
+    return id;
+  };
+
+  it('조각 3개(마지막은 홀수 크기)로 받은 해시가 전체 sha256 과 같다', async () => {
+    const data = randomBytes(8192 + 777);
+    const done = await complete(owner, await sendAll(owner, 'three.bin', data));
+    assert.equal(done.statusCode, 201, done.body);
+    assert.equal(done.json().blob.hash, sha256(data));
+  });
+
+  it('틀린 offset 으로 409 를 받은 뒤 다시 보내도 해시가 맞다', async () => {
+    const data = randomBytes(5001);
+    const id = (await start(owner, 'retry.bin', data.length)).json().upload.id;
+    assert.equal((await put(owner, id, 0, data.subarray(0, 2000))).statusCode, 200);
+    assert.equal((await put(owner, id, 0, data.subarray(0, 2000))).statusCode, 409);
+    assert.equal((await put(owner, id, 3000, data.subarray(3000))).statusCode, 409);
+    assert.equal((await put(owner, id, 2000, data.subarray(2000))).statusCode, 200);
+    const done = await complete(owner, id);
+    assert.equal(done.statusCode, 201, done.body);
+    assert.equal(done.json().blob.hash, sha256(data));
+    assert.equal(h.ctx.blobs.trackedSessions, 0, 'complete 뒤에는 이어 계산을 놓는다');
+  });
+
+  it('complete 를 다시 부르면 같은 사용자는 같은 blob(201), 다른 사용자는 404', async () => {
+    const data = randomBytes(9000);
+    const id = await sendAll(owner, 'twice.bin', data);
+    const first = await complete(owner, id);
+    assert.equal(first.statusCode, 201, first.body);
+    const again = await complete(owner, id);
+    assert.equal(again.statusCode, 201, again.body);
+    assert.deepEqual(again.json(), first.json());
+    assert.equal((await complete(viewer, id)).statusCode, 404);
+    // 세션 자체는 끝났다.
+    assert.equal((await h.app.inject({ method: 'GET', url: `/api/uploads/${id}`, headers: auth(owner) })).statusCode, 404);
+  });
+
+  it('저장소에서 빠진 사람은 기억된 결과도 받지 못한다', async () => {
+    const leaver = await signup(h.app, '나갈사람');
+    await join(h.app, leaver, (await createInvite(h.app, owner, repoId, { role: 'viewer' })).code);
+    const id = (await start(leaver, 'small.bin', 10)).json().upload.id;
+    assert.equal((await put(leaver, id, 0, Buffer.alloc(10, 3))).statusCode, 200);
+    assert.equal((await complete(leaver, id)).statusCode, 201);
+    await h.app.inject({ method: 'DELETE', url: `/api/repos/${repoId}/members/${leaver.userId}`, headers: auth(owner) });
+    assert.equal((await complete(leaver, id)).statusCode, 404);
+  });
+
+  it('기억은 10분 — 지나면 404', async () => {
+    const id = await sendAll(owner, 'ttl.bin', randomBytes(8192 + 1));
+    mock.timers.enable({ apis: ['Date'], now: Date.now() });
+    try {
+      assert.equal((await complete(owner, id)).statusCode, 201);
+      mock.timers.tick(COMPLETE_CACHE_MS - 1000);
+      assert.equal((await complete(owner, id)).statusCode, 201);
+      mock.timers.tick(1000);
+      assert.equal((await complete(owner, id)).statusCode, 404);
+    } finally {
+      mock.timers.reset();
+    }
+  });
+
+  it('health 는 저장소 용량 한도를 알려준다', async () => {
+    const res = await h.app.inject({ method: 'GET', url: '/api/health' });
+    assert.equal(res.json().maxRepoBytes, maxRepoBytes);
+    assert.equal(res.json().maxRepoBytes, h.ctx.config.maxRepoBytes);
   });
 });
 

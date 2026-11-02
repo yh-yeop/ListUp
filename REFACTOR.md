@@ -502,3 +502,161 @@ A2 제안·멤버 화면 · A3 파일·비교·이력 화면)가 §5a 34건을 �
 `e2e/specs/7-invite-link.mjs`(참여 뒤 뒤로가기 → `/repos`, 회수된 초대 링크 → 로그인 전에 "쓸 수 없습니다"·로그인 화면에 "이어 갑니다" 없음).
 새 버튼: 「내 저장소로」(참여 화면이 스택 첫 화면일 때), 「그 서버로 들어가기」·「처음 화면으로」(다른 서버의 초대). 기존 버튼 글자는 그대로.
 - **재검토 (고친 뒤의 작업 트리, 같은 날)** — 위 세 건은 모두 해소됐다. (설계 2) `dismissAll` 을 없애고 `canGoBack()` 이면 `replace` 하나, 아니면 `replace('/repos')` + 다음 차례 `push` 로 바꿨다 — 큐가 FIFO 이고 `replace` 의 상태 갱신이 `useSyncExternalStore` 로 동기 렌더·effect 까지 끝난 뒤에 타이머가 돌므로(routingQueue.js:22-40) 순서가 지켜지고, 웹은 `[join]`→`[repos]`(delta 0, replaceState)→`[repos, repo]`(delta +1, pushState)로 갈라져 기록이 맞다. (설계 3) 가입도 `replace` 가 돼 `[join, join]` 복제가 생기지 않는다(login.tsx:143 의 「가입」 `Link` 와 비밀번호 재설정은 로그인 화면 위에 얹히지만 `Stack.Protected` 가 로그인되면 걷는다). 「내 저장소로」 의 `canGoBack()` 은 이제 스택이 `[join]` 하나인 경우만 가르면 되므로 렌더 시점 읽기로 충분하다. (설계 4) 훅이 코드가 바뀔 때 `preview`·`error`·`unusable` 을 비운다(InviteSummary.tsx:50-55). 남은 이견 없음. 참고로만: `setTimeout(…, 0)` 은 "그 전에 replace 가 처리됐다" 는 가정에 기댄다 — e2e(7-invite-link, 14-onboarding)가 웹에서 확인했고 안드로이드는 `test:android` 로 한 번 보면 된다.
+
+
+---
+
+# 3단계 — 전송 신뢰성 (2026-11-02)
+
+대상: U2-1(구조)·U2-2·U2-7·U2-9·U3-2·U2-4·U2-5·U2-10·L2-7. 기준점: v1.9.0(`77005aa`, test 284·e2e 232).
+절차: **Fable 계획** → 비판 Sonnet 반론 → Fable 확정(사용자 결정 포함) → **Opus 수정**(단계별 커밋) → Fable 최종 검수. Fable 은 반복 루프에 넣지 않는다.
+
+## §8 Fable 계획
+
+**요약.** 전송(올리기·받기)의 진행률·AbortController 를 화면 밖 모듈 스토어(`toast.ts` 패턴)로 옮기고 루트의 `TransferHost` 하나가 그린다.
+그 위에 끊김에도 세션을 기억해 이어 올리기, "마무리하는 중" 단계, 올리기 전 충돌·한도 검사, 안드로이드 파일 진짜 이어받기(zip·iOS 는 정직한 문구),
+PC 앱 will-download 진행률, 서버 조각별 해시 이어 계산 + complete 멱등을 얹는다.
+
+**설계 요점**
+- 스토어 `app/src/lib/transfer-store.ts`: `runTransfer({kind, repoId, label, cancelMessage, owner?, task(report, signal)})` → `{id, promise, abort}`, `cancelTransfer`, `abortAllTransfers`, `useTransfers(repoId)` → `{jobs, active, finishedSeq}`.
+  job 은 `progress.phase: 'sending'|'finishing'|'committing'`. 같은 저장소에 upload job 이 있으면 `runTransfer` 가 던진다(중복 방지). `finishedSeq[repoId]` 로 화면이 목록을 다시 읽는다.
+  `owner:'screen'`(new-proposal)은 화면이 사라질 때 확인 없이 abort(beforeRemove 가 이미 물음). `client.ts setApiTarget` 에 `onApiTargetChange` — 서버가 바뀌거나 토큰이 null 이면 `abortAllTransfers`.
+- `app/src/components/TransferHost.tsx` 를 `_layout.tsx` 의 `<ToastHost />` 위에(아래쪽 오버레이). `TransferProgress.tsx` 는 `useTransferControl` 제거, `{job}` props, **aria-label 은 `${label} ${percent}%` 고정**(e2e `/^올리는 중/`).
+  멈추기는 `canCancel(progress)` 일 때만; finishing 은 `서버에서 마무리하는 중`, committing 은 `반영하는 중`/`제안 만드는 중`.
+- pure `app/src/lib/pure/transfer-report.ts`: `canCancel`, `phaseLabel`, `describeUploadOutcome`(e2e 문구 `멈췄습니다 — N/3개 올림` 그대로), `describeCommitFailure`.
+- 화면: index(progress·transfer state 삭제, `useTransfers`, finishedSeq 로 refresh), compare(두 control 삭제, 열람자 `router.push` 는 `navigation.isFocused()` 일 때만), new-proposal(`owner:'screen'`).
+- 이어 올리기: 재시도 창을 시간으로(5분, 대기 1·2·4·8·15·15…초), 넘으면 `TransferOffline`. `finally` 의 `cancelUpload` 는 **사용자 멈춤·4xx 만**(10-polish:92 가 멈춤 때 DELETE 기대).
+  pure `upload-sessions.ts`(`sessionKey(baseUrl, repoId, source)` = name|size|lastModified, desktop 은 root/relativePath|size; remember/forget/prune 20h·200개) + 저장 `app/src/lib/upload-sessions.ts`(AsyncStorage).
+  시작할 때 기억된 id 로 `getUpload` → 이어 감, 404 면 새로. `uploadMany` 는 offline 이면 나머지를 "연결이 끊겨 보내지 못했습니다" 로 넣고 멈춤. complete 가 0/타임아웃이면 창 안에서 다시 complete.
+- 서버(L2-7): `BlobStore.hashers` Map — 연속 조각이면 이어 갱신, 조각 실패면 삭제, complete 는 bytes===size 면 digest 아니면 전체 재해시(폴백). `uploads.ts` 에 complete 결과 10분 캐시(같은 사용자면 같은 `{blob}` 201).
+  `GET /health` 에 `maxRepoBytes`. **API_LEVEL 6**(REQUIRED 는 2 그대로).
+- 사전 검사: pure `upload-check.ts` `checkUploadPlan({items, existing(전체 recursive 목록|null), fileCount, totalSize, maxFiles, maxRepoBytes|null})` → `{conflicts, tooMany, tooBig}`(서버 findPathConflict·manifestBytes 와 같은 규칙).
+  `pickFolder` 는 `{sources, truncated}`. 충돌·한도면 올리지 않고 토스트. 커밋 실패 문구 "올린 N개는 반영되지 않았습니다".
+- 안드로이드 받기: `downloadToCache` 공통 함수, 시도마다 링크 새로 발급, 재개는 `createDownloadResumable(url, uri, {headers: If-Range "<hash>"}, cb, String(partialBytes))` 새 작업 + **206 일 때만 받아들임**(네이티브는 append 하고 상태 코드를 안 본다 — FileSystemLegacyModule.kt:681-682·718·946).
+  pure `download-resume.ts` `planAttempt` — archive·iOS·partial 0 → restart, 재개 뒤 200 → restart, attempt≥4 → give-up. 받기 3화면(index·versions·trash)을 `runTransfer` 로. 틀린 주석(files.ts:170, local-folder.ts:159) 수정.
+- PC 앱: `DesktopBridge.downloads?`(선택 필드) — shared·protocol·preload·main 4곳, 새 `desktop/src/downloads.ts` 가 `will-download` 에서 `showSaveDialog` 를 직접 부르고 updated/done 을 방송. TransferHost 가 그 목록도 그린다.
+
+**단계(커밋)**
+1. `feat(server)`: 조각별 해시·complete 멱등·health maxRepoBytes — API_LEVEL 6. 시험: transfer.test(조각 3개 해시, 409 재전송 뒤 해시, complete 두 번, health), 새 storage.test(실패 스트림 뒤 폴백, 새 인스턴스로 complete — `rehashed` 플래그로 단언).
+2. `feat(app)`: 전송 스토어·TransferHost·마무리 단계(U2-1·U2-7·U3-2). 시험: transfer-report.test, e2e 10-polish ③(올리는 중 탭 이동 → 진행 유지 → 돌아오면 버튼 disabled → POST /uploads 중복 없음 → 끝나면 목록 저절로 갱신). test:desktop(웹 재빌드 후).
+3. `fix(app)`: 끊겨도 세션 기억해 이어 올리기(U2-2). 시험: upload-sessions.test, e2e 6-transfer(새로고침 뒤 같은 파일 → 첫 PUT offset>0·POST 0번, 끊김 중 DELETE 없음).
+4. `feat(app)`: 올리기 전 충돌·수·용량 검사(U2-4·U2-5). 시험: upload-check.test, e2e 6-transfer(파일↔폴더 충돌 → 토스트·PUT 0번).
+5. `fix(app)`: 안드로이드 받기 진행률·멈추기·파일 이어받기, zip·iOS 는 처음부터(U2-9·U2-10). 시험: download-resume.test, 안드로이드 수동 점검.
+6. `feat(desktop)`: will-download 진행률·멈추기·폴더 열기. 시험: e2e/desktop.mjs(showSaveDialog 바꿔치기).
+마무리: v1.10.0(노트·version:set), README·ARCHITECTURE·API.md, TODO 완료, REFACTOR.md 결과.
+
+**사용자 결정(Fable 이 올림)**: ① API_LEVEL 6 상향(권장) vs 필드만 ② TransferHost 루트 오버레이(권장) vs 화면 안 카드 ③ 재시도 창 5분·기억 20시간·저장소당 동시 업로드 1개 ④ new-proposal 을 나가면 확인 뒤 abort(담은 blob 은 GC 몫).
+**범위 밖**: 여러 파일 동시 업로드, 앱이 죽은 뒤 자동 재개, zip Range, 클라이언트 해시로 전송 건너뛰기, new-proposal 사전 검사, L2-8·L2-9, 받기 결과 패널(U2-6).
+**검수 기준**: 화면 3곳에 전송 state·AbortController 없음, U2-1 재현 e2e, status 0 에 cancelUpload 없음, 마무리 중 멈추기 없음·aria 고정, new-proposal 언마운트 abort, checkUploadPlan 이 서버 판정과 같은 사례에 같은 답·충돌 시 PUT 0번, `resumeAsync()` 호출 없음·206 검사, DesktopBridge 4곳 일치, storage 시험이 이어 계산·폴백 둘 다, check:sync·문서 일치, 회귀(test·e2e·desktop).
+
+## §8a 비판 Sonnet 반론 (2026-11-02)
+- **sessionKey = name|size|lastModified (U2-2)** — 서버는 offset 만 본다(uploads.ts:121 `offset !== row.received`, 내용 검증 없음). 그런데 desktop 소스에는 mtime 이 아예 없다(`folders.ts:57` 가 `{relativePath,size}` 만, `UploadSource` desktop 변형 client.ts:275, transfer-plan.ts:36 도 undefined 취급) → 계획의 `root/relativePath|size` 는 "같은 크기로 고친 파일"을 옛 세션에 이어 붙여 **조용히 틀린 blob** 을 만든다(completeSession 은 이어 붙은 그대로 해시, 클라이언트가 못 알아챔). 웹 키도 폴더 올리기에서 `a/x.txt`·`b/x.txt`(크기·mtime 같은 복사본)가 충돌한다(name 은 basename, files.ts:100-106 relativePath 따로). → 주장: 키에 relativePath 포함, desktop 목록(`folders.list`)에 mtimeMs 추가(DesktopBridge 4곳 규칙 대상), lastModified 가 없거나 0 이면 이어 올리기 안 함(새로). 기억 항목에 `size`·첫 조각 sha256 을 같이 적어 이어 가기 전에 대조하면 더 안전.
+- **기억한 세션이 404 일 때만 새로 (U2-2)** — 세션 파일만 사라진 경우(GC/크래시 사이) `appendChunk` 의 `fsp.truncate`(storage.ts:127)가 ENOENT → 500 이고 DB `received` 는 그대로라, 기억된 id 는 20시간 동안 매번 같은 500 으로 실패한다. → 주장: 이어 가기로 얻은 세션에서 첫 조각이 4xx/5xx(409 received 응답 제외)로 실패하면 forget 하고 새 세션으로 한 번 더. `upload.size !== source.size` 도 새로.
+- **서버 조각별 해시 (L2-7)** — 계획대로 "조각 실패면 hasher 삭제" 하면 끊김 재시도(status 0 → 같은 offset 재전송, appendChunk 가 truncate 후 다시 씀, storage.ts:137-141)가 일어난 파일은 **전부 전체 재해시로 폴백**한다 = L2-7 이 문제 삼은 바로 그 불안정한 회선의 큰 파일. 또 서버 재시작·`removeSession`/GC 청소(gc.ts:97-99)에서 Map 항목이 안 지워지면 누수. → 주장: 조각마다 `hasher.copy()` 로 시험 해시를 만들어 성공 때만 교체(실패하면 이전 상태 유지, `hashedBytes===offset` 일 때만 이어 감), removeSession·GC·complete 끝에서 항목 삭제. 더 줄이려면 이 증분 해시는 **빼고** 10분 complete 캐시만으로 U2-3/L2-7 의 실제 증상(타임아웃 뒤 재시도 404)을 막는 안도 있다 — 2GB SHA-256 은 SSD 에서 수 초라 복잡도 대비 이득이 작다. 사용자 결정 거리.
+- **complete 10분 캐시 (L2-7)** — 캐시 조회가 `requireSession`(uploads.ts:69-78, 행이 지워진 뒤엔 404) 앞에서 일어나야 하므로 키는 (uploadId, userId) 로 하고, 조회 때 `requireAccess(row.repo_id, user.id)` 를 다시 해야 한다(10분 안에 멤버 제거·저장소 삭제 가능). 성공(`record()` 통과)한 뒤에만 넣을 것(quotaError 경로 uploads.ts:166-168 는 안 넣음). blob GC 는 `created_at` 유예(gc.ts:52, 상단 주석)라 10분 캐시와 충돌 없음 — 확인함. 더 큰 구멍: 재시도가 진행 중 complete 와 겹치면 `busy` → **409**(uploads.ts:153)인데 계획은 "0/타임아웃이면 다시 complete" 뿐 → 주장: 409(`received===size` 인데 busy)도 창 안에서 재시도로 취급.
+- **TransferHost·루트 오버레이 / 화면 밖에서 끝나는 작업 (U2-1)** — e2e 쪽은 대체로 안전하다: 탭은 위쪽(RepoNav.tsx:42-48), progressbar 이름 `/^올리는 중/`·`detached` 대기(10-polish:79,90,100, 6-transfer:77,81, 11-restore:157)는 job 이 끝나면 사라지면 통과, 토스트 클릭(10-polish:107)은 그때 job 이 없다. 단 `getByRole('progressbar')` 는 strict 모드라 TransferHost 가 한 저장소의 job 을 둘 이상(올리기+받기) 동시에 그리면 위 줄들이 깨진다 → 주장: 호스트는 **현재 화면의 저장소 job 만**, 올리기·받기 동시에 progressbar 둘이 안 되게(받기는 role 대신 텍스트, 또는 한 카드로 합침) 하고 ToastHost 와 같은 fixed 영역에서 겹치지 않게 쌓는다(Toast.tsx:36-44 `box-none`·zIndex 1000). 진짜 위험은 따로 있다: 화면이 사라진 뒤 끝나는 작업이 `router.push`·`refresh()`·`setState`(compare.tsx:226-242)를 부른다. `navigation.isFocused()` 는 언마운트된 화면 객체라 믿을 수 없다 → 주장: 화면은 마운트 ref 로 막고, 화면이 없으면 push 대신 "제안을 만들었습니다" 토스트만(후속 이동 없음). 같은 저장소 중복 `runTransfer` 가 던질 때(compare·new-proposal·index 어디서든) 호출부마다 토스트로 받는 공통 처리도 계획에 없다.
+- **단계 2 크기 (순서)** — 스토어+호스트+화면 3곳+new-proposal+`onApiTargetChange`+마무리 단계가 한 커밋이다. 중간에 깨지지는 않지만 e2e 실패 원인을 가르기 어렵다. → 주장: 2a(스토어·호스트·index·new-proposal, U2-1 e2e), 2b(compare·마무리 단계 U2-7)로 나눠 각각 녹색으로. 단계 3(`finally` 조건 변경)은 2 뒤, 단계 4 는 health `maxRepoBytes` 없으면 null 처리라 1 과 독립, 단계 6 은 2 의 호스트에 의존 — 나머지 순서는 그대로 괜찮다. (API_LEVEL 6: CLAUDE.md 표의 "호환 안 깨는 기능 추가"에 해당, e2e 3-version 은 mock health 라 영향 없음 — 이의 없음.)
+- **안드로이드 If-Range 의 해시 출처 (U2-10)** — 계획의 `If-Range "<hash>"` 는 처음 시도가 **실패**하면 응답 헤더가 없어 얻을 수 없다(`DownloadLink` 는 `{url, expiresAt}` 뿐, shared/index.ts:570; 헤더는 성공 결과의 `result.headers`, Kt:954-955 에만). 헤더 없이 Range 만 보내면 그사이 바뀐 파일의 뒷부분을 붙인다(서버는 If-Range 없으면 그냥 206, files.ts:562-565). → 주장: 해시는 호출 화면이 이미 아는 값(목록의 blobHash, versions·trash 의 해시)을 `target` 에 실어 넘기고, 모르면(archive 포함) 이어받기 안 함. 네이티브 쪽 주장은 확인함: Range 는 resumeData 있을 때만(Kt:681-683), headers 는 그 뒤 추가(684-689), append(`FileOutputStream(file,isResume)` 946), status 는 결과에만 있고 본문은 상태와 무관하게 써진다(943-957) → 206 검사·200/4xx 시 파일 삭제 후 처음부터가 필수라는 계획이 맞다.
+- **안드로이드 멈추기 (U2-9, 단계 5)** — 받기를 멈추는 길은 `pauseAsync` 뿐이고 이는 `call.cancel()` 해서 `downloadAsync` 가 **undefined 로 resolve**(Kt:714, 962-964)한다. 지금 코드는 `!result` 를 "파일을 받지 못했습니다"로 처리(files.ts:175) → 멈춤이 실패로 보인다. 이미 끝난 작업에 pauseAsync 하면 "No download object available" 로 던진다(Kt:707-708). → 주장: `planAttempt` 에 cancelled 결과를 넣고(undefined && signal.aborted), pauseAsync 는 try/catch, 멈춘 뒤 부분 파일 삭제.
+- **PC 앱 will-download 에서 showSaveDialog 직접 호출 (단계 6)** — Electron 은 `setSavePath` 를 핸들러 안에서 **동기로** 부르지 않으면 자기 저장 대화상자를 연다(electron.d.ts:8295-8300, `preventDefault` 는 다운로드 취소 13057-13063). 핸들러에서 비동기 `showSaveDialog` 를 await 하면 대화상자가 둘 뜬다. → 주장: `item.setSaveDialogOptions({defaultPath,…})` 로 기본 대화상자를 쓰고 updated/done 만 방송. e2e 는 환경변수 시험 훅에서 `setSavePath` 를 동기 호출하는 쪽이 바꿔치기보다 쉽다.
+- **범위 (U2-10·U2-9 안드로이드, 단계 5·6)** — 단계 5 는 CI 에서 안 돌고 자동 시험이 pure 판정(download-resume.test)뿐이며 단계 6 은 `desktop` 4곳 규칙+실제 Electron 이 필요하다. 1~4 는 데이터 손상·상태 유실(high) 해결이고 5~6 은 med 편의 기능이다. → 주장: v1.10.0 을 1~4(+마무리)로 내고 5·6 은 별도 릴리즈로 미루는 쪽을 권한다(미루지 않으면 `test:android` 를 단계 5 검수 기준에 넣을 것). 사용자 결정 거리.
+
+## §8b Fable 확정 (2026-11-02)
+
+사용자 결정: v1.10.0 은 단계 1~4(+마무리), 5·6(안드로이드 받기 진행률·이어받기, PC will-download)은 다음 릴리즈. 증분 해시 + complete 캐시 유지. TransferHost 루트 오버레이. API_LEVEL 6. 기본값: 재시도 창 5분, 세션 기억 20h, 저장소당 동시 업로드 1개, new-proposal 나가면 확인 뒤 abort.
+
+### §8a 반론 판정
+1. **sessionKey** — 채택. 키에 `relativePath ?? name` 포함, `lastModified` 가 없거나 0 이면 기억·이어 가기 안 함(desktop 소스는 `LocalFileEntry`·`UploadSource` 에 `mtimeMs`/`lastModified` 를 더해야 이어 간다 — 아래 규칙). 첫 조각 sha256 대조는 기각: 서버 `getUpload` 의 `name`·`size` 대조 + mtime 으로 충분하고(splitUnchanged 와 같은 수준의 휴리스틱), 네이티브에서 조각을 한 번 더 읽는 비용이 붙는다.
+2. **404 일 때만 새로** — 채택. 이어 간 세션의 첫 요청이 409(received 동봉) 이외의 4xx/5xx 면 forget 하고 새 세션으로 한 번 더. `upload.size !== source.size || upload.name !== source.name` 도 새로.
+3. **hasher.copy()** — 채택(사용자가 내게 맡긴 결정). 조각마다 `copy()` 로 시험 해시, pipeline 성공 때만 교체 → 끊김 재전송 뒤에도 이어 계산이 살아 폴백이 드물다. `removeSession`(GC 가 이 경로를 씀 gc.ts:99)·`completeSession` 끝에서 Map 삭제. "증분 해시를 빼자" 는 기각(사용자 결정).
+4. **complete 캐시 키·접근 검사·409** — 채택 전부. 키 `uploadId`, 값에 `userId`·`repoId`, 조회 때 `user.id` 일치 + `requireAccess(repoId, user.id, 'viewer')`. `record()` 성공 뒤에만 넣는다. 클라이언트는 complete 의 409 도 재시도 대상: `details.received < size` 면 조각 루프로 복귀(offset=received), 아니면(busy) 창 안에서 다시 complete.
+5. **오버레이 progressbar 하나·마운트 ref** — 채택. 호스트는 **카드 하나**(가장 최근 running job)만 그리고 나머지는 `외 N개 진행 중` 캡션 → `getByRole('progressbar')` 가 늘 1개. `navigation.isFocused()` 대신 `mountedRef`. 중복 `runTransfer` 는 스토어가 토스트를 띄우고 `TransferBusy` 를 던지며, 호출부는 `instanceof TransferBusy` 면 조용히 return(공통 처리는 스토어 안에 둔다). "현재 화면의 저장소 job 만" 은 기각 — 오버레이의 목적(저장소 밖에서도 보임)과 어긋난다.
+6. **단계 2 를 2a/2b** — 채택.
+7. **If-Range 해시 출처** — 일부 채택(이미 §8 계획이 호출 화면의 `blobHash` 를 넘기게 했다). 추가: 해시를 모르면(archive·SearchResults 등) 이어받기 안 함. 단계 5 로 미룸.
+8. **안드로이드 멈추기(pauseAsync 가 undefined resolve)** — 채택. 단계 5 로 미룸: `planAttempt` 에 cancelled, pauseAsync try/catch, 부분 파일 삭제.
+9. **will-download 는 setSaveDialogOptions** — 채택. 단계 6 으로 미룸: `setSaveDialogOptions` + 환경변수 시험 훅으로 `setSavePath` 동기 호출.
+10. **범위(5·6 미루기)** — 채택(사용자 결정).
+
+### 확정 규칙
+
+**sessionKey** (`app/src/lib/pure/upload-sessions.ts`)
+```
+key = `${baseUrl}\n${repoId}\n${relativePath ?? name}\n${size}\n${lastModified}`   (경로는 NFC)
+lastModified 가 undefined 또는 0 → 키 없음(null) → 기억하지 않고 이어 가지도 않는다.
+desktop 소스: UploadSource desktop 변형에 `lastModified?: number` 추가, LocalFileEntry 에 `mtimeMs?: number` 추가(shared), desktop/src/folders.ts:57 이 `stat.mtimeMs` 를 같이 돌려주고 local-folder.ts:81 이 옮겨 담는다. 1.9 PC 앱(mtime 없음)에서는 자연히 이어 가지 않는다. preload·protocol 은 바뀌지 않는다(엔트리 모양만).
+항목 = { uploadId, at }. prune: at < now − 20h 또는 200개 초과(오래된 것부터). forget: complete 성공, 4xx(409 received 제외), 사용자 멈춤, 이어 간 세션의 첫 요청 실패.
+```
+**이어 가기 절차** (`transfer.ts uploadInChunks`)
+```
+id = remembered(key) → getUpload(id):
+  200 이고 name·size 일치 → 그 세션, offset = received, resumed = true
+  그 밖(404·불일치·오류) → forget, startUpload 새로
+resumed 이고 첫 PUT/complete 가 409(received) 외 4xx/5xx → forget → startUpload 새로(한 번), resumed=false
+status 0 → 5분 창(1·2·4·8·15·15…초, abort 가능) 안에서 getUpload 로 received 를 물어 계속; 창을 넘기면 TransferOffline(세션·기억 유지)
+complete: status 0/타임아웃 → 창 안에서 다시 complete; 409 details.received<size → 조각 루프로; 409 busy → 창 안에서 다시 complete
+finally 의 cancelUpload: signal.aborted 이거나 4xx 실패일 때만(TransferOffline·status 0·5xx 는 남긴다)
+```
+**complete 캐시** (`server/src/routes/uploads.ts`)
+```
+recentlyCompleted: Map<uploadId, { userId, repoId, blob, at }>, TTL 10분(조회·삽입 때 만료분 정리)
+POST /uploads/:id/complete 맨 앞: hit && hit.userId === user.id → requireAccess(db, hit.repoId, user.id, 'viewer') → 201 {blob}
+삽입은 record() 가 던지지 않고 돌아온 뒤에만(quotaError 경로 제외)
+```
+**hasher** (`server/src/lib/storage.ts`)
+```
+hashers: Map<id, { hasher: Hash; bytes: number }>; createSession 이 {createHash('sha256'), 0} 등록
+appendChunk: entry && entry.bytes === offset 이면 trial = entry.hasher.copy(), counter 가 trial.update; pipeline 성공 → entry = { hasher: trial, bytes: offset+received }; 실패 → entry 그대로(이전 상태 유지). entry 없거나 bytes≠offset 이면 추적 안 함(hashers.delete)
+completeSession: entry && entry.bytes === size → digest, rehashed=false; 아니면 전체 재해시, rehashed=true. 끝에 hashers.delete. removeSession 도 delete. 반환 { hash, size, rehashed }
+```
+**오버레이·언마운트** (`TransferHost.tsx`, 화면)
+```
+호스트: jobs 중 가장 최근 running 1개만 TransferProgress 로(progressbar 1개), 나머지 수는 캡션. job 이 없으면 아무것도 안 그림(detached). ToastHost 바로 위, 같은 fixed/absolute 영역, pointerEvents box-none.
+화면: mountedRef(useEffect cleanup 에서 false). await promise 뒤 router.push/replace·setState·state.refresh 는 mountedRef.current 일 때만. 토스트는 항상(토스트 스토어는 화면 밖).
+목록 갱신: index 는 useTransfers(repoId).finishedSeq 변화 → state.refresh()(첫 렌더 건너뜀). 열람자 compare 가 언마운트된 채 끝나면 "제안 #N 을 만들었습니다" 토스트만.
+중복: runTransfer 가 같은 repoId 에 upload job 이 있으면 notify('이미 올리는 중입니다.') 뒤 TransferBusy throw; 호출부는 instanceof TransferBusy 면 return.
+```
+
+### 최종 단계 (v1.10.0)
+
+**1. `feat(server)`: 조각별 해시 이어 계산·complete 10분 캐시·health maxRepoBytes — API_LEVEL 6**
+- 파일: `server/src/lib/storage.ts`, `server/src/routes/uploads.ts`, `server/src/app.ts:203-214`, `shared/index.ts`(HealthResponse `maxRepoBytes?`, API_LEVEL 6 + 수준 목록 주석), `docs/API.md`(서버 상태 표·나눠 올리기 절·apiLevel), `docs/ARCHITECTURE.md:68-70`.
+- 서버 테스트 `server/test/transfer.test.ts`: ① 조각 3개 hash === sha256 ② 틀린 offset 409 뒤 재전송해도 hash 일치 ③ complete 두 번 → 같은 blob 201, 다른 사용자는 404, 멤버에서 빠지면 403/404 ④ health.maxRepoBytes === 하니스 값. 새 `server/test/storage.test.ts`(BlobStore 직접): 중간에 터지는 스트림 → 같은 offset 재전송 → complete `rehashed:false` 해시 일치(copy 경로), 새 인스턴스로 complete → `rehashed:true` 해시 일치(폴백), removeSession 뒤 Map 비어 있음.
+- 완료 기준: `npm test`(server)·`check:sync`·앱 변경 없이 6-transfer 통과.
+
+**2a. `feat(app)`: 전송 스토어·TransferHost — index·new-proposal (U2-1·U3-2)**
+- 파일: 새 `app/src/lib/transfer-store.ts`, 새 `app/src/lib/pure/transfer-report.ts`(`describeUploadOutcome`·`canCancel`·`phaseLabel` — 2a 에서는 sending 만 쓰더라도 함수는 여기서 완성), 새 `app/src/components/TransferHost.tsx`, `app/src/components/TransferProgress.tsx`(`useTransferControl` 제거, `{job}`, aria-label `${label} ${percent}%` 고정), `app/app/_layout.tsx:100-104`, `app/src/api/client.ts`(`onApiTargetChange`), `app/app/repo/[repoId]/index.tsx`, `new-proposal.tsx`, `docs/ARCHITECTURE.md` 구조 블록.
+- compare.tsx 는 이 커밋에서 `useTransferControl` 이 없어지므로 **최소 수정**(스토어로 옮기되 라벨·흐름은 그대로) — 2b 가 마무리 단계·mountedRef 를 얹는다. 대안으로 2a 에서 훅을 남겨 두면 TransferHost 와 화면 카드가 함께 그려져 progressbar 가 둘이 되니 그렇게 하지 않는다.
+- pure 테스트 `app/test/transfer-report.test.ts`: `멈췄습니다 — 0/3개 올림`/`1/3개 올림` 본문 두 갈래, failures 3+`외 N건 더`, `3개 올렸습니다 — 추가 2 · 수정 1`, `바뀐 파일이 없습니다.`, 1개 성공은 null, `canCancel`(sending 참·마지막 finishing 거짓·중간 finishing 참·committing 거짓).
+- e2e `10-polish.mjs` ③: 조각 1.5초 지연 → 올리기 시작 → 「변경 이력」 탭 → progressbar 유지 → 「파일」 탭 → 「파일 올리기」 disabled → `POST /api/repos/:id/uploads` 3번뿐 → 끝나면 클릭 없이 `c.txt 내려받기` 등장. ④ new-proposal: 「파일 담기」로 조각 지연 중 뒤로 → 「버리기」 → 이후 PUT 요청 없음.
+- 완료 기준: typecheck·`npm test`·`test:e2e` 전부·`test:desktop`(웹 재빌드 뒤).
+
+**2b. `feat(app)`: compare 를 스토어로·마무리 단계·언마운트 가드 (U2-1 compare·U2-7)**
+- 파일: `compare.tsx`(mountedRef, 열람자 push 가드, 받기 루프도 runTransfer), `transfer.ts`(UploadProgress `phase`, finishing/committing report 3곳), `transfer-report.ts`(`describeCommitFailure` 자리만), `TransferHost.tsx`(phase 라벨·멈추기 숨김).
+- e2e `9-compare.mjs`: 열람자 흐름 그대로(waitForURL) + 편집자 올리기 뒤 토스트 `2개를 올렸습니다.`. `10-polish` 는 그대로 통과해야 함(마무리 단계는 조각 지연 중이라 sending).
+- 완료 기준: typecheck·`npm test`·`test:e2e`·`test:desktop`.
+
+**3. `fix(app)`: 끊겨도 세션을 지우지 않고 기억해 이어 올리기 (U2-2)**
+- 파일: `transfer.ts`(위 절차), 새 `app/src/lib/pure/upload-sessions.ts`, 새 `app/src/lib/upload-sessions.ts`(AsyncStorage `listup.uploadSessions`), `transfer-report.ts`(offline 문구 `연결이 끊겼습니다 — N/M개 올림` + `연결되면 같은 파일을 다시 올리세요. 받은 데서 이어 갑니다.`), `app/src/api/client.ts:275`(desktop `lastModified?`), `shared/index.ts:663-666`(`mtimeMs?`), `desktop/src/folders.ts:57`, `app/src/lib/local-folder.ts:81`, `docs/API.md:219-237`, `docs/ARCHITECTURE.md:71-72`, README 전송 문구, 구조 블록.
+- pure 테스트 `app/test/upload-sessions.test.ts`: 키에 relativePath·size·mtime 모두 반영(하나라도 다르면 다른 키, `a/x.txt`≠`b/x.txt`), mtime 없음·0 → null, prune 20h·200개, remember/forget, NFC.
+- e2e `6-transfer.mjs`: ① 12MB, PUT 1.5초 지연, PUT 2개 뒤 `page.reload()`(dialog accept 있음) → 같은 파일 다시 → 첫 PUT 이 `offset=0` 아님·POST /uploads 0번·해시 일치 ② PUT 을 계속 abort 하는 5초 동안 DELETE /api/uploads 없음 → 풀면 완료 ③ 기억된 세션의 첫 PUT 을 500 으로 바꿔치기 → DELETE 뒤 새 POST /uploads 가 나가고 완료.
+- 완료 기준: 위 e2e + 기존 6-transfer:87-105·10-polish:92 통과, `test:desktop`(folders.ts 변경).
+
+**4. `feat(app)`: 올리기 전에 이름 충돌·파일 수·용량 검사 (U2-4·U2-5)**
+- 파일: 새 `app/src/lib/pure/upload-check.ts`, `files.ts`(pickFolder → `{sources, truncated}`), `client.ts`(`getServerLimits` → `{maxUploadBytes, maxRepoBytes|null}`, setApiTarget 에서 캐시 비움), `index.tsx`(withinLimit 뒤 preflight: recursive 전체 목록 실패/`!tree.recursive` 면 existing null), `compare.tsx`(repoFiles+repo 로), `transfer-report.ts`(`describeCommitFailure` — `반영하지 못했습니다 — 올린 N개는 반영되지 않았습니다.` + 서버 메시지 + conflicts 3개), README, 구조 블록.
+- pure 테스트 `app/test/upload-check.test.ts`: 파일 `a` vs `a/b.txt`, 폴더 `a/` vs 파일 `a`, 새 항목끼리 `x`·`x/y`, 덮어쓰기는 충돌 아님, 수 한도(4999+2), 용량(덮어쓰는 크기 차감), `maxRepoBytes:null` → tooBig 없음, `existing:null` → conflicts 빈 배열, NFD→NFC.
+- e2e `6-transfer.mjs`: 파일 `충돌` 생성 뒤 폴더 `충돌/안.txt` 올리기 → `이름이 겹쳐 올릴 수 없습니다` 토스트·PUT 0번·이력 수 그대로.
+- 완료 기준: `npm test`·`test:e2e`.
+
+**마무리** `chore: v1.10.0`: `npm run version:set -- 1.10.0`, `docs/releases/v1.10.0.md`, README 「무엇을 할 수 있나」, TODO.md(항목 3 → 완료 절, 5·6 은 남은 일로 "안드로이드 받기 진행률·이어받기 / PC will-download" 신설), REFACTOR.md §9 결과.
+
+### 최종 검수 체크리스트
+1. 화면 3곳에 `useState<UploadProgress>`·`useTransferControl`·`AbortController` 없음; `TransferProgress.tsx` 에 훅 없음; 전송 상태는 `transfer-store.ts` 에만.
+2. 10-polish ③④, 6-transfer ①②③·충돌, 9-compare 가 녹색이고 기존 228 단언이 모두 그대로(이름 바꾼 것 없음: `파일 올리기`·`폴더 올리기`·`멈추기`·`내려받기`·`progressbar /^올리는 중/`·`멈췄습니다 — N/3개 올림`·`'사진' 은(는) 모두 이미 올라가 있습니다.`·확인창 `이미 올라가 있는 2개는 건너뜁니다`).
+3. `transfer.ts` finally: status 0·5xx·TransferOffline 에 `cancelUpload` 없음, 멈춤·4xx 에만(코드 + e2e DELETE 유무).
+4. sessionKey 가 relativePath·size·mtime 을 모두 쓰고 mtime 없으면 null; 이어 간 세션의 첫 실패 → forget → 새 세션 한 번.
+5. 호스트는 progressbar 를 한 번에 하나만 그린다; job 이 끝나면 카드가 사라진다(완료는 토스트); 화면의 push/replace/refresh/setState 는 mountedRef 뒤에만.
+6. 마무리 단계: 마지막 조각 뒤·커밋 중 멈추기 버튼 없음, aria-label 접두 그대로.
+7. 서버: storage.test 가 copy 경로(`rehashed:false`)와 폴백(`rehashed:true`) 둘 다, removeSession/complete 뒤 Map 비어 있음; complete 캐시는 사용자·접근 검사, record 성공 뒤에만 삽입; API_LEVEL 6·docs/API.md·shared 주석 일치, REQUIRED 는 2.
+8. `checkUploadPlan` 사례가 `server/test/files.test.ts` 의 이름 겹침 사례와 짝; 충돌 시 PUT 0번; `tree.recursive` 없거나 `maxRepoBytes` 없으면 그 검사만 생략.
+9. `check:sync` 통과(구조 블록 새 파일: transfer-store·TransferHost·pure/transfer-report·pure/upload-sessions·upload-sessions·pure/upload-check), ARCHITECTURE 전송 절·README 문구가 실제 동작(세션 20h 기억, 5분 창)과 일치, 릴리즈 노트.
+10. 회귀 순서: `check:sync` → `typecheck` → `npm test` → `test:e2e` → `--web` 재빌드 → `test:desktop`.
