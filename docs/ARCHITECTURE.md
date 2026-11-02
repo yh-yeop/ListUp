@@ -213,6 +213,7 @@ app/
    ├─ lib/files.ts            플랫폼별 파일·폴더 선택, 링크로 내려받기
    ├─ lib/save-folder.ts      안드로이드에서 받은 파일을 둘 폴더(한 번 고르고 기억)
    ├─ lib/transfer.ts         나눠 올리기(진행률·이어 보내기)와 여러 파일 커밋
+   ├─ lib/transfer-store.ts   진행 중인 전송(진행률·멈추기)을 화면 밖에 — runTransfer, 저장소당 올리기 하나, 서버 전환·로그아웃 때 그만둠
    ├─ lib/invite-link.ts      초대 링크 만들기, 로그인 뒤까지 들고 가는 초대 코드
    ├─ lib/dialogs.ts          웹/네이티브 확인 대화상자
    ├─ lib/desktop.ts          PC 앱이 창에 넣어 준 window.listupDesktop 읽기
@@ -229,6 +230,7 @@ app/
    ├─ lib/pure/               플랫폼 import 가 없는 순수 로직. 원래 파일이 다시 내보내고, app/test 가 node 로 검사
    │  ├─ versions.ts          버전 비교(compareVersions) ← updates
    │  ├─ transfer-plan.ts     이미 올라간 파일 건너뛰기 판정 ← transfer
+   │  ├─ transfer-report.ts   전송 단계 이름·멈출 수 있는지, 올린 결과 토스트 문구 ← TransferProgress·repo/[repoId]/index
    │  ├─ compare-core.ts      폴더 대조(이름 NFC/NFD 맞추기) ← folder-compare
    │  ├─ server-store.ts      서버 목록 읽기·정리, 예전 저장 키 이전 규칙(storeFromLegacy) ← state/servers
    │  ├─ repo-search.ts       저장소 찾기(이름 일치 먼저, 5개부터 칸을 보임) ← search
@@ -236,6 +238,7 @@ app/
    │  └─ server-url.ts        일부만 적은 서버 주소(192.168.0.10, 이름만)를 확인해 볼 후보로(serverUrlCandidates) ← state/servers
    ├─ components/             공용 UI + 저장소 탭 네비게이션 + 제안 상태 배지
    │  ├─ InviteSummary.tsx    초대 미리보기(어떤 저장소·권한) — 참여·로그인·가입 화면이 같이 씀, 로그인 전 미리보기 훅
+   │  ├─ TransferHost.tsx     진행 중인 전송 카드(하나만, 나머지는 「외 N개」) — 루트에서 화면 아래에 띄우고 토스트를 그 위에 쌓음
    │  └─ QrCode.tsx           초대 링크 QR(qrcode-generator 로 칸을 계산해 View 로 그림)
    └─ theme.ts                라이트/다크 팔레트
 ```

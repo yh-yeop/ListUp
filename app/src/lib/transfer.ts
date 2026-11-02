@@ -69,6 +69,22 @@ export class TransferCancelled extends Error {
   }
 }
 
+/**
+ * 서버가 바뀌었거나 로그아웃해서 그만둔 전송의 signal. 사용자가 멈춘 것과 달리 그때까지 올린 파일도
+ * 반영하지 않는다 — 요청이 이제 다른 서버(또는 토큰 없이)로 가기 때문이다. abort(reason) 은 플랫폼마다
+ * 지원이 달라(RN 의 AbortController) reason 대신 따로 적어 둔다.
+ */
+const abandonedSignals = new WeakSet<AbortSignal>();
+
+/** 전송을 그만둔다 — 멈춤처럼 끊되, 올린 파일을 반영하지 않게 표시한다(lib/transfer-store.ts). */
+export function abandonTransfer(controller: AbortController): void {
+  abandonedSignals.add(controller.signal);
+  controller.abort();
+}
+
+/** signal 이 서버 전환·로그아웃으로 끊겼는지. */
+export const isAbandoned = (signal?: AbortSignal) => !!signal && abandonedSignals.has(signal);
+
 function throwIfCancelled(signal?: AbortSignal): void {
   if (signal?.aborted) throw new TransferCancelled();
 }
@@ -220,7 +236,7 @@ export async function uploadAndCommit(
   signal?: AbortSignal,
 ): Promise<UploadOutcome & { commit: CommitResult | null }> {
   const outcome = await uploadMany(repoId, items, onProgress, signal);
-  if (outcome.uploaded.length === 0) return { ...outcome, commit: null };
+  if (outcome.uploaded.length === 0 || isAbandoned(signal)) return { ...outcome, commit: null };
   const commit = await api.commitFiles(
     repoId,
     outcome.uploaded.map(({ item, blob }) => ({ path: item.path, blobHash: blob.hash })),

@@ -66,6 +66,8 @@ export const IS_CLIENT_BUILD =
 /** 요청을 보낼 서버. null 이면 아직 고른 서버가 없다(클라이언트 모드). */
 let apiBaseUrl: string | null = IS_CLIENT_BUILD ? null : DEFAULT_API_BASE_URL;
 let authToken: string | null = null;
+/** setApiTarget 을 지켜보는 쪽(onApiTargetChange). */
+const targetListeners = new Set<(change: ApiTargetChange) => void>();
 
 /**
  * 요청을 보낼 서버와 그 서버에서 받은 토큰을 함께 바꾼다.
@@ -74,10 +76,29 @@ let authToken: string | null = null;
  */
 export function setApiTarget(url: string | null, token: string | null): void {
   const nextUrl = url === null ? null : url.replace(/\/+$/, '');
+  const serverChanged = nextUrl !== apiBaseUrl;
   // 업로드 한도는 서버마다 다르므로 주소가 바뀌면 다시 받아온다.
-  if (nextUrl !== apiBaseUrl) maxUploadBytesCache = null;
+  if (serverChanged) maxUploadBytesCache = null;
   apiBaseUrl = nextUrl;
   authToken = token;
+  for (const listener of targetListeners) listener({ serverChanged, token });
+}
+
+/** 요청 대상이 바뀐 것 — serverChanged 는 주소가 달라졌는지, token 은 새 토큰(null 이면 로그아웃·세션 끊김). */
+export interface ApiTargetChange {
+  serverChanged: boolean;
+  token: string | null;
+}
+
+/**
+ * setApiTarget 이 불릴 때마다 알림을 받는다. 화면 밖에서 이어지는 전송(lib/transfer-store.ts)이 서버가 바뀌거나
+ * 로그아웃하면 그만두는 데 쓴다 — 안 그러면 옛 서버의 업로드 id 로 새 서버에 커밋을 보낸다. 해지 함수를 돌려준다.
+ */
+export function onApiTargetChange(listener: (change: ApiTargetChange) => void): () => void {
+  targetListeners.add(listener);
+  return () => {
+    targetListeners.delete(listener);
+  };
 }
 
 /** 서버가 알려준 파일 하나의 업로드 한도(바이트). */

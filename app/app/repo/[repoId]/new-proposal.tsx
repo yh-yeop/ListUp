@@ -21,10 +21,10 @@ import {
   Title,
 } from '../../../src/components/ui';
 import { ApiError, api, getMaxUploadBytes } from '../../../src/api/client';
-import { TransferProgress, useTransferControl } from '../../../src/components/TransferProgress';
 import { confirmAction, notify, notifyError } from '../../../src/lib/dialogs';
 import { pickFiles } from '../../../src/lib/files';
-import { uploadMany, type UploadProgress } from '../../../src/lib/transfer';
+import { isAbandoned, uploadMany } from '../../../src/lib/transfer';
+import { TransferBusy, runTransfer, useTransfers, type TransferHandle } from '../../../src/lib/transfer-store';
 import { useAsync } from '../../../src/lib/useAsync';
 import { fontSize, monoFont, spacing, useTheme } from '../../../src/theme';
 
@@ -46,9 +46,13 @@ export default function NewProposalScreen() {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [staged, setStaged] = useState<StagedChange[]>([]);
-  const [progress, setProgress] = useState<UploadProgress | null>(null);
-  const uploading = progress !== null;
-  const transfer = useTransferControl('담던 파일은 끊습니다. 그때까지 다 담은 파일은 제안에 남습니다.');
+  // 담는 중인 파일은 전송 스토어가 올리고 진행 카드는 루트의 TransferHost 가 그린다. 이 화면이 시작한 것만 본다.
+  const [jobId, setJobId] = useState<number | null>(null);
+  const transfers = useTransfers(repoId);
+  const uploading = jobId !== null && transfers.jobs.some((job) => job.id === jobId);
+  const jobRef = useRef<TransferHandle<unknown> | null>(null);
+  // 담는 동안 화면을 버리면(뒤로 → 버리기) 응답 뒤의 setState·토스트를 하지 않는다.
+  const mountedRef = useRef(true);
   // 선택기가 돌아온 뒤 한도를 확인하고 올리기 시작하기 전까지 다시 눌리지 않게 한다.
   const [preparing, setPreparing] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -60,6 +64,16 @@ export default function NewProposalScreen() {
   const submittedRef = useRef(false);
   // 제출 응답을 기다리는 동안 뒤로 가서 화면을 버리면, 응답 뒤 router.replace 가 그때 보던 다른 화면을 바꿔 버린다.
   const submittingRef = useRef(false);
+
+  // 화면이 사라지면 담던 파일을 확인 없이 멈춘다(owner 'screen') — beforeRemove 가 이미 「버릴까요?」를 물었다.
+  // 담은 blob 은 제안에 들어가지 않으면 서버 GC 가 치운다.
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      jobRef.current?.abort();
+    };
+  }, []);
 
   // 삭제 제안을 고르기 위해 현재 저장소 내용을 보여준다.
   const treeState = useAsync<TreeListing>(
@@ -110,17 +124,36 @@ export default function NewProposalScreen() {
       const accepted = sources.filter((source) => source.size <= maxBytes);
       const added: StagedChange[] = [];
       if (accepted.length > 0) {
-        setProgress({ sentBytes: 0, totalBytes: 0, doneFiles: 0, totalFiles: accepted.length, current: '' });
         // 제안용 blob 은 미리 나눠 올려 둔다. 저장소 내용은 아직 그대로다.
-        const { uploaded, failures, cancelled } = await uploadMany(
-          repoId,
-          accepted.map((source) => ({
-            source,
-            path: targetFolder ? `${targetFolder}/${source.name}` : source.name,
-          })),
-          setProgress,
-          transfer.begin(),
-        );
+        let handle;
+        try {
+          handle = runTransfer({
+            kind: 'upload',
+            repoId,
+            label: '담는 중',
+            cancelMessage: '담던 파일은 끊습니다. 그때까지 다 담은 파일은 제안에 남습니다.',
+            owner: 'screen',
+            totalFiles: accepted.length,
+            task: (report, signal) =>
+              uploadMany(
+                repoId,
+                accepted.map((source) => ({
+                  source,
+                  path: targetFolder ? `${targetFolder}/${source.name}` : source.name,
+                })),
+                report,
+                signal,
+              ),
+          });
+        } catch (err) {
+          if (err instanceof TransferBusy) return;
+          throw err;
+        }
+        jobRef.current = handle;
+        setJobId(handle.id);
+        const { uploaded, failures, cancelled } = await handle.promise;
+        // 화면을 버려 멈췄거나, 서버를 바꿔 그만뒀다 — 담을 곳이 없다.
+        if (!mountedRef.current || isAbandoned(handle.signal)) return;
         if (cancelled) notify(`멈췄습니다 — ${uploaded.length}/${accepted.length}개 담음`);
         for (const { item, blob } of uploaded) {
           keySeq.current += 1;
@@ -140,7 +173,6 @@ export default function NewProposalScreen() {
           const rest = failures.length - shown.length;
           setError(`${failures.length}개를 담지 못했습니다 — ${shown.join(', ')}${rest > 0 ? ` 외 ${rest}개` : ''}`);
         }
-        setProgress(null);
       }
       setStaged((prev) => [...prev, ...added]);
       if (tooLarge.length > 0) {
@@ -150,7 +182,7 @@ export default function NewProposalScreen() {
         );
       }
     } finally {
-      setPreparing(false);
+      if (mountedRef.current) setPreparing(false);
     }
   }
 
@@ -283,7 +315,6 @@ export default function NewProposalScreen() {
           현재 폴더: {browsePath === '' ? '최상위 폴더' : browsePath} — 새로 담는 파일은 이
           폴더에 저장됩니다. 아래 목록에서 다른 폴더를 열면 바뀝니다.
         </Caption>
-        {progress ? <TransferProgress progress={progress} label="담는 중" control={transfer} /> : null}
 
         {staged.length === 0 ? (
           <Caption>

@@ -18,12 +18,12 @@ import {
   Subtitle,
   Title,
 } from '../../../src/components/ui';
-import { TransferProgress, useTransferControl } from '../../../src/components/TransferProgress';
 import { ApiError, api, getMaxUploadBytes, resolveApiUrl } from '../../../src/api/client';
 import { confirmAction, notify, notifyError, notifySuccess } from '../../../src/lib/dialogs';
 import { compareFolder, listRepoFolder, type RepoFile } from '../../../src/lib/folder-compare';
 import { localFolderSupported, pickLocalFolder, type LocalEntry, type LocalFolder } from '../../../src/lib/local-folder';
-import { uploadAndCommit, uploadMany, type UploadProgress } from '../../../src/lib/transfer';
+import { isAbandoned, uploadAndCommit, uploadMany } from '../../../src/lib/transfer';
+import { TransferBusy, runTransfer, useTransfers } from '../../../src/lib/transfer-store';
 import { fontSize, monoFont, radius, spacing, useTheme } from '../../../src/theme';
 
 type Tab = 'repoOnly' | 'localOnly' | 'both';
@@ -49,12 +49,9 @@ export default function CompareScreen() {
   const [shown, setShown] = useState(PAGE);
   const [scanning, setScanning] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [progress, setProgress] = useState<{ kind: 'upload' | 'download'; label: string; value: UploadProgress } | null>(
-    null,
-  );
-  const busy = scanning || progress !== null;
-  const uploadControl = useTransferControl('올리던 파일은 끊고, 그때까지 다 올린 파일만 반영합니다.');
-  const downloadControl = useTransferControl('지금 받는 파일까지 받고 멈춥니다. 받은 파일은 그대로 둡니다.');
+  // 받기·올리기는 전송 스토어가 맡고 진행 카드는 루트의 TransferHost 가 그린다. 이 저장소에 전송이 있으면 막는다.
+  const transfers = useTransfers(repoId);
+  const busy = scanning || transfers.jobs.length > 0;
 
   const loadRepo = useCallback(async () => {
     const [{ repo: summary }, files] = await Promise.all([api.getRepo(repoId), listRepoFolder(repoId, basePath)]);
@@ -126,48 +123,55 @@ export default function CompareScreen() {
     if (!ok) return;
 
     const failures: string[] = [];
-    let doneBytes = 0;
     let received = 0;
-    const signal = downloadControl.begin();
-    for (const [index, file] of files.entries()) {
-      if (signal.aborted) break;
-      const report = (fraction: number) =>
-        setProgress({
-          kind: 'download',
-          label: '받는 중',
-          value: {
-            sentBytes: doneBytes + file.size * fraction,
-            totalBytes,
-            doneFiles: index,
-            totalFiles: files.length,
-            current: file.name,
-          },
-        });
-      report(0);
-      try {
-        const link = await api.downloadLink(repoId, { path: file.path });
-        const url = resolveApiUrl(link.url);
-        if (folder.save) {
-          await folder.save(file.relativePath, url, report);
-        } else {
-          const anchor = document.createElement('a');
-          anchor.href = url;
-          anchor.rel = 'noopener';
-          document.body.appendChild(anchor);
-          anchor.click();
-          anchor.remove();
-          // 브라우저가 연달아 누른 내려받기를 한데 묶어 막지 않게 조금씩 띄운다.
-          await new Promise((resolve) => setTimeout(resolve, 400));
+    const save = folder.save;
+    const handle = runTransfer({
+      kind: 'download',
+      repoId,
+      label: '받는 중',
+      cancelMessage: '지금 받는 파일까지 받고 멈춥니다. 받은 파일은 그대로 둡니다.',
+      totalFiles: files.length,
+      task: async (onProgress, signal) => {
+        let doneBytes = 0;
+        for (const [index, file] of files.entries()) {
+          if (signal.aborted) break;
+          const report = (fraction: number) =>
+            onProgress({
+              sentBytes: doneBytes + file.size * fraction,
+              totalBytes,
+              doneFiles: index,
+              totalFiles: files.length,
+              current: file.name,
+            });
+          report(0);
+          try {
+            const link = await api.downloadLink(repoId, { path: file.path });
+            const url = resolveApiUrl(link.url);
+            if (save) {
+              await save(file.relativePath, url, report);
+            } else {
+              const anchor = document.createElement('a');
+              anchor.href = url;
+              anchor.rel = 'noopener';
+              document.body.appendChild(anchor);
+              anchor.click();
+              anchor.remove();
+              // 브라우저가 연달아 누른 내려받기를 한데 묶어 막지 않게 조금씩 띄운다.
+              await new Promise((resolve) => setTimeout(resolve, 400));
+            }
+            received += 1;
+          } catch (err) {
+            failures.push(`${file.relativePath}: ${err instanceof Error ? err.message : '받지 못했습니다'}`);
+          }
+          doneBytes += file.size;
         }
-        received += 1;
-      } catch (err) {
-        failures.push(`${file.relativePath}: ${err instanceof Error ? err.message : '받지 못했습니다'}`);
-      }
-      doneBytes += file.size;
-    }
-    setProgress(null);
+      },
+    });
+    await handle.promise;
+    // 서버를 바꿨거나 로그아웃해 그만뒀다 — 스토어가 이미 알렸다.
+    if (isAbandoned(handle.signal)) return;
     const details = failures.slice(0, 3).join('\n') || undefined;
-    if (signal.aborted) notify(`멈췄습니다 — ${received}/${files.length}개 받음`, details);
+    if (handle.signal.aborted) notify(`멈췄습니다 — ${received}/${files.length}개 받음`, details);
     else if (failures.length === 0) {
       // 웹의 폴더 없는 받기는 브라우저에 내려받기를 시작시킬 뿐이라 끝났는지는 알 수 없다.
       if (toFolder) notifySuccess(`${files.length}개를 받았습니다.`);
@@ -199,11 +203,22 @@ export default function CompareScreen() {
     if (!ok) return;
 
     const uploadItems = valid.map((item) => ({ source: item.entry.source, path: item.path }));
-    const onProgress = (value: UploadProgress) => setProgress({ label: '올리는 중', value, kind: 'upload' });
-    const signal = uploadControl.begin();
+    const transfer = {
+      kind: 'upload' as const,
+      repoId,
+      label: '올리는 중',
+      cancelMessage: '올리던 파일은 끊고, 그때까지 다 올린 파일만 반영합니다.',
+      totalFiles: uploadItems.length,
+    };
     try {
       if (isEditor) {
-        const { uploaded, failures, cancelled } = await uploadAndCommit(repoId, uploadItems, onProgress, signal);
+        const handle = runTransfer({
+          ...transfer,
+          task: (report, signal) => uploadAndCommit(repoId, uploadItems, report, signal),
+        });
+        const { uploaded, failures, cancelled } = await handle.promise;
+        // 서버를 바꿨거나 로그아웃해 그만뒀다 — 스토어가 이미 알렸다.
+        if (isAbandoned(handle.signal)) return;
         const details = failures.slice(0, 3).map((f) => `${f.item.path}: ${f.message}`).join('\n') || undefined;
         if (cancelled) {
           notify(
@@ -216,14 +231,23 @@ export default function CompareScreen() {
           notifyError(`${uploadItems.length - failures.length}개 올림, ${failures.length}개 실패`, details);
         }
       } else {
-        const { uploaded, failures, cancelled } = await uploadMany(repoId, uploadItems, onProgress, signal);
-        if (uploaded.length > 0) {
-          const { proposal } = await api.createProposal(repoId, {
-            title: `내 폴더에서 ${uploaded.length}개 추가`,
-            description: `'${folder?.label ?? '내 폴더'}' 와 견줘 저장소에 없던 파일입니다.`,
-            changes: uploaded.map(({ item, blob }) => ({ path: item.path, blobHash: blob.hash })),
-          });
-          setProgress(null);
+        // 제안 만들기까지 한 전송으로 — 그동안에도 진행 카드가 남는다.
+        const handle = runTransfer({
+          ...transfer,
+          task: async (report, signal) => {
+            const outcome = await uploadMany(repoId, uploadItems, report, signal);
+            if (outcome.uploaded.length === 0 || isAbandoned(signal)) return { ...outcome, proposal: null };
+            const created = await api.createProposal(repoId, {
+              title: `내 폴더에서 ${outcome.uploaded.length}개 추가`,
+              description: `'${folder?.label ?? '내 폴더'}' 와 견줘 저장소에 없던 파일입니다.`,
+              changes: outcome.uploaded.map(({ item, blob }) => ({ path: item.path, blobHash: blob.hash })),
+            });
+            return { ...outcome, proposal: created.proposal };
+          },
+        });
+        const { uploaded, failures, cancelled, proposal } = await handle.promise;
+        if (isAbandoned(handle.signal)) return;
+        if (proposal) {
           if (failures.length > 0) {
             const why = failures.slice(0, 3).map((f) => `${f.item.path}: ${f.message}`).join('\n');
             notifyError(`${failures.length}개는 올리지 못했습니다.`, why);
@@ -235,9 +259,8 @@ export default function CompareScreen() {
         else notifyError('올리지 못했습니다.', failures.slice(0, 3).map((f) => `${f.item.path}: ${f.message}`).join('\n'));
       }
     } catch (err) {
+      if (err instanceof TransferBusy) return;
       notifyError(isEditor ? '반영하지 못했습니다.' : '제안을 만들지 못했습니다.', err instanceof ApiError ? err.message : undefined);
-    } finally {
-      setProgress(null);
     }
     await refresh();
   }
@@ -369,14 +392,6 @@ export default function CompareScreen() {
           <Switch value={byName} onValueChange={setByName} trackColor={{ true: colors.accent, false: colors.border }} aria-hidden />
         </Pressable>
       </Card>
-
-      {progress ? (
-        <TransferProgress
-          progress={progress.value}
-          label={progress.label}
-          control={progress.kind === 'upload' ? uploadControl : downloadControl}
-        />
-      ) : null}
 
       {!repoFiles && !error ? <Loading label="저장소 목록 불러오는 중…" /> : null}
 

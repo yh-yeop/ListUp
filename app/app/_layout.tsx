@@ -4,6 +4,7 @@ import { useEffect } from 'react';
 import { View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ToastHost } from '../src/components/Toast';
+import { TransferHost } from '../src/components/TransferHost';
 import { Loading } from '../src/components/ui';
 import { suggestUpdateOnce } from '../src/lib/updates';
 import { AuthProvider, useAuth } from '../src/state/auth';
@@ -99,8 +100,10 @@ export default function RootLayout() {
         <StatusBar style={dark ? 'light' : 'dark'} />
         <View style={{ flex: 1 }}>
           <RootNavigator />
-          {/* 안내 토스트 — 스택 위에 떠서 화면을 옮겨도 남는다. */}
-          <ToastHost />
+          {/* 진행 중인 전송 카드와 안내 토스트 — 스택 위에 떠서 화면을 옮겨도 남는다. 토스트는 카드 위로 쌓인다. */}
+          <TransferHost>
+            <ToastHost />
+          </TransferHost>
         </View>
       </AuthProvider>
     </SafeAreaProvider>

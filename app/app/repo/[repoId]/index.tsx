@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Stack, router, useFocusEffect, useLocalSearchParams } from 'expo-router';
-import { useCallback, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { ActivityIndicator, Platform, Pressable, RefreshControl, Text, View } from 'react-native';
 import {
   ROLE_LABEL,
@@ -29,20 +29,21 @@ import {
 } from '../../../src/components/ui';
 import { Breadcrumb, RepoNav } from '../../../src/components/RepoNav';
 import { SearchResults } from '../../../src/components/SearchResults';
-import { TransferProgress, useTransferControl } from '../../../src/components/TransferProgress';
 import { ApiError, api, getMaxUploadBytes, type UploadSource } from '../../../src/api/client';
-import { confirmAction, notify, notifyError, notifySuccess } from '../../../src/lib/dialogs';
+import { confirmAction, notify, notifyError } from '../../../src/lib/dialogs';
 import { downloadFromRepo, pickFiles, pickFolder } from '../../../src/lib/files';
 import { listRepoFolder } from '../../../src/lib/folder-compare';
 import { localFolderSupported } from '../../../src/lib/local-folder';
+import { MAX_FAILURES_SHOWN, describeUploadOutcome } from '../../../src/lib/pure/transfer-report';
 import {
+  isAbandoned,
   remoteFilesOf,
   splitUnchanged,
   uploadAndCommit,
   type RemoteFiles,
   type UploadItem,
-  type UploadProgress,
 } from '../../../src/lib/transfer';
+import { TransferBusy, runTransfer, useTransfers } from '../../../src/lib/transfer-store';
 import { useAsync } from '../../../src/lib/useAsync';
 import { fontSize, monoFont, radius, spacing, useTheme } from '../../../src/theme';
 
@@ -58,9 +59,6 @@ interface Editing {
   value: string;
 }
 
-/** 업로드 실패 안내에 나열할 최대 건수. 나머지는 'n건 더' 로 줄인다. */
-const MAX_FAILURES_SHOWN = 3;
-
 /** 폴더 올리기는 웹(폴더 선택)과 안드로이드(시스템 폴더 선택기)에서만 된다. */
 const CAN_PICK_FOLDER = Platform.OS === 'web' || Platform.OS === 'android';
 
@@ -73,11 +71,11 @@ export default function RepoFilesScreen() {
   } = useLocalSearchParams<{ repoId: string; snapshot?: string; message?: string; at?: string }>();
   const { colors } = useTheme();
   const [path, setPath] = useState('');
-  const [progress, setProgress] = useState<UploadProgress | null>(null);
-  const uploading = progress !== null;
+  // 올리기는 화면 밖(전송 스토어)에서 이어진다 — 다른 탭에 다녀와도 이 저장소에 올리는 중이면 버튼을 막는다.
+  const transfers = useTransfers(repoId);
+  const uploading = transfers.active !== null;
   // 선택기가 돌아온 뒤 올리기 시작까지(크기 검사·목록 대조·확인) 다시 누르지 못하게 한다.
   const [preparing, setPreparing] = useState(false);
-  const transfer = useTransferControl('올리던 파일은 끊고, 그때까지 다 올린 파일만 저장소에 반영합니다.');
   const [busyPath, setBusyPath] = useState<string | null>(null);
   const [editing, setEditing] = useState<Editing | null>(null);
   const [renaming, setRenaming] = useState(false);
@@ -111,6 +109,15 @@ export default function RepoFilesScreen() {
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []),
   );
+
+  // 이 저장소의 올리기가 끝나면(화면을 떠났다 돌아온 뒤에 끝나도) 목록을 다시 읽는다. 첫 렌더는 건너뛴다.
+  const seenFinished = useRef(transfers.finishedSeq);
+  useEffect(() => {
+    if (seenFinished.current === transfers.finishedSeq) return;
+    seenFinished.current = transfers.finishedSeq;
+    state.refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [transfers.finishedSeq]);
 
   const repo = state.data?.repo;
   const tree = state.data?.tree;
@@ -160,39 +167,35 @@ export default function RepoFilesScreen() {
     return sources.filter((source) => source.size <= maxBytes);
   }
 
-  /** 조각으로 나눠 올리고 커밋 하나로 반영한 뒤, 결과를 알려 준다. */
+  /**
+   * 조각으로 나눠 올리고 커밋 하나로 반영한 뒤, 결과를 알려 준다. 올리기는 전송 스토어가 맡아 이 화면을
+   * 떠나도 이어지므로, 끝난 뒤에는 토스트만 띄운다(목록은 finishedSeq 로 다시 읽는다). 시작은 동기로 일어나
+   * 부른 쪽이 기다리지 않아도 바로 버튼이 막힌다.
+   */
   async function runUpload(items: UploadItem[]) {
-    setProgress({ sentBytes: 0, totalBytes: 0, doneFiles: 0, totalFiles: items.length, current: '' });
-    const signal = transfer.begin();
     try {
-      const result = await uploadAndCommit(repoId, items, setProgress, signal);
-      const { failures, commit } = result;
-      if (result.cancelled) {
-        const done = result.uploaded.length;
-        notify(
-          `멈췄습니다 — ${done}/${items.length}개 올림`,
-          done > 0 ? '다 올린 파일은 저장소에 반영했습니다. 나머지는 올리지 않았습니다.' : '저장소는 그대로입니다.',
-        );
-      } else if (failures.length > 0) {
-        const shown = failures.slice(0, MAX_FAILURES_SHOWN).map((f) => `${f.item.source.name}: ${f.message}`);
-        const more = failures.length - shown.length;
-        notifyError(
-          `${result.uploaded.length}개 올렸습니다.`,
-          `${failures.length}개는 올리지 못했습니다.\n${shown.join('\n')}${more > 0 ? `\n외 ${more}건 더` : ''}`,
-        );
-      } else if (commit && items.length > 1) {
-        const parts = [
-          commit.added ? `추가 ${commit.added}` : '',
-          commit.updated ? `수정 ${commit.updated}` : '',
-        ].filter(Boolean);
-        if (parts.length > 0) notifySuccess(`${items.length}개 올렸습니다 — ${parts.join(' · ')}`);
-        else notify('바뀐 파일이 없습니다.', '올린 파일이 저장소에 있는 것과 같습니다.');
-      }
+      const handle = runTransfer({
+        kind: 'upload',
+        repoId,
+        label: '올리는 중',
+        cancelMessage: '올리던 파일은 끊고, 그때까지 다 올린 파일만 저장소에 반영합니다.',
+        totalFiles: items.length,
+        task: (report, signal) => uploadAndCommit(repoId, items, report, signal),
+      });
+      const result = await handle.promise;
+      // 서버를 바꿨거나 로그아웃해 그만뒀다 — 스토어가 이미 알렸다.
+      if (isAbandoned(handle.signal)) return;
+      const notice = describeUploadOutcome({
+        total: items.length,
+        uploaded: result.uploaded.length,
+        failures: result.failures.map((f) => ({ name: f.item.source.name, message: f.message })),
+        cancelled: result.cancelled,
+        commit: result.commit,
+      });
+      if (notice) notify(notice.title, notice.message, notice.tone);
     } catch (err) {
+      if (err instanceof TransferBusy) return;
       notifyError('반영하지 못했습니다.', err instanceof ApiError ? err.message : undefined);
-    } finally {
-      setProgress(null);
-      state.refresh();
     }
   }
 
@@ -234,7 +237,7 @@ export default function RepoFilesScreen() {
       }
 
       if (unchanged.length > 0) notify(`${unchanged.length}개는 이미 올라가 있어 건너뜁니다.`);
-      await runUpload(changed);
+      void runUpload(changed);
     } finally {
       setPreparing(false);
     }
@@ -284,7 +287,7 @@ export default function RepoFilesScreen() {
         confirmLabel: '올리기',
       });
       if (!ok) return;
-      await runUpload(changed);
+      void runUpload(changed);
     } finally {
       setPreparing(false);
     }
@@ -458,8 +461,6 @@ export default function RepoFilesScreen() {
               ) : null}
             </Row>
           )}
-
-          {progress ? <TransferProgress progress={progress} control={transfer} /> : null}
 
           {!isEditor && !snapshotId ? (
             <Caption>

@@ -107,6 +107,50 @@ export default async function run(t, env) {
     await toast.click();
     await toast.waitFor({ state: 'detached', timeout: 5000 });
     t.ok('토스트를 누르면 닫힌다');
+
+    // ③ 올리는 중에 다른 탭에 다녀와도 진행 카드가 남고, 돌아오면 다시 올리지 못하며, 끝나면 목록이 저절로 바뀐다.
+    // 예전에는 화면 안에 진행 상태가 있어 탭을 옮기면 카드가 사라지고 같은 파일을 또 올릴 수 있었다(U2-1).
+    const repo2 = (await api(A, '/api/repos', { name: '탭 이동' }, token)).json.repo;
+    const posts = [];
+    await page.route('**/api/repos/*/uploads', async (route) => {
+      if (route.request().method() === 'POST') posts.push(route.request().url());
+      await route.continue().catch(() => {});
+    });
+    puts.length = 0;
+    await page.goto(`${A}/repo/${repo2.id}`);
+    await page.getByRole('button', { name: '파일 올리기' }).waitFor();
+    await pick();
+    await page.getByRole('tab', { name: '변경 이력' }).click();
+    await page.waitForURL(/\/history/);
+    await page.waitForTimeout(300);
+    t.must((await page.getByRole('progressbar', { name: /^올리는 중/ }).count()) === 1, '다른 탭으로 가도 진행 카드가 남는다');
+    await page.getByRole('tab', { name: '파일' }).click();
+    const again = page.getByRole('button', { name: '파일 올리기' });
+    await again.waitFor();
+    t.must(await again.isDisabled(), '돌아오면 올리는 중이라 「파일 올리기」가 막혀 있다');
+    await page.getByRole('button', { name: 'c.txt 내려받기' }).first().waitFor({ timeout: 30000 });
+    t.ok('끝나면 누르지 않아도 목록에 올린 파일이 나온다');
+    await page.getByRole('progressbar').waitFor({ state: 'detached', timeout: 10000 });
+    t.must(posts.length === 3, `업로드 세션은 파일마다 한 번씩 3번뿐 (${posts.length}번)`);
+
+    // ④ 제안에 파일을 담는 중에 뒤로 가서 버리면, 담던 전송도 멈춰 더는 조각을 보내지 않는다.
+    await page.getByRole('button', { name: '변경 제안 만들기' }).click();
+    await page.getByRole('button', { name: '파일 담기' }).waitFor();
+    puts.length = 0;
+    deletes.length = 0;
+    const stage = page.waitForEvent('filechooser');
+    await page.getByRole('button', { name: '파일 담기' }).click();
+    await (await stage).setFiles(['a.txt', 'b.txt', 'c.txt'].map((n) => path.join(work, n)));
+    await page.getByRole('progressbar', { name: /^담는 중/ }).waitFor({ timeout: 10000 });
+    while (puts.length < 1) await page.waitForTimeout(50);
+    dialogs.length = 0;
+    await page.getByLabel(/back$/i).first().click();
+    await page.getByRole('progressbar').waitFor({ state: 'detached', timeout: 10000 });
+    t.must(dialogs.some((m) => m.includes('작성 중인 제안을 버릴까요?')), '담는 중에 나가면 먼저 묻는다');
+    const sent = puts.length;
+    await page.waitForTimeout(3500);
+    t.must(puts.length === sent, `버린 뒤에는 조각을 더 보내지 않는다 (${sent} → ${puts.length})`);
+    t.must(deletes.length >= 1, '버리면서 끊은 업로드 세션을 서버에서 치운다');
     await ctx.close();
   } finally {
     fs.rmSync(work, { recursive: true, force: true });
