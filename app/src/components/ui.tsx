@@ -207,7 +207,9 @@ export function Button({
       ]}
     >
       {loading ? (
-        <ActivityIndicator size="small" color={tone.fg} />
+        // 버튼이 바쁜 것은 버튼의 busy 로 알린다. 스피너는 웹에서 role="progressbar" 라, 숨기지 않으면 전송 카드의
+        // 진행 막대와 함께 progressbar 가 둘이 된다(「멈추기」를 누른 뒤 멈추는 동안).
+        <ActivityIndicator size="small" color={tone.fg} aria-hidden importantForAccessibility="no-hide-descendants" />
       ) : icon ? (
         <Ionicons name={icon} size={compact ? 15 : 17} color={tone.fg} />
       ) : null}
