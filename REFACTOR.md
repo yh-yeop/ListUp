@@ -250,3 +250,236 @@ Sonnet 수정자 6기(파일 묶음이 겹치지 않게)가 §2a 41건을 고쳤
 검사: `npm run typecheck`(server·app) 통과, `npm test` 226개(서버 187·앱 39) 통과, `npm run test:e2e` 210개 통과.
 수정자 두 명이 보고한 타입 검사 실패는 다른 수정자가 고치던 중의 일시 상태였고, 끝난 뒤 다시 돌려 통과를 확인했다.
 연속 실패로 2단계에 올라간 항목은 없다. 남은 것: §2c 2단계 48건, §2d 3단계 6건.
+
+
+---
+
+# 1.5단계 — 저장소 로직 최적화·단계별 절차적 UX 검증 (2026-11-02)
+
+대상: 서버 저장소 로직(`server/src/services/**`, `server/src/routes/**`, `server/src/lib/storage.ts`)과 앱의 사용자 흐름(`app/app/**`, `app/src/**`).
+기준점: 커밋 `9b770d8` — typecheck(server·app·desktop·mcp) 통과, `npm test` 262개(서버 201·앱 47·mcp 14) 통과.
+절차: **Sonnet 찾기(5기)** → Opus 일괄 검증 → 비판 Sonnet → 이견만 Opus 재판정 → Sonnet 수정(파일 겹침 없음). 연속 실패 N=2 이면 2단계.
+찾기 담당(겹치지 않게): L1 저장소 읽기 경로 · L2 저장소 쓰기 경로 · U1 처음 시작·초대 흐름 · U2 파일 다루기 흐름 · U3 제안·계정·멤버 흐름.
+UX 쪽은 위 UX 1단계(§1~§3)의 시각·접근성 지적과 겹치지 않게 **절차(흐름·상태·이동·문구·순서)** 만 본다.
+"수정 대상" 조건은 UX 1단계와 같다 — 파일 하나 안에서 끝나고 버튼 글자·accessibilityLabel 을 바꾸지 않는 것. 서버는 기존 테스트가 지키는 동작을 바꾸지 않는 것.
+여러 파일·라벨 변경·API 모양 변경·설계 판단은 2단계, 구조 변경은 3단계.
+
+## §4 지적
+
+### §4b L2 저장소 쓰기 경로 (Sonnet, 12건)
+
+총평: 쓰기 라우트는 `await` 없는 `db.transaction` 안에서 head 를 다시 읽고 판정해(better-sqlite3 동기) 같은 프로세스의 check-then-write 경합은 없다. 문제는 디스크↔DB 비동기 구간과 커밋마다 manifest 를 반복해 만드는 비용에 몰려 있다.
+
+- **L2-1** `server/src/services/proposals.ts:166-186` (findConflicts) [perf][high] — `proposal_changes.base_blob_hash` 가 있는데 매번 `readManifest(base)` 로 base 를 부모 체인을 되감아 재구성. 병합 한 번에 head 3번 읽음, `detail()`(상세·create·merge 응답)마다 같은 계산. → 제안: baseHash 는 저장된 `base_blob_hash`, head manifest 는 호출자가 한 벌 넘김. base===head 단락 유지. 시험: 스냅샷 여러 개 쌓인 뒤 충돌/비충돌 판정 동일.
+- **L2-2** `server/src/services/snapshots.ts:153-156` + `files.ts:132,210,287,330`·merge [perf][low] — 라우트의 `readManifest(head)` 와 `writeSnapshot` 의 `readHead` 가 같은 SELECT 두 번. → 제안: 복사본을 `writeSnapshot({current})` 로 넘김. L2-1 과 함께.
+- **L2-3** `files.ts:246,344-347`, `services/proposals.ts:149-159`, `snapshots.ts:127-137` [perf][med] — `findPathConflict` 가 매번 manifest 키 전체를 `startsWith` 로 훑어 O(항목×전체). 빈 저장소에 5000개 commit ≈ 2500만 비교가 동기 트랜잭션 안. move 는 파일마다 검사(대상 `to` 하나면 됨). → 제안: 파일 Set + 조상 폴더 접두 Set 색인으로 O(깊이). 시험: files.test 의 이름 겹침 사례 유지.
+- **L2-4** `server/src/routes/files.ts:111-164` [correctness][med] — 직접 업로드가 blob 파일을 먼저 확정한 뒤 트랜잭션(413/409)이 실패하면 새 blob 파일을 지우지 않음(`/blobs`·`uploads/complete` 는 지움). GC(24h 유예)까지 고아. → 제안: 실패 시 isNewBlob 이면 remove, 세 곳 정리 로직을 헬퍼로. 시험: maxRepoBytes 작은 하니스에서 413 뒤 `blobs.has(hash)` false.
+- **L2-5** `files.ts:443-446,472`, `uploads.ts:159-160,183` [race][low] — isNewBlob 기반 인라인 삭제가 같은 해시를 동시에 올리는 요청과 경합 → blobs 행은 있는데 파일 없음. → 제안: 해시별 뮤텍스 또는 인라인 삭제 없이 GC 에 맡김.
+- **L2-6** `files.ts:117,464`, `uploads.ts:170`, `services/gc.ts:52` [correctness][low] — `INSERT … ON CONFLICT DO NOTHING` 이라 오래 방치된 미참조 blob 을 다시 올려도 `blobs.created_at` 이 옛 값 → 다음 GC 가 곧바로 지워 제안 생성이 400. → 제안: `DO UPDATE SET created_at = excluded.created_at`(repo_blobs 는 쿼터용이라 그대로). 시험: gc.test 에 "옛 미참조 blob 재업로드 후 GC 가 남긴다".
+- **L2-7** `server/src/lib/storage.ts:147-158` [perf][med] — `completeSession` 이 세션 파일(최대 2GB)을 다시 읽어 해시. complete 가 프록시 100초를 넘기면 클라이언트는 오류, 재시도 409, 끝나면 세션 삭제로 404 → hash 를 받을 길이 없음. → 제안: 연속 조각이면 세션별 해시 상태를 이어 갱신, 어긋나면 기존 재해시로 폴백.
+- **L2-8** `storage.ts:89-104,147-158`, `uploads.ts:156` [correctness][low] — completeSession 실패 시 moveIntoPlace catch 가 세션 파일을 지워 세션 행만 남고 이후 재시도는 ENOENT 500. → 제안: 던지면 세션 행·파일 정리.
+- **L2-9** `server/src/routes/uploads.ts:80-105`, `files.ts:431` [correctness][med] — 진행 중 세션 크기가 쿼터에 예약되지 않고 세션 수 상한 없음. 편집자는 세션 경로에 쿼터가 아예 없음(`/blobs` 는 편집자에게도 검). → 제안: 세션 size 예약·열린 세션 수 상한·편집자 정책 일치.
+- **L2-10** `routes/proposals.ts:145-148` vs merge `:357`, `files.ts:145,248` [correctness][low] — (a) 제안 생성 파일 수 검사가 삭제를 빼지 않아 생성 409·병합 통과로 어긋남. (b) `assertRepoBytes` 가 절대치라 한도를 낮춘 뒤에는 삭제만 하는 commit·병합·작은 파일로 교체도 413. → 제안: adds−deletes, "총량이 늘지 않으면 통과". 시험: maxRepoBytes:100 하니스로 한도 초과 상태 삭제 병합.
+- **L2-11** `services/proposals.ts:120-136`, `files.ts:215`, `routes/proposals.ts:107` [simplify][low] — 루프 안에서 매번 `db.prepare`. → 제안: 모듈 단위 캐시.
+- **L2-12** `server/src/lib/storage.ts:164-172,179-181` [simplify][low] — `writeBuffer`(최종 경로에 직접 씀)·`read`(전체 메모리) 미사용. → 제안: 삭제.
+- 문제없음: PUT 조각(busy·truncate), writeStream 단일 패스, uploads/complete 실패 경로, GC "DB 먼저 파일 나중" 순서, 병합·삭제·이동·커밋의 head 재조회.
+
+### §4a L1 저장소 읽기 경로 (Sonnet, 10건)
+
+인메모리 SQLite 에 실제 MIGRATIONS 를 적용해 `EXPLAIN QUERY PLAN`·합성 벤치로 확인(서버에 ANALYZE 없음).
+
+- **L1-1** `server/src/services/snapshots.ts:415-436` (listTrash) [perf][high] — 바깥 루프가 `idx_snapchanges_blob (blob_hash IS NULL)` 로 **모든 저장소의** 삭제 변경을 읽은 뒤 repo 로 거르고, "나중에 같은 경로를 바꿨나" 서브쿼리가 저장소의 모든 스냅샷을 프로브. 40저장소×1000스냅샷에서 한 저장소 휴지통 ~410-480ms, 다른 저장소 이력에 비례. → 제안: `snapshots s CROSS JOIN snapshot_changes c` 로 저장소에서 출발, 세 번째 서브쿼리는 `INDEXED BY idx_snapchanges_path` 로 순서 강제 — 407→35ms, 결과 동일(499건). 시험: 저장소 2개로 섞이지 않음·삭제 후 재생성·이동 대조.
+- **L1-2** `server/src/services/snapshots.ts:280-284` (listTree), `server/src/routes/downloads.ts:105` (sendArchive) [perf][high] — 정렬 비교마다 `localeCompare(b,'ko',{numeric:true})` 로 Collator 를 새로 만듦. 경로 2만 개 1166ms vs 모듈 Collator 49ms(24배). recursive 목록(내 폴더와 비교)에서 이벤트 루프를 막음. → 제안: 모듈 상단 `new Intl.Collator('ko',{numeric:true})`. 시험: 숫자 섞인 이름 순서.
+- **L1-3** `server/src/services/snapshots.ts:99-118` (readEntry) + `:50-97` (readManifest) [perf][med] — 과거 스냅샷에서 파일 하나를 찾으려고 저장소 전체 manifest 를 만들고 스냅샷마다 `changesOf.all` (N+1). raw?snapshot=·download-link·/dl. → 제안: 재귀 CTE 로 체인을 돌며 그 경로의 가장 깊은 변경 하나 → `prev_*`, 없으면 head. 벤치 결과 일치.
+- **L1-4** `server/src/services/snapshots.ts:371-383` (listFileVersions) [index][low] — `snapshot_changes` 에 repo_id 가 없어 저장소의 모든 스냅샷을 프로브. 1000개에 0.8ms 로 아직 빠름. → 제안: 지금은 둠(필요 시 새 MIGRATION 으로 비정규화).
+- **L1-5** `server/src/services/snapshots.ts:260-278` (listTree head) [perf][low] — 하위 폴더를 열어도 head 전체 행을 읽어 접두로 거름. 3500파일 4-6ms. → 제안: PK 범위 질의·SQL 집계. 우선순위 낮음.
+- **L1-6** `server/src/services/repos.ts:67-92`, `server/src/routes/repos.ts:38-49` [perf][low] — `GET /repos` 가 1+4N 쿼리, `ORDER BY updated_at` 동률 처리 없음. → 제안: 한 쿼리로, `, r.id` 덧붙임.
+- **L1-7** `server/src/routes/downloads.ts:43,107-109` [perf][low] — zip 링크 발급 시 전체 manifest 로 존재 확인, `sendArchive` 가 파일마다 `blobs.has` 를 순차 await. → 제안: 범위 질의 EXISTS, has 를 묶어 병렬.
+- **L1-8** `server/src/routes/repos.ts:271-277` (readCursor) [correctness][low] — `before` 만 오거나 숫자가 아니면 조용히 첫 페이지 → before 만 보내는 클라이언트 무한 루프. → 제안: 400.
+- **L1-9** `server/src/routes/repos.ts:240-243,256-259` [simplify][low] — `length === limit` 로 next 를 정해 정확히 limit 개 남으면 빈 페이지 요청이 한 번 더. → 제안: limit+1 읽기.
+- **L1-10** `server/src/routes/files.ts:~474` (parseRange) [correctness][low] — `bytes=5-2` 는 RFC 9110 상 무시하고 200 이어야 하는데 416. → 제안: end<start 면 null.
+- 문제없음: listSnapshots(0.3ms), snapshotStats, NFC 처리.
+
+### §4e U3 제안·계정·멤버 흐름 (Sonnet, 17건)
+
+- **U3-1** `app/app/repo/[repoId]/new-proposal.tsx:411` [1][missing-feedback][med] — 제목이 비면 「제안 올리기」가 흐려진 채 이유가 없음(제목 칸은 화면 맨 위). submit() 의 검증 문구(172·176행)는 disabled 때문에 도달 불가. → 제안: disabled 는 submitting 만, 기존 검증 문구 사용.
+- **U3-2** `new-proposal.tsx:69,86-142` [1][state-loss][med] — 첫 파일 올리는 중엔 `hasDraft` false 라 뒤로 가도 확인 없음, 언마운트 뒤에도 uploadMany 가 계속 → 쓰이지 않는 blob. → 제안: hasDraft 에 uploading||preparing, 나가면 abort.
+- **U3-3** `new-proposal.tsx:195-206,70-84` [1][race][low] — 제출 중 뒤로 가서 버리면 응답 후 언마운트된 화면의 `router.replace` 가 지금 화면을 제안 상세로 바꿈. → 제안: submitting 중 beforeRemove 막기 또는 마운트 ref.
+- **U3-4** `new-proposal.tsx:411,86-142` [1][state-loss][med] — 올리는 중에도 「제안 올리기」가 눌림 → 끝나는 업로드 결과가 버려짐. → 제안: disabled 에 uploading||preparing.
+- **U3-5** `new-proposal.tsx:129` [1][wrong-message][med] — 여러 파일 중 일부 실패 시 `failures[0]` 하나만 보임. → 제안: 개수·이름 목록.
+- **U3-6** `new-proposal.tsx:119-127,144-158,181-192` [1][ordering][low] — 같은 경로를 두 번/삭제로 담은 경로에 올리면 중복을 제출 때에야 알림, 어느 행인지 모름. → 제안: addFiles 에서 겹치면 건너뛰고 알림(또는 교체), 200개 상한 안내.
+- **U3-7** `app/app/proposal/[proposalId].tsx:67-87,203-211` [2][dead-end][high] — 반영 409 뒤 refresh 를 안 해 conflicts/mergeable 이 옛 값 → 「반영할 수 없습니다」 카드 안 뜨고 같은 409 반복. → 제안: 409 면 `state.refresh()`.
+- **U3-8** `[proposalId].tsx:70-86,208-216,225-227` [2][double-submit][med] — 성공 후 refresh 를 기다리지 않고 action 을 풀어 옛 status 로 버튼이 다시 활성 → 한 번 더 누르면 "이미 처리된 제안" 오류. → 제안: refresh 완료 뒤 해제 또는 응답 proposal 로 즉시 갱신(useAsync 보강 필요).
+- **U3-9** `[proposalId].tsx:168-171` [2][wrong-message][med] — 충돌 카드 문구가 작성자용인데 편집자에게도 같음. → 제안: 역할별 문구.
+- **U3-10** `[proposalId].tsx:351-363,383-386` [2][wrong-message][low] — 열린 제안의 「현재본 받기」는 head 파일인데 크기 표시는 baseSize, head 에서 지워졌으면 일반 오류. → 제안: "제안 당시 N"·404 문구.
+- **U3-11** `app/app/repo/[repoId]/proposals.tsx:37-44,104-108` [2][wrong-message][med] — 필터 칩을 바꾸면 응답 전까지 이전 필터 목록이 로딩 표시 없이 남음. → 제안: 필터 변경 시 비우거나 로딩 표시.
+- **U3-12** `proposals.tsx:50-55,45-48,106` [2][state-loss][low] — 더 보기로 펼친 뒤 상세 다녀오면 포커스 refresh 가 펼친 페이지를 버림, 새로고침 한 번 실패로 목록 전체가 오류 박스. → 제안: 실패 시 목록 유지·토스트.
+- **U3-13** `app/app/my-proposals.tsx:20` [3][missing-feedback][low] — 서버가 기본 50개만 주고 next 가 없어 51번째 이후는 영영 안 보이고 표시도 없음. → 제안: 서버 next + useMorePages(서버·앱).
+- **U3-14** `app/app/repo/[repoId]/members.tsx:42,100-107,121-130,142-150` [4][race][med] — 한 칸짜리 busy 라 다른 멤버 작업이 서로의 로딩을 지움, 다른 멤버 버튼은 busy 중에도 활성(소유자 지정 연타 → 403). → 제안: busy 중 모든 멤버 버튼·삭제/나가기 disabled.
+- **U3-15** `members.tsx:312-331` [4][dead-end][med] — 소유자는 「나가기」가 없고 소유권을 넘겨야 한다는 안내도 없음. → 제안: Caption 안내.
+- **U3-16** `app/app/settings.tsx:147-156` [5][double-submit][med] — 로그아웃이 서버를 최대 3초 기다리는 동안 버튼 변화 없음 → 다시 눌러 확인창 중복. → 제안: signingOut 상태·loading.
+- **U3-17** `settings.tsx:102-119` [5][wrong-message][low] — 비밀번호 변경이 처리됐는데 응답만 못 받은 경우(status 0)도 "바꾸지 못했습니다" → 재시도 시 "현재 비밀번호가 올바르지 않습니다", 이어 401 로그아웃. → 제안: status 0 문구 구분.
+
+### §4c U1 처음 시작·초대 흐름 (Sonnet, 13건)
+
+- **U1-1** `app/app/join.tsx:167` (+152-153, `index.tsx:28`, `signup.tsx:35`, `join.tsx:254-258`) [3][dead-end][high] — 링크로 들어와 로그인·참여하면 replace 연쇄로 스택이 `[repo]` 한 장 → 저장소 화면에서 「내 저장소」로 갈 길이 없음(RepoNav 는 replace 탭뿐, 안드로이드 뒤로가기는 앱 종료). 가입 경로는 `[join, repo]` 로 뒤로 가면 옛 join. → 제안: 참여 후 이동을 한 곳에 모아 dismissAll → replace('/repos') → push('/repo/<id>').
+- **U1-2** `join.tsx:129-173,197-257` [3][dead-end][high] — 로그인·가입 직후 보낸 참여 화면에서 조회/참여가 실패하면(만료·회수·소진) 뒤로가기도 「내 저장소」도 없음. 참여만 실패하면 같은 「참여하기」가 남아 반복. → 제안: 오류이거나 canGoBack 거짓이면 「내 저장소로」(새 라벨), 409 면 preview 내림.
+- **U1-3** `join.tsx:248-295` (+ `InviteSummary.tsx:147-190`) [3][wrong-message][med] — 못 쓰는 초대(409)를 로그인 전에 보여 줘도 부제·pending·PendingInviteNote 는 "참여를 이어 갑니다" 그대로 → 가입 후 U1-2. → 제안: 400/404/409 면 clearPendingInvite·부제 교체(네트워크·429·401 은 유지).
+- **U1-4** `app/src/lib/invite-link.ts:46-71` (+ `index.tsx:27-28`, `login.tsx:160`, `join.tsx:87-88`) [3,4][state-loss][med] — pending 초대가 서버와 묶여 있지 않아 다른 서버로 바꿔 로그인해도 그 서버로 참여 시도, switchServer 실패 시 남음, 포기해도 프로세스 동안 남음. → 제안: `{code, serverUrl}`, `peekPendingInvite(activeUrl)`. 순수 함수로 app/test.
+- **U1-5** `join.tsx:57-95,98-101,125-127,252-253` [3][wrong-message][med] — 목록에 없는 다른 서버 링크에서 「더할까요?」 취소·연결 확인 실패 시 `handledServer` 가 이미 true 라 재시도 불가, 화면은 현재 서버 X 로 미리보기·가입·코드 확인. → 제안: `!onLinkServer` 면 "이 초대는 <Y> 서버의 것" + 들어가기, 실패 시 handledServer 해제.
+- **U1-6** `login.tsx:67`, `signup.tsx:37`, `reset-password.tsx:42` (+ `auth.tsx:94-96`) [1,3][wrong-message][low] — 고른 서버 없이 로그인하면 `noServerError()` 가 일반 Error 라 "로그인에 실패했습니다" 로 삼켜짐. → 제안: err.message 사용, activeServer null 이면 제출 막기.
+- **U1-7** `join.tsx:129-173` [3][missing-feedback][low] — 링크로 바로 참여했을 때 토스트 없음, alreadyMember 무시. → 제안: notifySuccess.
+- **U1-8** `app/app/repo/[repoId]/invites.tsx:81-92` [2][missing-feedback][med] — 초대 만들기 후 안내 없음, 새 초대는 폰에서 화면 밖 → 다시 눌러 여러 개 생성. → 제안: 응답 invite 로 QR 열기 또는 성공 토스트.
+- **U1-9** `invites.tsx:259-280` [2][wrong-message][low] — 「사용 불가」인데 소진·발급자 권한 상실 사유가 안 보이고 "1/1명 참여·기한 없음" 만. → 제안: 「횟수 모두 사용」「발급자 권한 없음」.
+- **U1-10** `app/app/server.tsx:114-126` (+ `auth.tsx:442-444`) [4][ordering][low] — 주소를 이미 있는 주소로 고치면 로그아웃 확인을 받은 뒤에야 중복 오류. → 제안: 확인 전 중복 검사.
+- **U1-11** `server.tsx:56,79-82,209-216` [1][missing-feedback][low] — 형식이 틀린 주소면 두 버튼이 이유 없이 disabled, 안내는 Enter 때만. → 제안: 상시 안내.
+- **U1-12** `login.tsx:160` (+ `server-list.ts:102-105`) [4][state-loss][low] — 로그인 화면에서 서버 목록으로 갔다 같은 서버로 돌아오면 입력이 사라짐(dismissAll+replace). → 제안: 로그아웃 상태에선 push(e2e 1-server-list 확인 필요).
+- **U1-13** `app/app/reset-password.tsx:51-56` [3,4][missing-feedback][low] — 초대를 들고 재설정으로 가면 PendingInviteNote 가 없음. → 제안: 추가.
+
+### §4d U2 파일 다루기 흐름 (Sonnet, 20건)
+
+- **U2-1** `app/app/repo/[repoId]/index.tsx:76,161-193` + `app/src/components/RepoNav.tsx:57` [1][state-loss][high] — 올리는 중 RepoNav 탭(replace)·뒤로가기로 화면이 언마운트되면 진행률·멈추기가 사라진 채 업로드는 계속, 돌아오면 「파일 올리기」가 다시 켜져 중복 업로드, 끝나도 목록 갱신 없음. compare.tsx:176-236 도 같고 열람자는 끝난 뒤 `router.push('/proposal/…')` 가 다른 화면을 가로챔. → 제안: 전송 상태를 모듈 스토어로, 또는 전송 중 beforeRemove 확인, 닫힌 뒤 push 금지.
+- **U2-2** `app/src/lib/transfer.ts:131-153` (+ `client.ts:233`) [1][state-loss][high] — status 0 재시도가 약 30초(5회)뿐, 넘으면 finally 의 `cancelUpload` 가 서버 세션을 지워 받은 위치가 사라짐. 나머지 파일도 줄줄이 실패. 문서의 "끊겨도 이어서" 와 다름. → 제안: 끊김으로 멈춘 세션은 지우지 않고 (저장소·경로·크기·수정시각) 키로 기억해 getUpload 로 이어 감, 오프라인이면 남은 파일 시도 중단.
+- **U2-3** `transfer.ts:146` / `client.ts:313` (completeUpload 30초 타임아웃) [1][wrong-message][med] — 수 GB 완료 시 서버 재해시가 30초를 넘으면 "서버 응답이 없습니다" 로 실패 처리, 서버는 계속 완료. (L2-7 과 짝) → 제안: 긴 타임아웃, 타임아웃 시 세션 상태 확인.
+- **U2-4** `transfer.ts:224-228`, `index.tsx:188-189`, `compare.tsx:233-234` [1,4][ordering][high] — 파일↔폴더 이름 충돌(409)·파일 수·용량(413)이 모든 바이트를 올린 뒤 커밋에서야 드러나고 전부 반영 안 됨, 문구는 "반영하지 못했습니다" 뿐, 다시 올리면 전부 재전송. 사전 검사는 같은 이름 파일만. → 제안: 올리기 전 폴더 충돌·파일 수 검사, 실패 문구에 "올린 N개는 반영되지 않았습니다".
+- **U2-5** `app/src/lib/files.ts:64,98` + `index.tsx:250-256,275-281` [1][wrong-message][med] — 6000개 폴더를 고르면 조용히 5000개로 자르고 확인창은 "파일 5000개" 만, 기존 파일 수도 안 더함. → 제안: truncated 반환·안내, fileCount 합산.
+- **U2-6** `index.tsx:161-187` [1][missing-feedback][med] — 1개 올리면 성공 토스트 없음, `commit.unchanged` 도 구분 안 됨, 부분 실패 사유는 토스트(최대 12초)로만. → 제안: 1개도 성공 안내, unchanged 문구, 결과 패널.
+- **U2-7** `app/src/components/TransferProgress.tsx:45-47` + `transfer.ts:146,208,224` [1][wrong-message][med] — 100% 뒤 completeUpload·commitFiles 동안 「멈추기」가 활성인데 효과 없고 결국 성공 반영. → 제안: "서버에서 마무리하는 중" 단계, 멈추기 숨김.
+- **U2-8** `index.tsx:291-301,615-616,645-663` + `SearchResults.tsx:101,129` [2,5][double-submit][med] — 안드로이드 받는 중에도 행 Pressable 이 살아 있고 download() 에 busyPath 가드 없음 → 받는 중인 캐시 파일 삭제·덮어쓰기, 선택기 두 번, 스피너 엇갈림. → 제안: `if (busyPath) return` + 행 disabled.
+- **U2-9** `index.tsx:291-295`, `versions.tsx:84-85`, `trash.tsx:136-142` → `files.ts:128-132` [2,3][missing-feedback][med] — 안드로이드 큰 파일 받기에 onProgress 를 안 넘겨 진행률·멈추기 없음, PC 앱은 will-download 핸들러 없음. → 제안: onProgress 연결, PC 앱 will-download IPC.
+- **U2-10** `files.ts:165-174`, `local-folder.ts:177-187` [2,4][wrong-message][med] — expo-file-system `resumeAsync()` 는 pause 로 얻은 resumeData 가 있을 때만 이어 받으므로 오류 후엔 매번 처음부터(주석·문서와 다름). /dl 링크 10분 만료, zip 은 Range 없음. → 제안: Range 직접 또는 문구 정정.
+- **U2-11** `index.tsx:326-351` (+ RenameRow 744-755) [3][missing-feedback][med] — 파일 이름 바꾸기 칸에 전체 경로가 채워져 이름만 쓰면 최상위로 옮겨짐, 힌트·성공 안내 없음. → 제안: 힌트·토스트.
+- **U2-12** `index.tsx:93-99,365-369` (+ `useAsync.ts:31-47`, history/versions/trash) [1,3][dead-end][med] — refresh 일시 실패 시 `state.error` 분기가 받아 둔 목록·빵부스러기·RepoNav 를 모두 지우고 오류만. 「다시 시도」 중 로딩 표시 없음. (U3-12 와 같은 뿌리) → 제안: data 가 있으면 목록 유지 + 오류 얹기.
+- **U2-13** `index.tsx:93-99,196-223` [1][race][low] — 폴더를 옮긴 직후 이전 tree 가 남은 동안 올리면 덮어쓰기 확인·splitUnchanged 가 이전 폴더 기준. → 제안: loading 이거나 tree.path≠path 면 비활성.
+- **U2-14** `app/src/lib/pure/transfer-plan.ts:34-45` + `index.tsx:212-219` [1][wrong-message][low] — 직접 고른 파일에도 크기·수정시각 휴리스틱으로 "같은 파일" 이라 단정하고 건너뜀. → 제안: 직접 고른 파일엔 끄거나 문구 수정.
+- **U2-15** `compare.tsx:143-171` [4][wrong-message][low] — 웹 다중 받기는 시작시켰을 뿐인데 "N개를 받았습니다", 선택이 남아 중복. → 제안: "받기를 시작했습니다", 선택 지움.
+- **U2-16** `compare.tsx:176-190,215-231` [4][wrong-message][low] — 열람자 경로 실패가 "반영하지 못했습니다", 부분 실패 사유 없음, 준비 중 busy 없음. → 제안: "제안을 만들지 못했습니다", details, busy.
+- **U2-17** `app/app/repo/[repoId]/history.tsx:36-39,50-57` + `trash.tsx:109` [3][race][low] — 휴지통에서 되돌리고 돌아와도 이력이 갱신 안 돼 headId 가 옛 값 → 「현재」 판정 틀림. → 제안: useFocusEffect refresh.
+- **U2-18** `index.tsx:377-381,386-415` [3][wrong-message][low] — 과거 시점 보기에서 머리말 숫자는 현재 값. → 제안: 숨기거나 "현재 기준".
+- **U2-19** `app/app/repo/[repoId]/versions.tsx:132-135` [3][dead-end][low] — 옮긴 파일의 버전은 옮긴 뒤부터만, 안내 없음. → 제안: 한 줄 안내.
+- **U2-20** `SearchResults.tsx:115-117` + `index.tsx:484-487` [5][state-loss][low] — 검색 결과에서 폴더 열기 시 검색어가 지워짐. → 제안: 마지막 검색어 보관.
+
+## §5 판정 (Opus, 2026-11-02)
+
+Opus 가 §4 72건을 코드와 대조했다. 확인한 것: listTrash·재작성안의 `EXPLAIN QUERY PLAN`(인메모리 DB, 실제 MIGRATIONS), localeCompare 벤치(2만 경로: 옵션 있음 1021ms · 인자 없음 55ms · 모듈 Collator 46ms), 루프 안 `db.prepare` 벤치(5000회 135ms vs 8ms), findPathConflict 5000×5000 = 117ms, expo-file-system 안드로이드 `downloadResumableStartAsync`(resumeData 는 pause 로만 생김).
+집계: 수정 대상 34 · 2단계 22 · 3단계 1 · 중복 4 · 기각 11.
+
+### §5a 수정 대상 (34)
+
+서버 (10)
+- **L1-1** `server/src/services/snapshots.ts` — listTrash 를 `FROM snapshots s CROSS JOIN snapshot_changes c ON c.snapshot_id = s.id JOIN users u …` 로 바꿔 저장소에서 출발하게 하고(지금은 `idx_snapchanges_blob (blob_hash=?)` 로 전 저장소의 삭제 변경을 훑는다), 세 번째 NOT EXISTS 를 `FROM snapshot_changes l INDEXED BY idx_snapchanges_path JOIN snapshots ls …` 로 바꾼다. 나머지 조건·정렬·LIMIT 은 그대로. 재작성안 계획: s=idx_snapshots_repo → c=PK(snapshot_id) → l=idx_snapchanges_path 확인. 시험: history.test 에 "저장소 둘에 각각 지운 파일 — 휴지통이 섞이지 않는다" 추가, 기존 휴지통 사례(삭제 후 재생성·이동 제외) 통과.
+- **L1-2** `server/src/services/snapshots.ts` — 모듈 상단에 `const byKo = new Intl.Collator('ko', { numeric: true });` 를 두고 280-284행의 `localeCompare(…, 'ko', { numeric: true })` 두 곳을 `byKo.compare(a.name, b.name)`·`byKo.compare(a.path, b.path)` 로. downloads.ts:105 는 인자 없는 localeCompare 라 V8 이 기본 Collator 를 캐시해 빠르다(벤치 55ms) — 건드리지 않는다. 시험: files.test 에 '2.txt'·'10.txt' 를 올려 목록이 [2.txt, 10.txt] 순서인 사례 추가.
+- **L1-3** `server/src/services/snapshots.ts` — readEntry 의 과거 시점 분기(117행)에서 readManifest 를 부르지 말고: readManifest 와 같은 재귀 CTE 로 head→목표 체인을 얻고(마지막이 목표가 아니면 같은 오류), 목표를 뺀 스냅샷들을 **오래된 것(깊은 것)부터** `SELECT prev_blob_hash, prev_size, prev_mime_type, prev_updated_at FROM snapshot_changes WHERE snapshot_id = ? AND path = ?` 로 찾아 첫 행이 나오면 prev_blob_hash 가 null 이면 undefined, 아니면 prev_* 로 EntryRow 를 만든다. 하나도 없으면 head 의 `repo_files` 한 행(없으면 undefined). 시험: history.test 에 같은 경로를 추가·수정·삭제·재추가한 스냅샷 여럿을 쌓고 모든 스냅샷·경로에서 `readEntry(db,s,p)` 와 `readManifest(db,s).get(p)` 가 같은지 대조.
+- **L2-1** `server/src/services/proposals.ts` — findConflicts 에서 `readManifest(db, baseSnapshotId)` 를 지우고 `baseHash = change.base_blob_hash` 를 쓴다(제안 생성 때 base_snapshot_id 와 같은 head 의 manifest 에서 채운 값 — routes/proposals.ts:60·77·98·129). base===head 단락과 시그니처는 그대로(호출부 무수정). 비싼 쪽(부모 체인 되감기)만 없어진다. 시험: proposals.test 에 "제안 뒤 스냅샷 여러 개(관련 없는 파일·같은 파일) — conflicts 가 예전과 같다" 추가, 기존 충돌 사례 통과.
+- **L2-11** `server/src/services/proposals.ts` — blobBelongsToRepo 의 두 문장을 `WeakMap<Db, { uploaded: Statement; referenced: Statement }>` 캐시로 한 번만 prepare. (files.ts:215 는 이미 루프 밖, routes/proposals.ts:107 은 최대 200회라 제외 — 지적의 그 부분은 과장.) 시험: commit·proposals 기존 테스트 통과.
+- **L2-10** `server/src/routes/proposals.ts` — (a)만: 146행을 `base.size + addCount - deleteCount > MAX_FILES_PER_REPO` 로(deleteCount = op==='delete' 수) — 병합(357행)의 결과 수 검사와 맞춘다. (b) 용량 절대치 판정은 §5b. 시험: proposals.test 에 writeSnapshot 으로 한도까지 채운 뒤(505행 사례 방식) "추가 1 + 삭제 1 제안은 201" 추가.
+- **L1-8** `server/src/routes/repos.ts` — readCursor 에서 before·beforeId 중 하나만 왔거나 before 가 정수가 아니면 `badRequest('before·beforeId 값이 올바르지 않습니다.')` 를 던진다(제안 목록 204행과 같은 태도). 앱은 늘 둘 다 보내고(client.ts:444-466), MCP 도구는 beforeId 가 선택이라(mcp/src/tools.ts:36-37) 지금은 조용히 첫 페이지를 다시 준다. 시험: history.test 에 `?before=123` 만 → 400 추가.
+- **L1-10** `server/src/routes/files.ts` — parseRange 에서 startText·endText 가 둘 다 있고 `Number(endText) < Number(startText)` 면(잘라내기 전 값으로) `null`(전체 200)을 돌려준다. RFC 9110 §14.1.1 은 last-pos < first-pos 를 문법 오류로 보고 "MUST ignore". `bytes=100-` 의 416(transfer.test:226)은 그대로. 시험: transfer.test 에 `bytes=5-2` → 200·전체 본문 추가.
+- **L2-6** `server/src/routes/files.ts`(117·464행) + `server/src/routes/uploads.ts`(170행) — 같은 SQL 세 곳의 `ON CONFLICT(hash) DO NOTHING` 을 `ON CONFLICT(hash) DO UPDATE SET created_at = excluded.created_at` 로(같은 줄 기계적 교체, repo_blobs 는 그대로). blobs.created_at 은 GC 유예에만 쓰인다(gc.ts:52). 시험: gc.test 에 "/blobs 로 올린 blob 을 유예보다 늙힌 뒤 같은 내용을 다시 올리면 GC 가 남긴다" 추가.
+- **L2-12** `server/src/lib/storage.ts` — 쓰는 곳이 없는 `writeBuffer`(164-172)·`read`(179-181)를 지운다(grep: server·mcp 에 호출 없음). 시험: typecheck.
+
+앱 (24)
+- **U2-3** `app/src/api/client.ts` — RequestOptions 에 `timeoutMs?: number` 를 더해 `REQUEST_TIMEOUT_MS` 대신 `options.timeoutMs ?? REQUEST_TIMEOUT_MS` 를 쓰고, completeUpload 는 `timeoutMs: 10 * 60_000` 을 넘긴다(서버가 최대 2GB 를 다시 해시한다 — storage.ts:147-158, 기본 한도 config.ts:185). 시험: typecheck, test:e2e(6-transfer).
+- **U1-6** `app/src/state/auth.tsx` — noServerError() 가 `new ApiError(0, 'internal', '들어갈 서버를 먼저 골라 주세요.')` 를 돌려주게 한다(client.ts:165 와 같은 문구·모양). 그러면 login·signup·reset-password 의 `err instanceof ApiError ? err.message` 가 그대로 보인다. 화면 파일은 안 고친다. status 0 을 특별 취급하는 곳은 transfer.ts:131 뿐이라 영향 없음. 시험: typecheck, test:e2e.
+- **U3-1** `app/app/repo/[repoId]/new-proposal.tsx` — 제출 버튼(407-413) 바로 위에 이유 한 줄: `!title.trim() ? '제목을 입력하면 올릴 수 있습니다.' : staged.length === 0 ? '파일을 담거나 지울 파일을 골라야 올릴 수 있습니다.' : null` 을 Caption 으로(버튼 글자 불변). disabled 조건은 U3-4 대로. 시험: typecheck(e2e 에 이 화면 없음).
+- **U3-4** `app/app/repo/[repoId]/new-proposal.tsx` — 제출 버튼 disabled 를 `staged.length === 0 || !title.trim() || uploading || preparing` 로. 시험: typecheck.
+- **U3-2** `app/app/repo/[repoId]/new-proposal.tsx` — 69행 hasDraft 에 `|| uploading || preparing` 를 더한다(첫 파일을 담는 중에 뒤로 가도 확인). 나간 뒤 업로드를 끊는 것은 TransferControl 에 확인 없는 abort 가 없어 U2-1(3단계) 몫. 시험: typecheck.
+- **U3-3** `app/app/repo/[repoId]/new-proposal.tsx` — `submittingRef` 를 두고 submit 에서 setSubmitting 과 함께 세우고 내린다. beforeRemove 리스너에서 `submittedRef` 검사 다음에 `if (submittingRef.current) { event.preventDefault(); return; }`(대화상자 없이 막기) — 제출 응답 뒤 replace 가 다른 화면을 바꾸지 않게. 시험: typecheck.
+- **U3-5** `app/app/repo/[repoId]/new-proposal.tsx` — 129행: 실패가 1개면 지금 문구, 여러 개면 `${failures.length}개를 담지 못했습니다 — ` + 앞 3개 `${이름}: ${message}` 를 ', ' 로 + 남으면 ` 외 N개`. 시험: typecheck.
+- **U3-7** `app/app/proposal/[proposalId].tsx` — run() 의 catch 에서 `if (err instanceof ApiError && err.status === 409) state.refresh();` — 충돌·이미 처리됨 뒤 conflicts·mergeable·status 를 새로 받는다. 시험: typecheck, test:e2e.
+- **U3-9** `app/app/proposal/[proposalId].tsx` — 충돌 카드 Caption(168-171)을 `user?.id === proposal.author.id` 일 때만 지금 문구로, 아니면 '이 제안을 만든 뒤 아래 파일이 저장소에서 바뀌었거나, 이름이 겹치는 파일·폴더가 생겼습니다. 작성자가 최신 내용으로 다시 제안해야 반영할 수 있습니다.' 로. e2e 에 이 문구 없음(grep). 시험: typecheck.
+- **U3-11** `app/app/repo/[repoId]/proposals.tsx` — 104행 `state.loading && !state.data` 를 `state.loading` 으로 — 필터를 바꾸면(deps 변경 → run('initial')) 이전 필터 목록 대신 Loading. 포커스 새로고침은 refreshing 이라 목록이 그대로 남는다. 시험: test:e2e(12-lists).
+- **U3-14** `app/app/repo/[repoId]/members.tsx` — 멤버 행 버튼 셋(274-294)에 `disabled={busy !== null || leaving}`, changeRole·transferOwnership·removeMember 맨 앞에 `if (busy) return;`, 저장소 삭제·나가기 Button 에 `disabled={busy !== null}`. 라벨 불변. 시험: test:e2e.
+- **U3-15** `app/app/repo/[repoId]/members.tsx` — 소유자 분기의 '저장소 삭제' 버튼 아래에 `<Caption>소유자는 저장소에서 나갈 수 없습니다. 나가려면 먼저 다른 멤버를 소유자로 지정하세요.</Caption>`(서버 문구 routes/repos.ts:167 과 같은 뜻). 시험: typecheck, test:e2e.
+- **U3-16** `app/app/settings.tsx` — `signingOut` 상태: signOut 에서 확인 뒤 true, `try { await logout(); } finally { setSigningOut(false); }`, 맨 앞 `if (signingOut) return;`. 288행 로그아웃 Button 에 `loading={signingOut}`. 시험: test:e2e.
+- **U1-9** `app/app/repo/[repoId]/invites.tsx` — 273-279 상태 Caption 사슬에서 '회수됨' 다음에 `invite.maxUses !== null && invite.useCount >= invite.maxUses ? '횟수 모두 사용'` 을, 그 다음(기한 표시 앞)에 `!invite.active && 만료 아님 ? '발급자 권한 없음'` 을 넣는다(server/src/routes/invites.ts:38-44 isActive 의 네 사유와 맞춘다). 시험: test:e2e(7-invite-link).
+- **U1-10** `app/app/server.tsx` — save() 에서 target 을 정한 뒤·주소 바꾸기 확인 전에 `if (servers.some((e) => e.id !== editing?.id && serverUrl(e) === target)) { setError('이미 목록에 있는 주소입니다.'); return; }`(auth.tsx:441-443 과 같은 판정·문구). 시험: test:e2e(1-server-list).
+- **U1-13** `app/app/reset-password.tsx` — login.tsx:99 처럼 `<PendingInviteNote action="로그인" />` 를 폼 위에 둔다(재설정이 끝나면 로그인 상태가 되므로 '로그인하면' 문구가 맞다 — InviteSummary.tsx 의 action 타입은 그대로). 시험: typecheck.
+- **U2-8** `app/app/repo/[repoId]/index.tsx` — download() 맨 앞에 `if (busyPath !== null) return;`(검색 결과 행도 이 함수를 부른다). 행 disabled 는 넣지 않는다. 시험: test:e2e(6-transfer).
+- **U2-11** `app/app/repo/[repoId]/index.tsx` — 파일 RenameRow(606-613)에 `hint="전체 경로입니다. 앞의 폴더 부분을 지우면 맨 위로 옮겨집니다."` 를 준다(폴더 행 527행과 같은 방식). 성공 토스트는 O3. 시험: typecheck, test:e2e.
+- **U2-13** `app/app/repo/[repoId]/index.tsx` — `const treeFresh = !state.loading && tree?.path === path;` 를 두고 upload() 맨 앞 가드에 `|| !treeFresh`, '파일 올리기' disabled 를 `preparing || !treeFresh` 로(splitUnchanged·덮어쓰기 확인이 tree.files 를 쓴다 — 212-223행. 폴더를 옮긴 직후 옛 폴더 기준으로 "이미 올라가 있음" 판정을 해 조용히 건너뛸 수 있다. uploadFolder 는 listRepoFolder 로 새로 받으므로 제외). 시험: test:e2e(6-transfer·11-restore).
+- **U2-18** `app/app/repo/[repoId]/index.tsx` — 377-381행에서 snapshotId 가 있으면 '파일 N개'·용량 Caption 을 그리지 않는다(멤버 수는 그대로) — repo.fileCount·totalSize 는 head 값이다. 시험: test:e2e(11-restore).
+- **U2-15** `app/app/repo/[repoId]/compare.tsx` — 171행을 toFolder 면 지금 문구, 아니면 `notifySuccess(`${files.length}개 받기를 시작했습니다.`, '브라우저의 내려받기 목록에서 확인하세요.')` 로. `!toFolder && !signal.aborted` 면 `setSelected(new Set())`. 시험: test:e2e(9-compare).
+- **U2-16** `app/app/repo/[repoId]/compare.tsx` — 233행 문구를 `isEditor ? '반영하지 못했습니다.' : '제안을 만들지 못했습니다.'` 로, 224행 notifyError 에 `failures.slice(0, 3).map((f) => `${f.item.path}: ${f.message}`).join('\n')` 를 둘째 인자로. 준비 중 busy 는 제외. 시험: test:e2e(9-compare).
+- **U2-17** `app/app/repo/[repoId]/history.tsx` — index.tsx:103-113 과 같은 `firstFocus` ref + `useFocusEffect`(첫 포커스는 건너뛰고 `state.refresh()`)를 더한다(휴지통에서 되돌리고 돌아오면 headId·목록 갱신). 시험: test:e2e(11-restore).
+- **U2-19** `app/app/repo/[repoId]/versions.tsx` — 135-138 Subtitle 끝에 ' 옮기거나 이름을 바꾼 파일은 옮긴 뒤의 버전만 보입니다.' 를 덧붙인다(snapshots.ts:358-361 주석 그대로). 시험: typecheck.
+
+### §5b 2단계 (22)
+
+- **L2-3** — findPathConflict 가 호출마다 manifest 전체를 훑는 것은 사실(5000×5000 = 117ms, 동기 트랜잭션 안). 접두 색인을 만들려면 snapshots.ts·files.ts(246·346)·services/proposals.ts(156)를 함께 바꿔야 한다(색인 API 결정). 제안 중 "move 는 대상 `to` 하나만 검사" 는 틀렸다 — 지금은 기존 폴더로 합쳐 옮기기를 허용하는데(`b/x` 만 검사) `b` 하나만 보면 기존 폴더 `b` 가 있을 때 막힌다.
+- **L2-4** — 직접 업로드가 413/409 로 실패하면 blob 파일이 남는 것은 사실이나 gc.ts:119-121 sweepOrphanFiles 가 이 경우를 명시적으로 줍는다. 인라인 삭제를 더하면 L2-5 경합이 한 곳 더 생긴다 → L2-5 와 함께 "인라인 삭제 vs GC 에만 맡기기" 정책 결정(files.ts·uploads.ts). files.ts:442 의 "GC 가 없으므로" 주석은 낡았다.
+- **L2-5** — isNewBlob 판정(files.ts:443, uploads.ts:159)과 실패 시 remove 사이에 같은 해시를 다른 요청이 커밋하면 행만 남는다. 창은 좁지만 실재. 해시별 잠금 또는 인라인 삭제 폐지 결정(L2-4 와 한 묶음).
+- **L2-7** — completeSession 이 세션 파일을 다시 읽어 해시한다(storage.ts:147-158). 조각마다 해시를 잇는 방식은 truncate·재전송(appendChunk 127행)과 재시작에 깨져 설계가 필요하고, complete 를 멱등으로(결과 hash 를 잠시 보관) 만드는 안과 비교해야 한다. 클라이언트 쪽 시간 초과는 U2-3 으로 먼저 완화.
+- **L2-9** — 열람자가 세션을 여러 개 열면 startUpload 의 한도 검사(uploads.ts:93)가 완료분만 세어 세션 파일로 디스크를 채울 수 있다. 세션 크기 예약·열린 세션 수 상한은 정책 결정. 편집자 면제는 uploads.ts:22-23 에 의도로 적혀 있다(/blobs 와의 불일치는 결정 사항).
+- **L2-10(b)** — 한도를 낮춘 뒤 삭제만 하는 commit·병합도 413(files.ts:248, routes/proposals.ts:360). "총량이 늘지 않으면 통과" 는 files.ts·routes/proposals.ts 두 곳의 정책 변경. (a)는 §5a 에서 세었고 여기서는 세지 않는다.
+- **U3-6** — 같은 경로를 두 번 담으면 제출 때에야 알린다. addFiles 에서 겹칠 때 "교체" 와 "건너뛰기" 중 무엇을 할지 결정 필요(삭제로 담은 경로에 올리면 수정으로 바뀌는 문제 포함).
+- **U3-8** — 성공 뒤 `state.refresh()`(void)를 기다리지 않고 action 을 풀어 옛 status 로 버튼이 잠깐 살아난다. 고치려면 useAsync.refresh 가 Promise 를 돌려주거나 setData 를 내놓아야 한다(useAsync.ts + 화면).
+- **U3-13** — `/proposals/mine` 은 limit 기본 50·next 없음(routes/proposals.ts:238-259). next 를 더하는 것은 응답 모양 변경 + API_LEVEL + my-proposals.tsx useMorePages.
+- **U1-1** — 링크→로그인→참여 뒤 스택이 `[repo]` 하나가 되는 것은 사실(index.tsx:28 Redirect·join.tsx:153·167·229 replace). 참여 뒤 이동을 dismissAll→repos→push 로 모으는 것은 join.tsx·index.tsx·signup 흐름과 e2e 7-invite-link 에 걸친 이동 설계.
+- **U1-2** — 참여 실패 뒤 출구가 없는 것은 사실. 「내 저장소로」 새 버튼(새 라벨)과 409 뒤 preview 처리 결정이 필요하다.
+- **U1-3** — 못 쓰는 초대(400/404/409)에도 PendingInviteNote·부제가 "참여를 이어 갑니다". clearPendingInvite 시점을 바꾸는 것은 invite-link.ts·InviteSummary.tsx·join.tsx 에 걸친다.
+- **U1-4** — pending 초대가 서버와 묶이지 않는다. `{code, serverUrl}` 로 바꾸는 것은 invite-link.ts·index.tsx·login.tsx·join.tsx 변경(+ 순수 함수로 빼면 app/test).
+- **U1-5** — 서버 추가 취소·연결 실패 뒤 handledServer 가 true 로 남아 재시도가 없고(join.tsx:64·73·80), 화면은 지금 서버로 조회한다. "이 초대는 Y 서버의 것" 안내(새 문구·버튼)와 재시도 흐름 결정.
+- **U1-11** — 형식이 틀린 주소에서 두 버튼이 이유 없이 꺼지는 것은 사실. 상시 안내를 넣으면 입력 중(예: "192.")에도 깜빡인다 — 언제 보일지(blur 뒤 등) 결정.
+- **U2-2** — status 0 재시도가 약 31초(1+2+4+8+15)뿐이고 finally 의 cancelUpload 가 세션을 지운다(transfer.ts:131-153). 재시도 창·오프라인이면 남은 파일 중단은 2단계 결정, 세션을 기억해 다른 시도에서 이어 가는 것은 U2-1 의 저장소 이동과 함께(3단계 쪽).
+- **U2-4** — 폴더·파일 이름 충돌·파일 수·용량이 커밋에서야 드러난다(files.ts:246-248). 올리기 전 검사는 전체 목록(또는 새 API)이 필요하고, 실패 문구 "올린 N개는 반영되지 않았습니다" 는 그와 함께 정한다.
+- **U2-5** — pickFolder 가 5000개에서 조용히 자른다(files.ts:64·98). truncated 를 돌려주려면 files.ts 반환 모양 + index.tsx·compare 호출부. 기존 파일 수 합산도 U2-4 사전 검사와 함께.
+- **U2-7** — 100% 뒤 complete·commit 동안 「멈추기」가 효과 없다(transfer.ts:145-146 뒤에는 signal 을 안 본다). "마무리하는 중" 단계는 UploadProgress 모양(transfer.ts)·TransferProgress.tsx 두 파일과 새 문구.
+- **U2-9** — 안드로이드 받기에 onProgress 를 안 넘긴다(index.tsx:294, versions·trash). 진행 UI 를 세 화면에 더하고 PC 앱 will-download IPC(DesktopBridge·protocol·preload·main)까지.
+- **U2-10** — 확인: 안드로이드 `downloadResumableStartAsync` 는 resumeData 가 있을 때만 Range 를 붙이고(FileSystemLegacyModule.kt:681-682) resumeData 는 pauseAsync 로만 생긴다 → 오류 뒤 resumeAsync 는 처음부터. 파일 길이를 resumeData 로 새 작업을 만들면 되지만 zip(/dl archive)은 Range 를 무시해 200 전체를 이어 붙여 망가진다 — 파일만 이어받기·206 확인 설계 필요(files.ts·local-folder.ts). 최소한 files.ts:165-174 주석은 틀렸다.
+- **U2-12** — refresh 일시 실패 때 `state.error` 분기가 받아 둔 목록을 지운다(index.tsx:367, history·versions·trash·proposals 같은 모양). useAsync 를 바꿀지(refresh 실패는 토스트) 화면마다 "data 있으면 목록 + 오류" 로 할지 결정.
+- **U2-14** — 직접 고른 파일에도 크기·수정시각 휴리스틱으로 건너뛴다(transfer-plan.ts:34-45). 건너뛴 사실은 알린다(index.tsx:217·233). 직접 고른 파일에는 끌지, "그래도 올리기" 를 둘지 결정.
+
+### §5c 3단계 (1)
+
+- **U2-1** — 전송 상태가 화면(index.tsx:76·compare.tsx)에 있어 RepoNav replace·뒤로가기로 언마운트되면 진행률·멈추기가 사라지고 업로드는 계속, 돌아오면 다시 올릴 수 있으며, compare 의 열람자 경로는 끝난 뒤 `router.push('/proposal/…')`(compare.tsx:226)로 다른 화면을 가로챈다. 전송을 화면 밖 스토어로 옮기는 구조 변경. U3-2 의 "나가면 abort"·U2-2 의 세션 이어 가기도 여기서.
+
+### §5d 중복 (4)
+
+- **U3-12** — U2-12 와 같은 뿌리(새로고침 실패가 목록을 지움). 앞부분(포커스 새로고침이 펼친 페이지를 버림)은 useMorePages.ts:21-25 주석대로 의도된 동작.
+- **U1-7** — O3(조용한 성공, join.tsx 참여 포함)과 중복.
+- **U1-8** — O3(invites.tsx 초대 만들기 조용한 성공)과 중복.
+- **U2-6** — O3 과 같은 정책 문제(index.tsx:180 `items.length > 1` 은 의도적 생략). 토스트를 늘리면 e2e 의 단일 파일 올리기 흐름에서 토스트가 버튼을 가리는지도 함께 봐야 한다.
+
+### §5e 기각 (11)
+
+- **L1-4** — 지적자 스스로 "지금은 둠"(1000 스냅샷 0.8ms). 고칠 것이 없다.
+- **L1-5** — head 하위 폴더 목록 4-6ms(3500 파일). 과거 시점은 어차피 manifest 가 필요해 분기만 늘어난다. 비용 대비 이득 없음.
+- **L1-6** — `GET /repos` 1+4N 은 같은 프로세스 SQLite 의 µs 단위 PK·COUNT 질의이고 N 은 한 사람의 저장소 수. `, r.id` 동률 정렬은 같은 ms 에 만든 저장소의 순서를 바꿀 수 있어(newId 는 무작위) 이득 없이 테스트 위험만 있다.
+- **L1-7** — zip 링크의 manifest 확인은 sendArchive(downloads.ts:103)도 어차피 만든다. blobs.has 순차 await 는 파일당 fs.access 한 번으로 수천 개 내려받기 시간에 비해 무시할 만하다.
+- **L1-9** — 정확히 limit 개 남을 때 빈 페이지 요청 한 번. limit+1 로 바꾸면 history·versions·events·proposals 네 곳의 next 의미가 바뀐다(proposals.test:656-657 이 next 값을 고정). 비용 무시할 만함.
+- **L2-2** — 라우트의 manifest 는 writeSnapshot 전에 수정되므로(files.ts:147 등) 그대로 current 로 넘길 수 없고 복사본이 필요하다 — 복사 비용이 SELECT 한 번과 비슷하다. writeSnapshot 시그니처를 모든 호출부에서 바꿀 이유가 없다.
+- **L2-8** — completeSession 실패 뒤 세션 행이 남아도 앱은 finally 에서 늘 cancelUpload 를 부르고(transfer.ts:152) GC 가 멈춘 세션을 치운다(gc.ts:93-100). 재시도로 500 이 반복되는 클라이언트가 없다.
+- **U3-10** — 열린 제안에서 현재본 크기·내용이 base 와 다르거나 head 에서 지워진 경우는 정의상 그 경로가 conflicts 에 든다(services/proposals.ts:177-184) — 충돌 카드가 이미 그 경로를 나열한다. 충돌이 없으면 head = base 라 표시가 맞다.
+- **U3-17** — 전제가 틀렸다. status 0 이면 settings.tsx:115 가 ApiError 의 메시지("서버에 연결할 수 없습니다…"/"서버 응답이 없습니다…", client.ts:194-213)를 보이지 "바꾸지 못했습니다" 가 아니다. 응답만 잃은 경우의 뒤이은 401 은 새 비밀번호로 다시 로그인하면 끝나는 드문 경우.
+- **U1-12** — server-list.ts:3-10 주석대로 목록을 스택 맨 아래로 여는 것은 보호 라우트와 엇갈리지 않게 하려는 의도된 설계. push 로 바꾸면 그 불변식이 깨진다. 잃는 것은 입력한 아이디·비밀번호뿐.
+- **U2-20** — 검색 결과는 query 가 있을 때만 그려지므로(index.tsx:476) 폴더를 열려면 검색어를 비워야 한다. 마지막 검색어를 되살리려면 새 UI(되돌아가기 버튼)가 필요하고 얻는 것이 작다.
+
+## §5f 비판 Sonnet 반론 (2026-11-02)
+코드·테스트·e2e 를 대조했다. 아래 두 건만 이견, 나머지 §5a 는 동의 — 불안하다던 L1-3·L2-1·L2-6·U2-13·U3-11 은 확인 결과 안전하다(근거 말미). §5e 기각 11건·§5b/§5c 분류도 동의(U3-17·U1-12 기각 근거는 client.ts:194-213·settings.tsx:115·server-list.ts:3-10 로 재확인).
+- **U1-10** (Opus: 수정 대상 → 주장: 수정 대상 유지, 단 조건을 `editing && urlChanged` 로 좁힐 것) — 제시된 `servers.some((e) => e.id !== editing?.id && serverUrl(e) === target)` 은 서버 **추가** 화면(`editing` 없음)에서도 `e.id !== undefined` 가 항상 참이라 같은 주소를 추가하면 오류가 된다. 지금 동작은 오류가 아니라 기존 항목 재사용 + 이름만 갱신(auth.tsx:417-424 saveServer 의 `existing` 분기)이다. 오류는 수정 화면에서 주소를 바꿀 때만 맞다(auth.tsx:441-444 와 같은 조건 `urlChanged`, server.tsx:54 의 `urlChanged = !editing || …` 이므로 `editing &&` 를 따로 붙여야 한다).
+- **U2-15** (Opus: 수정 대상 → 주장: 문구만 바꾸고 `setSelected(new Set())` 은 빼거나 `repo:` 키만 지우도록) — e2e/specs/9-compare.mjs:93-105 가 웹에서 받기(3개) 직후 탭을 「내 폴더에만」으로 옮겨 「모두 고르기」를 누르고 「고른 2개 저장소에 올리기」를 누른다. 받는 루프는 마지막 anchor.click 뒤 400ms 를 더 자고(compare.tsx:160) 나서 `setProgress(null)`(168)을 하는데, 그때까지 버튼은 busy 로 disabled(compare.tsx:481)라 e2e 의 클릭은 busy 가 풀리기를 기다린다. 제안대로 같은 시점에 `setSelected(new Set())` 을 하면 e2e 가 방금 고른 local: 선택이 함께 지워져 버튼이 「올릴 파일을 고르세요」(compare.tsx:475)로 남아 테스트가 시간 초과로 실패한다. 탭을 바꾸면 이미 선택이 비워지므로(compare.tsx:75-78) 얻는 것도 작다. 비우려면 함수형 업데이트로 `repo:` 키만 걸러낸다.
+- 동의 근거(요약): L1-3 호출부 셋이 모두 `snapshotBelongsTo` 로 거른 뒤 부르고(downloads.ts:49·73, files.ts:384) 실제로 하나의 체인만 걷으므로 같은 오류 계약 유지 — 단 구현 때 readManifest 의 `!target → 빈 Map`(snapshots.ts:58)과 같은 가드를 둘 것. L2-1 `base_blob_hash` 는 제안 생성 때 head manifest 에서 채우고(routes/proposals.ts:77·98·129) 어디서도 갱신하지 않아 base 재구성과 같다. L2-6 의 `isNewBlob` 은 `changes` 가 아니라 앞선 SELECT 로 정해지므로(files.ts:443-446, uploads.ts:159-160) DO UPDATE 로 바꿔도 인라인 삭제 판정이 변하지 않는다. U2-13·U3-11·U3-14·U3-15 는 e2e 가 `isDisabled`/부분 문자열 `getByText` 로 해당 버튼·문구를 보지 않고(grep) 클릭은 자동 대기라 안전. U3-11 은 필터를 바꾸면 useAsync 의 initial 실행과 useFocusEffect 의 refresh 가 겹쳐도 마지막 요청이 끝날 때까지 loading 이 유지된다.
+
+## §5g Opus 재판정 (이견 2건, 2026-11-02)
+
+- **U1-10** — 반론 채택. 수정 대상 유지, 조건을 `editing && urlChanged && servers.some((e) => e.id !== editing.id && serverUrl(e) === target)` 로 좁힌다. 추가 화면의 같은 주소는 지금처럼 기존 항목 재사용(auth.tsx:417-424)이 맞다.
+- **U2-15** — 반론 채택. 문구만 바꾼다(`toFolder` 가 아니면 "N개 받기를 시작했습니다" + "브라우저의 내려받기 목록에서 확인하세요"). `setSelected(new Set())` 은 넣지 않는다 — e2e 9-compare:93-105 가 받기 직후 탭을 옮겨 새로 고르고, 탭이 바뀌면 선택은 이미 비워진다(compare.tsx:75-78).
+- 반론에서 덧붙은 구현 조건: **L1-3** 은 readManifest 와 같은 `!target`(없는 스냅샷) 가드를 둔다.
+- 그 밖의 §5a·§5b·§5c·§5d·§5e 는 반론 없음 — Opus 판정대로 확정. 수정 대상 34건.
+
+## §6 1.5단계 수정 결과 (2026-11-02)
+
+Sonnet 수정자 6기(파일이 겹치지 않게: S1 snapshots.ts · S2 제안 서비스·라우트·repos 라우트 · S3 files·uploads·storage · A1 계정·서버·초대 ·
+A2 제안·멤버 화면 · A3 파일·비교·이력 화면)가 §5a 34건을 고쳤다 — 고침 34, 실패 0, 2단계 올림 0. 버튼 글자·accessibilityLabel 은 그대로.
+- 새 비활성/로딩 상태: 「파일 올리기」(폴더 목록이 최신일 때만), 「제안 올리기」(담는 중), 멤버 행 버튼·「저장소 삭제」·「나가기」(작업 중), 「로그아웃」(loading).
+  e2e 가 누르는 것은 「파일 올리기」·「로그아웃」뿐이고 둘 다 활성을 기다리는 클릭이다.
+- 동작이 바뀐 서버 응답: `history`·`files/versions` 의 커서를 하나만 주면 400(L1-8) — 앱은 늘 둘 다 보낸다. docs/API.md 반영, MCP 의 `list_history`·
+  `list_file_versions` 도 하나만 주면 오류로 알린다(전에는 조용히 첫 페이지).
+- 새 시험: `server/test/snapshots-read.test.ts`(휴지통 옛 SQL 과 대조·저장소 간 섞임·정렬·readEntry 를 모든 시점×경로로 readManifest 와 대조),
+  `server/test/cursor.test.ts`, proposals(스냅샷이 쌓여도 같은 충돌 판정·가득 찬 저장소의 추가1+삭제1), gc(옛 미참조 blob 재업로드), transfer(`bytes=5-2`).
+  로직 수정의 시험은 수정 전 코드에서 실패함을 수정자가 확인했다(L2-1 은 동작 불변이라 양쪽 통과).
+- Opus 샘플링: snapshots.ts diff 를 직접 읽음 — readEntry 의 재귀 CTE 가 목표 직후의 첫 변경의 prev_* 를 고르고 체인 끊김 오류 계약도 같다.
+
+검사: `npm run check:sync` 통과, `npm run typecheck`(server·app·desktop·mcp) 통과, `npm test` 278개(서버 217·앱 47·mcp 14) 통과,
+`npm run test:e2e` 228개 통과. 남은 것: §5b 2단계 22건, §5c 3단계 1건(U2-1).

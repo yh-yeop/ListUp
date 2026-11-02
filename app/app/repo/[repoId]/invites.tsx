@@ -272,11 +272,15 @@ export default function InvitesScreen() {
                       <Caption>
                         {invite.revokedAt !== null
                           ? '회수됨'
-                          : invite.expiresAt === null
-                            ? '기한 없음'
-                            : invite.expiresAt <= Date.now()
-                              ? '만료됨'
-                              : `${formatDateTime(invite.expiresAt)}까지`}
+                          : invite.maxUses !== null && invite.useCount >= invite.maxUses
+                            ? '횟수 모두 사용'
+                            : !invite.active && (invite.expiresAt === null || invite.expiresAt > Date.now())
+                              ? '발급자 권한 없음'
+                              : invite.expiresAt === null
+                                ? '기한 없음'
+                                : invite.expiresAt <= Date.now()
+                                  ? '만료됨'
+                                  : `${formatDateTime(invite.expiresAt)}까지`}
                       </Caption>
                       <Caption>{formatRelativeTime(invite.createdAt)} 생성</Caption>
                     </Row>

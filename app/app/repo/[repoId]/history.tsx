@@ -1,5 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
-import { Stack, router, useLocalSearchParams } from 'expo-router';
+import { Stack, router, useFocusEffect, useLocalSearchParams } from 'expo-router';
+import { useCallback, useRef } from 'react';
 import { Pressable, RefreshControl, View } from 'react-native';
 import { formatBytes, formatRelativeTime, type RepoSummary, type Snapshot } from '@listup/shared';
 import {
@@ -36,6 +37,20 @@ export default function HistoryScreen() {
     ]);
     return { repo, page: { items: snapshots, next } };
   }, [repoId]);
+
+  // 휴지통에서 되돌리고 돌아오면 이력과 현재 시점(headId)을 다시 읽는다. 처음 포커스는
+  // useAsync 의 첫 요청과 겹치므로 건너뛴다.
+  const firstFocus = useRef(true);
+  useFocusEffect(
+    useCallback(() => {
+      if (firstFocus.current) {
+        firstFocus.current = false;
+        return;
+      }
+      state.refresh();
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []),
+  );
 
   const headId = state.data?.repo.headSnapshotId;
   const pages = useMorePages(state.data?.page, async (cursor: Cursor) => {

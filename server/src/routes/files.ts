@@ -115,7 +115,7 @@ export async function registerFileRoutes(app: FastifyInstance, ctx: AppContext):
     const result = db.transaction(() => {
       db.prepare(
         `INSERT INTO blobs (hash, size, mime_type, created_at) VALUES (?, ?, ?, ?)
-         ON CONFLICT(hash) DO NOTHING`,
+         ON CONFLICT(hash) DO UPDATE SET created_at = excluded.created_at`,
       ).run(stored.hash, stored.size, mimeType, now);
 
       // 스트림을 받는 동안 다른 커밋이 끼어들 수 있으므로 head 는 트랜잭션 안에서 다시 읽는다.
@@ -462,7 +462,7 @@ export async function registerFileRoutes(app: FastifyInstance, ctx: AppContext):
 
         db.prepare(
           `INSERT INTO blobs (hash, size, mime_type, created_at) VALUES (?, ?, ?, ?)
-           ON CONFLICT(hash) DO NOTHING`,
+           ON CONFLICT(hash) DO UPDATE SET created_at = excluded.created_at`,
         ).run(stored.hash, stored.size, mimeType, now);
         db.prepare(
           `INSERT OR IGNORE INTO repo_blobs (repo_id, hash, uploaded_by, created_at) VALUES (?, ?, ?, ?)`,
@@ -511,6 +511,8 @@ export function parseRange(header: string | undefined, size: number): [number, n
   if (!match) return null;
   const [, startText, endText] = match;
   if (startText === '' && endText === '') return null;
+  // 끝이 시작보다 앞서면(`5-2`) 문법 오류라 무시하고 전체를 보낸다 — RFC 9110 §14.1.1.
+  if (startText !== '' && endText !== '' && Number(endText) < Number(startText)) return null;
   let start: number;
   let end: number;
   if (startText === '') {

@@ -138,8 +138,8 @@ npm run reset-password -- hong     # 아이디. 서버가 켜져 있어도 됩�
 | PATCH | `/repos/:repoId/members/:userId` | owner | `{role}` — `viewer` 또는 `editor` |
 | DELETE | `/repos/:repoId/members/:userId` | 본인 또는 owner | 내보내기/나가기. owner 는 나갈 수 없음 |
 | POST | `/repos/:repoId/transfer` | owner | `{userId}` — 넘긴 사람은 editor 로 남음 |
-| GET | `/repos/:repoId/history` | viewer | 스냅샷 목록. 응답 `{snapshots, next}` — `next` 가 있으면 `?before=&beforeId=` 로 이어서 요청 (`limit` 최대 100) |
-| GET | `/repos/:repoId/files/versions?path=` | viewer | 파일 하나를 바꾼 시점들, 최근 것부터. `{versions:[{snapshotId, createdAt, author, message, op, blobHash, size}], next}` — 커서는 history 와 같다. 없는 경로면 빈 목록. **1.5.0+** |
+| GET | `/repos/:repoId/history` | viewer | 스냅샷 목록. 응답 `{snapshots, next}` — `next` 가 있으면 `?before=&beforeId=` 로 이어서 요청 (`limit` 최대 100). 둘 중 하나만 주거나 `before` 가 정수가 아니면 400 |
+| GET | `/repos/:repoId/files/versions?path=` | viewer | 파일 하나를 바꾼 시점들, 최근 것부터. `{versions:[{snapshotId, createdAt, author, message, op, blobHash, size}], next}` — 커서는 history 와 같다(하나만 주면 400). 없는 경로면 빈 목록. **1.5.0+** |
 | GET | `/repos/:repoId/events?limit=&before=` | owner | 활동 기록(아래). **수준 5** |
 | GET | `/repos/:repoId/trash` | viewer | 휴지통 — 지워서 지금 없는 파일, 최근 것부터 500개. `{entries:[{path, name, snapshotId, beforeSnapshotId, message, deletedAt, deletedBy, blobHash, size, mimeType}]}`. 이름 바꾸기·옮기기, 다시 생긴 경로는 빠지고 같은 경로는 마지막 삭제만. **1.5.0+** |
 

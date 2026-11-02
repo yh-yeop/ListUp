@@ -40,6 +40,7 @@ export default function SettingsScreen() {
   const [savingPassword, setSavingPassword] = useState(false);
   const [devicesError, setDevicesError] = useState<string | null>(null);
   const [signingOutOthers, setSigningOutOthers] = useState(false);
+  const [signingOut, setSigningOut] = useState(false);
   const [hasSavedLogin, setHasSavedLogin] = useState(false);
   const [saveFolder, setSaveFolder] = useState<string | null>(null);
 
@@ -145,6 +146,7 @@ export default function SettingsScreen() {
   };
 
   const signOut = async () => {
+    if (signingOut) return;
     const ok = await confirmAction({
       title: '로그아웃할까요?',
       message: '이 서버에서만 로그아웃합니다. 다시 로그인하면 저장소는 그대로 남아 있습니다.',
@@ -152,7 +154,13 @@ export default function SettingsScreen() {
     });
     if (!ok) return;
     // 로그인 화면으로 가는 것은 _layout 의 보호 라우트가 처리한다.
-    await logout();
+    // 서버를 최대 몇 초 기다리므로, 그동안 다시 눌러 확인창이 겹치지 않게 한다.
+    setSigningOut(true);
+    try {
+      await logout();
+    } finally {
+      setSigningOut(false);
+    }
   };
 
   return (
@@ -285,7 +293,7 @@ export default function SettingsScreen() {
           />
         ) : null}
 
-        <Button label="로그아웃" variant="danger" icon="log-out-outline" onPress={signOut} full />
+        <Button label="로그아웃" variant="danger" icon="log-out-outline" onPress={signOut} loading={signingOut} full />
       </Card>
     </Screen>
   );

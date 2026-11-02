@@ -272,6 +272,9 @@ export async function registerRepoRoutes(app: FastifyInstance, ctx: AppContext):
 function readCursor(req: Parameters<typeof queryString>[0]): SnapshotCursor | undefined {
   const beforeRaw = queryString(req, 'before');
   const beforeId = queryString(req, 'beforeId');
+  if (!beforeRaw && !beforeId) return undefined;
+  // 한쪽만 오거나 숫자가 아니면 첫 페이지를 다시 주지 않고 거절한다 — 받는 쪽이 무한 반복하지 않게.
   const before = beforeRaw ? Number.parseInt(beforeRaw, 10) : Number.NaN;
-  return Number.isFinite(before) && beforeId ? { before, beforeId } : undefined;
+  if (!Number.isFinite(before) || !beforeId) throw badRequest('before·beforeId 값이 올바르지 않습니다.');
+  return { before, beforeId };
 }

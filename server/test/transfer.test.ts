@@ -307,4 +307,18 @@ describe('이어받기와 다운로드 링크', () => {
     assert.deepEqual(Object.keys(files).sort(), ['받기/문서/a.txt', '받기/문서/속/b.txt', '받기/밖.txt']);
     assert.equal((await link(owner, { path: '없는폴더', archive: true })).statusCode, 404);
   });
+
+  it('끝이 시작보다 앞선 Range 는 무시하고 전체를 준다, 빈 파일의 구간은 416', async () => {
+    const reversed = await raw({ range: 'bytes=5-2' });
+    assert.equal(reversed.statusCode, 200);
+    assert.equal(reversed.body, content.toString());
+    await uploadFile(h.app, owner, repoId, '빈.txt', '');
+    const empty = await h.app.inject({
+      method: 'GET',
+      url: `/api/repos/${repoId}/raw?path=${encodeURIComponent('빈.txt')}`,
+      headers: { ...auth(owner), range: 'bytes=0-' },
+    });
+    assert.equal(empty.statusCode, 416);
+    assert.equal(empty.headers['content-range'], 'bytes */0');
+  });
 });

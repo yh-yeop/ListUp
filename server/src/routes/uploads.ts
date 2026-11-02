@@ -167,7 +167,7 @@ export async function registerUploadRoutes(app: FastifyInstance, ctx: AppContext
           throw quotaError();
         }
         db.prepare(
-          `INSERT INTO blobs (hash, size, mime_type, created_at) VALUES (?, ?, ?, ?) ON CONFLICT(hash) DO NOTHING`,
+          `INSERT INTO blobs (hash, size, mime_type, created_at) VALUES (?, ?, ?, ?) ON CONFLICT(hash) DO UPDATE SET created_at = excluded.created_at`,
         ).run(stored.hash, stored.size, mimeType, now);
         db.prepare(
           `INSERT OR IGNORE INTO repo_blobs (repo_id, hash, uploaded_by, created_at) VALUES (?, ?, ?, ?)`,

@@ -152,6 +152,8 @@ interface RequestOptions {
   /** FormData 를 보낼 때는 Content-Type 을 브라우저/RN 이 정하게 둔다. */
   formData?: FormData;
   signal?: AbortSignal;
+  /** 이 요청만 기다리는 시간을 바꾼다(ms). 서버가 오래 걸리는 일(업로드 완료 재해시)에 쓴다. */
+  timeoutMs?: number;
 }
 
 /** 서버 응답을 기다리는 최대 시간. 파일 업로드(FormData)에는 적용하지 않는다. */
@@ -190,7 +192,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     timer = setTimeout(() => {
       timedOut = true;
       controller.abort();
-    }, REQUEST_TIMEOUT_MS);
+    }, options.timeoutMs ?? REQUEST_TIMEOUT_MS);
   }
   const timeoutError = () =>
     new ApiError(0, 'internal', '서버 응답이 없습니다. 잠시 후 다시 시도해 주세요.');
@@ -513,7 +515,11 @@ export const api = {
   ) => sendBytes<{ upload: UploadSession }>('PUT', `/api/uploads/${uploadId}?offset=${offset}`, bytes, onProgress, signal),
 
   completeUpload: (uploadId: string) =>
-    request<{ blob: UploadedBlob }>(`/api/uploads/${uploadId}/complete`, { method: 'POST' }),
+    // 서버가 조립한 파일을 처음부터 다시 해시한다(최대 2GB) — 30초로는 모자랄 수 있어 길게 기다린다.
+    request<{ blob: UploadedBlob }>(`/api/uploads/${uploadId}/complete`, {
+      method: 'POST',
+      timeoutMs: 10 * 60_000,
+    }),
 
   cancelUpload: (uploadId: string) =>
     request<{ ok: true }>(`/api/uploads/${uploadId}`, { method: 'DELETE' }),

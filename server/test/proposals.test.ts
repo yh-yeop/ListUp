@@ -540,6 +540,100 @@ describe('변경 제안', () => {
     assert.match(merged.json().error.message, /최대/);
   });
 
+  it('제안 뒤에 스냅샷이 여러 개 쌓여도 충돌 판정은 같다', async () => {
+    await uploadFile(h.app, owner, repoId, '다른.txt', '다른 파일');
+    const reportHash = await uploadBlob(h.app, viewer, repoId, '보고서.txt', '고친 내용');
+    const otherHash = await uploadBlob(h.app, viewer, repoId, '다른.txt', '다른 고침');
+    const created = await createProposal(h, viewer, repoId, {
+      title: '두 파일 수정',
+      changes: [
+        { path: '보고서.txt', blobHash: reportHash },
+        { path: '다른.txt', blobHash: otherHash },
+      ],
+    });
+    assert.equal(created.statusCode, 201);
+    const proposalId = created.json().proposal.id;
+    const detail = async () => {
+      const res = await h.app.inject({
+        method: 'GET',
+        url: `/api/proposals/${proposalId}`,
+        headers: auth(owner),
+      });
+      return res.json().proposal as ProposalDetail;
+    };
+    assert.deepEqual((await detail()).conflicts, []);
+
+    // 관련 없는 파일만 바뀐 스냅샷이 여러 개 쌓여도 충돌은 없다 (base 에서 head 까지 체인이 길다).
+    for (const n of [1, 2, 3]) {
+      const res = await uploadFile(h.app, owner, repoId, `무관${n}.txt`, `무관 ${n}`);
+      assert.equal(res.statusCode, 201);
+    }
+    const unrelated = await detail();
+    assert.equal(unrelated.mergeable, true);
+    assert.deepEqual(unrelated.conflicts, []);
+
+    // 같은 파일이 바뀐 뒤 또 스냅샷이 쌓이면 그 파일만 충돌이다.
+    await uploadFile(h.app, owner, repoId, '보고서.txt', '소유자가 먼저 고침');
+    for (const n of [4, 5]) {
+      await uploadFile(h.app, owner, repoId, `무관${n}.txt`, `무관 ${n}`);
+    }
+    const conflicted = await detail();
+    assert.equal(conflicted.mergeable, false);
+    assert.deepEqual(conflicted.conflicts, ['보고서.txt']);
+
+    const merged = await h.app.inject({
+      method: 'POST',
+      url: `/api/proposals/${proposalId}/merge`,
+      headers: auth(owner),
+    });
+    assert.equal(merged.statusCode, 409);
+    assert.deepEqual(merged.json().error.details.conflicts, ['보고서.txt']);
+  });
+
+  it('가득 찬 저장소에도 추가 1 + 삭제 1 제안은 만들어지고 병합된다', async () => {
+    const newHash = await uploadBlob(h.app, viewer, repoId, '새.txt', '새 내용');
+
+    // 저장소를 파일 수 한도까지 채운다 (업로드 수천 번은 너무 느리다).
+    const { db } = h.ctx;
+    const repo = getRepoRow(db, repoId)!;
+    const manifest = readManifest(db, repo.head_snapshot_id);
+    const filler = manifest.get('보고서.txt')!;
+    db.transaction(() => {
+      for (let i = manifest.size; i < MAX_FILES_PER_REPO; i += 1) {
+        const path = `채움/${i}.txt`;
+        manifest.set(path, { ...filler, path });
+      }
+      writeSnapshot(db, {
+        repoId,
+        parentId: repo.head_snapshot_id,
+        authorId: owner.userId,
+        message: '채움',
+        manifest,
+      });
+    })();
+
+    const created = await createProposal(h, viewer, repoId, {
+      title: '바꿔치기',
+      changes: [
+        { path: '새.txt', blobHash: newHash },
+        { path: '채움/1.txt', blobHash: null },
+      ],
+    });
+    assert.equal(created.statusCode, 201);
+    const proposalId = created.json().proposal.id;
+
+    const merged = await h.app.inject({
+      method: 'POST',
+      url: `/api/proposals/${proposalId}/merge`,
+      headers: auth(owner),
+    });
+    assert.equal(merged.statusCode, 200);
+    const head = readManifest(db, getRepoRow(db, repoId)!.head_snapshot_id);
+    assert.equal(head.size, MAX_FILES_PER_REPO);
+    assert.ok(head.has('새.txt'));
+    assert.ok(!head.has('채움/1.txt'));
+  });
+
   it('병합되거나 닫힌 제안의 제목은 고칠 수 없다', async () => {
     const hash = await uploadBlob(h.app, viewer, repoId, '보고서.txt', '고친 내용');
     const created = await createProposal(h, viewer, repoId, {

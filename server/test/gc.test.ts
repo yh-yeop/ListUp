@@ -55,6 +55,22 @@ describe('참조되지 않는 blob 정리', () => {
     assert.equal(rows.c, 1);
   });
 
+  it('유예보다 오래된 미참조 blob 을 다시 올리면 GC 가 남긴다', async () => {
+    h = await createHarness();
+    const user = await signup(h.app, '사용자');
+    const repoId = await createRepo(h.app, user, '저장소');
+
+    const first = await uploadBlob(h.app, user, repoId, 'again.txt', '다시 올릴 내용');
+    ageBlobs(h, 25 * HOUR);
+    // 같은 내용을 다시 올리면 blobs.created_at 이 새로 찍혀 유예가 다시 시작한다.
+    const second = await uploadBlob(h.app, user, repoId, 'again.txt', '다시 올릴 내용');
+    assert.equal(second, first);
+
+    const result = await collectGarbage(h.ctx, 24 * HOUR);
+    assert.equal(result.removed, 0);
+    assert.ok(await h.ctx.blobs.has(first));
+  });
+
   it('제안에 담긴 blob 은 지우지 않는다', async () => {
     h = await createHarness();
     const user = await signup(h.app, '사용자');

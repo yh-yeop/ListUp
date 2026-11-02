@@ -89,6 +89,7 @@ export default function MembersScreen() {
   }
 
   async function changeRole(member: Member) {
+    if (busy) return;
     const next = member.role === 'viewer' ? 'editor' : 'viewer';
     const ok = await confirmAction({
       title: `${member.displayName} 님을 ${ROLE_LABEL[next]} 권한으로 바꿀까요?`,
@@ -109,6 +110,7 @@ export default function MembersScreen() {
   }
 
   async function transferOwnership(member: Member) {
+    if (busy) return;
     const ok = await confirmAction({
       title: `${member.displayName} 님을 소유자로 지정할까요?`,
       message:
@@ -131,6 +133,7 @@ export default function MembersScreen() {
   }
 
   async function removeMember(member: Member) {
+    if (busy) return;
     const ok = await confirmAction({
       title: `${member.displayName} 님을 내보낼까요?`,
       message: '이 사람은 더 이상 저장소를 볼 수 없게 됩니다.',
@@ -276,6 +279,7 @@ export default function MembersScreen() {
                         variant="secondary"
                         compact
                         loading={isBusy(member, 'role')}
+                        disabled={busy !== null || leaving}
                         onPress={() => void changeRole(member)}
                       />
                       <Button
@@ -283,6 +287,7 @@ export default function MembersScreen() {
                         variant="secondary"
                         compact
                         loading={isBusy(member, 'transfer')}
+                        disabled={busy !== null || leaving}
                         onPress={() => void transferOwnership(member)}
                       />
                       <Button
@@ -290,6 +295,7 @@ export default function MembersScreen() {
                         variant="danger"
                         compact
                         loading={isBusy(member, 'remove')}
+                        disabled={busy !== null || leaving}
                         onPress={() => void removeMember(member)}
                       />
                     </Row>
@@ -311,14 +317,20 @@ export default function MembersScreen() {
 
           <Card style={{ gap: spacing.md }}>
             {isOwner ? (
-              <Button
-                label="저장소 삭제"
-                variant="danger"
-                icon="trash-outline"
-                onPress={deleteRepo}
-                loading={leaving}
-                full
-              />
+              <>
+                <Button
+                  label="저장소 삭제"
+                  variant="danger"
+                  icon="trash-outline"
+                  onPress={deleteRepo}
+                  loading={leaving}
+                  disabled={busy !== null}
+                  full
+                />
+                <Caption>
+                  소유자는 저장소에서 나갈 수 없습니다. 나가려면 먼저 다른 멤버를 소유자로 지정하세요.
+                </Caption>
+              </>
             ) : (
               <Button
                 label="저장소에서 나가기"
@@ -326,6 +338,7 @@ export default function MembersScreen() {
                 icon="exit-outline"
                 onPress={leave}
                 loading={leaving}
+                disabled={busy !== null}
                 full
               />
             )}

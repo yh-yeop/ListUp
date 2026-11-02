@@ -109,6 +109,12 @@ export default function ServerFormScreen() {
       if (!url) return;
       target = url;
     }
+    // 수정 화면에서 이미 목록에 있는 다른 서버의 주소로 바꾸려는 경우 — 로그아웃 확인을 받기 전에 막는다
+    // (saveServer 의 판정과 같다). 추가 화면은 같은 주소면 기존 항목을 쓰므로 오류가 아니다.
+    if (editing && urlChanged && servers.some((e) => e.id !== editing.id && serverUrl(e) === target)) {
+      setError('이미 목록에 있는 주소입니다.');
+      return;
+    }
     // 주소를 바꾸면 그 서버의 토큰을 지운다 — 토큰은 발급한 서버에만 보낸다.
     if (editing && urlChanged && editing.token) {
       const ok = await confirmAction({

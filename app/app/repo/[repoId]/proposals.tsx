@@ -101,7 +101,7 @@ export default function ProposalsScreen() {
         />
       </Row>
 
-      {state.loading && !state.data ? (
+      {state.loading ? (
         <Loading />
       ) : state.error ? (
         <ErrorNotice message={state.error} onRetry={state.reload} />

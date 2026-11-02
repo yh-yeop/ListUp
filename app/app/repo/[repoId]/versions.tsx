@@ -134,7 +134,7 @@ export default function VersionsScreen() {
         <Caption style={{ fontFamily: monoFont }}>{path}</Caption>
         <Subtitle>
           이 파일이 바뀐 시점들입니다. 예전 버전을 받거나, 그 내용으로 되돌릴 수 있습니다. 되돌려도 지금 내용은
-          이력에 남습니다.
+          이력에 남습니다. 옮기거나 이름을 바꾼 파일은 옮긴 뒤의 버전만 보입니다.
         </Subtitle>
       </View>
 

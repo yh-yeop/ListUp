@@ -58,6 +58,8 @@ export default function NewProposalScreen() {
   const keySeq = useRef(0);
   // 제출 성공 뒤 router.replace 는 '작성 중 나가기' 경고를 띄우지 않도록 표시한다.
   const submittedRef = useRef(false);
+  // 제출 응답을 기다리는 동안 뒤로 가서 화면을 버리면, 응답 뒤 router.replace 가 그때 보던 다른 화면을 바꿔 버린다.
+  const submittingRef = useRef(false);
 
   // 삭제 제안을 고르기 위해 현재 저장소 내용을 보여준다.
   const treeState = useAsync<TreeListing>(
@@ -66,12 +68,16 @@ export default function NewProposalScreen() {
   );
 
   // 작성 중인 내용이 있으면 뒤로 가기 전에 한 번 확인한다.
-  const hasDraft = staged.length > 0 || title.trim() !== '' || description.trim() !== '';
+  // 첫 파일을 담는 중에도 (아직 staged 가 비어 있어도) 나가면 그 작업이 버려지므로 확인한다.
+  const hasDraft =
+    staged.length > 0 || title.trim() !== '' || description.trim() !== '' || uploading || preparing;
   useEffect(() => {
     if (!hasDraft) return;
     return navigation.addListener('beforeRemove', (event) => {
       if (submittedRef.current) return;
       event.preventDefault();
+      // 제출 중에는 대화상자 없이 막는다 — 응답이 오면 제안 상세로 넘어간다.
+      if (submittingRef.current) return;
       void confirmAction({
         title: '작성 중인 제안을 버릴까요?',
         message: '담은 파일과 입력한 제목·설명이 사라집니다.',
@@ -126,7 +132,14 @@ export default function NewProposalScreen() {
             originalName: item.source.name,
           });
         }
-        if (failures.length > 0) setError(`${failures[0].item.source.name}: ${failures[0].message}`);
+        if (failures.length === 1) {
+          setError(`${failures[0].item.source.name}: ${failures[0].message}`);
+        } else if (failures.length > 1) {
+          // 여러 개가 실패하면 처음 하나만 보여 주지 않고 개수와 앞쪽 이름·이유를 함께 알린다.
+          const shown = failures.slice(0, 3).map((f) => `${f.item.source.name}: ${f.message}`);
+          const rest = failures.length - shown.length;
+          setError(`${failures.length}개를 담지 못했습니다 — ${shown.join(', ')}${rest > 0 ? ` 외 ${rest}개` : ''}`);
+        }
         setProgress(null);
       }
       setStaged((prev) => [...prev, ...added]);
@@ -192,6 +205,7 @@ export default function NewProposalScreen() {
       seen.add(normalized);
     }
 
+    submittingRef.current = true;
     setSubmitting(true);
     try {
       const { proposal } = await api.createProposal(repoId, {
@@ -207,9 +221,19 @@ export default function NewProposalScreen() {
     } catch (err) {
       setError(err instanceof ApiError ? err.message : '제안을 만들지 못했습니다.');
     } finally {
+      submittingRef.current = false;
       setSubmitting(false);
     }
   }
+
+  // 제출 버튼이 흐린 이유 — 제목 칸은 화면 맨 위라 버튼만 봐서는 알 수 없다.
+  const submitBlocker = !title.trim()
+    ? '제목을 입력하면 올릴 수 있습니다.'
+    : staged.length === 0
+      ? '파일을 담거나 지울 파일을 골라야 올릴 수 있습니다.'
+      : uploading || preparing
+        ? '파일을 담는 중입니다. 끝나면 올릴 수 있습니다.'
+        : null;
 
   return (
     <Screen>
@@ -404,11 +428,12 @@ export default function NewProposalScreen() {
         ) : null}
       </Card>
 
+      {submitBlocker ? <Caption>{submitBlocker}</Caption> : null}
       <Button
         label={`제안 올리기 (${staged.length}개 변경)`}
         onPress={submit}
         loading={submitting}
-        disabled={staged.length === 0 || !title.trim()}
+        disabled={staged.length === 0 || !title.trim() || uploading || preparing}
         full
       />
     </Screen>

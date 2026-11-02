@@ -22,6 +22,9 @@ export interface EntryRow {
  * 이후의 변경 수만큼이다. 스냅샷은 늘 그때의 head 위에 쌓이므로 이력은 갈라지지 않는다.
  */
 
+/** 목록 정렬용. localeCompare 에 옵션을 주면 비교마다 Collator 를 새로 만들어, 경로 수만 개에서 수십 배 느리다. */
+const byKo = new Intl.Collator('ko', { numeric: true });
+
 interface ChangeRow {
   path: string;
   blob_hash: string | null;
@@ -114,7 +117,65 @@ export function readEntry(db: Db, snapshotId: string, path: string): EntryRow | 
     )
     .get(snapshotId);
   if (isHead) return undefined;
-  return readManifest(db, snapshotId).get(path);
+
+  // 과거 스냅샷 — 목록 전체를 되돌려 만들지 않고, 그 경로를 바꾼 가장 오래된(= 목표에 가장 가까운) 변경 하나의
+  // 앞의 값을 본다. readManifest 가 최근 것부터 덮어쓰므로 마지막에 적용되는 것이 그것이다.
+  // 체인의 맨 끝(목표 자신)을 같이 돌려받아 readManifest 와 같은 오류 계약을 지킨다.
+  const target = db
+    .prepare<[string], { repo_id: string; head: string | null }>(
+      `SELECT s.repo_id, r.head_snapshot_id AS head
+         FROM snapshots s JOIN repos r ON r.id = s.repo_id WHERE s.id = ?`,
+    )
+    .get(snapshotId);
+  if (!target) return undefined;
+
+  const rows = db
+    .prepare<
+      [string | null, string, string, string, string],
+      {
+        id: string;
+        prev_blob_hash: string | null;
+        prev_size: number | null;
+        prev_mime_type: string | null;
+        prev_updated_at: number | null;
+      }
+    >(
+      `WITH RECURSIVE chain(id, parent_id, depth) AS (
+         SELECT id, parent_id, 0 FROM snapshots WHERE id = ?
+         UNION ALL
+         SELECT s.id, s.parent_id, c.depth + 1
+           FROM snapshots s JOIN chain c ON s.id = c.parent_id
+          WHERE c.id <> ?
+       )
+       SELECT chain.id, c.prev_blob_hash, c.prev_size, c.prev_mime_type, c.prev_updated_at
+         FROM chain
+         LEFT JOIN snapshot_changes c ON c.snapshot_id = chain.id AND c.path = ? AND chain.id <> ?
+        WHERE c.path IS NOT NULL OR chain.id = ?
+        ORDER BY chain.depth DESC
+        LIMIT 2`,
+    )
+    .all(target.head, snapshotId, path, snapshotId, snapshotId);
+  // 맨 처음 행이 목표 자신이어야 체인이 목표에 닿은 것이다.
+  if (rows[0]?.id !== snapshotId) {
+    throw new Error(`스냅샷 ${snapshotId} 이 저장소 이력(head 에서 부모를 따라간 줄)에 없습니다.`);
+  }
+  const change = rows[1];
+  if (!change) {
+    // 그 뒤로 아무도 안 건드렸다 — 지금(head) 값이 그대로다.
+    return db
+      .prepare<[string, string], EntryRow>(
+        `SELECT path, blob_hash, size, mime_type, updated_at FROM repo_files WHERE repo_id = ? AND path = ?`,
+      )
+      .get(target.repo_id, path);
+  }
+  if (change.prev_blob_hash === null) return undefined;
+  return {
+    path,
+    blob_hash: change.prev_blob_hash,
+    size: change.prev_size!,
+    mime_type: change.prev_mime_type!,
+    updated_at: change.prev_updated_at!,
+  };
 }
 
 /**
@@ -277,10 +338,9 @@ export function listTree(
     dirs.set(name, dir);
   }
 
-  const byName = (a: { name: string }, b: { name: string }) =>
-    a.name.localeCompare(b.name, 'ko', { numeric: true });
+  const byName = (a: { name: string }, b: { name: string }) => byKo.compare(a.name, b.name);
   listing.dirs = [...dirs.values()].sort(byName);
-  if (recursive) listing.files.sort((a, b) => a.path.localeCompare(b.path, 'ko', { numeric: true }));
+  if (recursive) listing.files.sort((a, b) => byKo.compare(a.path, b.path));
   else listing.files.sort(byName);
   return listing;
 }
@@ -411,23 +471,27 @@ interface TrashRow {
  * - 같은 스냅샷에서 같은 내용이 다른 경로로 생겼다 — 이름 바꾸기·옮기기다.
  * - 같은 경로를 그 뒤에 또 바꿨다 — 마지막으로 지운 한 번만 남긴다.
  * 지운 내용은 이력이 참조하므로 GC 가 지우지 않는다. 언제든 되돌릴 수 있다.
+ *
+ * 쿼리 모양: CROSS JOIN 으로 저장소의 스냅샷에서 출발해 그 변경만 읽게 순서를 강제한다(안 그러면 모든
+ * 저장소의 삭제 변경을 idx_snapchanges_blob 으로 읽은 뒤 거른다). 마지막 NOT EXISTS 는 경로 인덱스로
+ * 그 경로의 변경만 보게 INDEXED BY — 안 그러면 저장소의 스냅샷마다 프로브한다. 저장소 수·이력 길이에 비례해 느려지는 것을 막는다.
  */
 export function listTrash(db: Db, repoId: string, limit: number): TrashEntry[] {
   const rows = db
     .prepare<[string, number], TrashRow>(
       `SELECT c.path, s.id AS snapshot_id, s.parent_id, s.message, s.created_at, s.author_id, u.display_name,
               c.prev_blob_hash, c.prev_size, c.prev_mime_type
-         FROM snapshot_changes c
-         JOIN snapshots s ON s.id = c.snapshot_id
+         FROM snapshots s
+         CROSS JOIN snapshot_changes c
          JOIN users u ON u.id = s.author_id
-        WHERE s.repo_id = ?
+        WHERE s.repo_id = ? AND c.snapshot_id = s.id
           AND c.blob_hash IS NULL AND c.prev_blob_hash IS NOT NULL AND s.parent_id IS NOT NULL
           AND NOT EXISTS (SELECT 1 FROM repo_files f WHERE f.repo_id = s.repo_id AND f.path = c.path)
           AND NOT EXISTS (
                 SELECT 1 FROM snapshot_changes m
                  WHERE m.snapshot_id = c.snapshot_id AND m.prev_blob_hash IS NULL AND m.blob_hash = c.prev_blob_hash)
           AND NOT EXISTS (
-                SELECT 1 FROM snapshot_changes l JOIN snapshots ls ON ls.id = l.snapshot_id
+                SELECT 1 FROM snapshot_changes l INDEXED BY idx_snapchanges_path JOIN snapshots ls ON ls.id = l.snapshot_id
                  WHERE l.path = c.path AND ls.repo_id = s.repo_id
                    AND (ls.created_at > s.created_at OR (ls.created_at = s.created_at AND ls.id > s.id)))
         ORDER BY s.created_at DESC, s.id DESC, c.path

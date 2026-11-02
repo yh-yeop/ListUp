@@ -161,23 +161,9 @@ export class BlobStore {
     await fsp.rm(this.sessionPath(id), { force: true });
   }
 
-  async writeBuffer(buffer: Buffer): Promise<StoredBlob> {
-    const hash = createHash('sha256').update(buffer).digest('hex');
-    const finalPath = this.pathFor(hash);
-    if (!(await this.has(hash))) {
-      await fsp.mkdir(path.dirname(finalPath), { recursive: true });
-      await fsp.writeFile(finalPath, buffer);
-    }
-    return { hash, size: buffer.length };
-  }
-
   /** range 를 주면 그 구간만(end 포함). */
   createReadStream(hash: string, range?: { start: number; end: number }): fs.ReadStream {
     return fs.createReadStream(this.pathFor(hash), range);
-  }
-
-  async read(hash: string): Promise<Buffer> {
-    return fsp.readFile(this.pathFor(hash));
   }
 
   /** 어떤 스냅샷/제안에서도 참조하지 않는 blob 파일 제거. */

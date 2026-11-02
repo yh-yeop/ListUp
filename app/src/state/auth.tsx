@@ -92,7 +92,8 @@ const LOGOUT_WAIT_MS = 3000;
 
 /** 서버를 고르지 않은 채 로그인하려 할 때. 화면에서는 서버 목록으로 안내한다. */
 function noServerError(): Error {
-  return new Error('들어갈 서버를 먼저 골라 주세요.');
+  // client.ts 의 request 와 같은 문구·모양 — 화면의 `err instanceof ApiError ? err.message` 가 그대로 보인다.
+  return new ApiError(0, 'internal', '들어갈 서버를 먼저 골라 주세요.');
 }
 
 function updateEntry(

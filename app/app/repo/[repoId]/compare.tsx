@@ -168,8 +168,11 @@ export default function CompareScreen() {
     setProgress(null);
     const details = failures.slice(0, 3).join('\n') || undefined;
     if (signal.aborted) notify(`멈췄습니다 — ${received}/${files.length}개 받음`, details);
-    else if (failures.length === 0) notifySuccess(`${files.length}개를 받았습니다.`);
-    else notifyError(`${received}개 받음, ${failures.length}개 실패`, details);
+    else if (failures.length === 0) {
+      // 웹의 폴더 없는 받기는 브라우저에 내려받기를 시작시킬 뿐이라 끝났는지는 알 수 없다.
+      if (toFolder) notifySuccess(`${files.length}개를 받았습니다.`);
+      else notifySuccess(`${files.length}개 받기를 시작했습니다.`, '브라우저의 내려받기 목록에서 확인하세요.');
+    } else notifyError(`${received}개 받음, ${failures.length}개 실패`, details);
     if (toFolder) await refresh();
   }
 
@@ -221,8 +224,10 @@ export default function CompareScreen() {
             changes: uploaded.map(({ item, blob }) => ({ path: item.path, blobHash: blob.hash })),
           });
           setProgress(null);
-          if (failures.length > 0) notifyError(`${failures.length}개는 올리지 못했습니다.`);
-          else if (cancelled) notify(`멈췄습니다 — 다 올린 ${uploaded.length}개로 제안을 만들었습니다.`);
+          if (failures.length > 0) {
+            const why = failures.slice(0, 3).map((f) => `${f.item.path}: ${f.message}`).join('\n');
+            notifyError(`${failures.length}개는 올리지 못했습니다.`, why);
+          } else if (cancelled) notify(`멈췄습니다 — 다 올린 ${uploaded.length}개로 제안을 만들었습니다.`);
           router.push(`/proposal/${proposal.id}`);
           return;
         }
@@ -230,7 +235,7 @@ export default function CompareScreen() {
         else notifyError('올리지 못했습니다.', failures.slice(0, 3).map((f) => `${f.item.path}: ${f.message}`).join('\n'));
       }
     } catch (err) {
-      notifyError('반영하지 못했습니다.', err instanceof ApiError ? err.message : undefined);
+      notifyError(isEditor ? '반영하지 못했습니다.' : '제안을 만들지 못했습니다.', err instanceof ApiError ? err.message : undefined);
     } finally {
       setProgress(null);
     }

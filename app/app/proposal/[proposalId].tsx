@@ -72,6 +72,8 @@ export default function ProposalDetailScreen() {
       state.refresh();
     } catch (err) {
       if (err instanceof ApiError) {
+        // 충돌·이미 처리됨 같은 409 는 화면의 conflicts·mergeable·status 가 옛 값이라는 뜻 — 새로 받아야 같은 오류가 반복되지 않는다.
+        if (err.status === 409) state.refresh();
         const conflicts = err.conflicts;
         setActionError(
           conflicts.length > 0
@@ -166,8 +168,9 @@ export default function ProposalDetailScreen() {
                 </Body>
               </Row>
               <Caption style={{ color: colors.warning }}>
-                이 제안을 만든 뒤 아래 파일이 저장소에서 바뀌었거나, 이름이 겹치는 파일·폴더가
-                생겼습니다. 저장소의 최신 상태를 확인한 뒤 다시 제안해 주세요.
+                {user?.id === proposal.author.id
+                  ? '이 제안을 만든 뒤 아래 파일이 저장소에서 바뀌었거나, 이름이 겹치는 파일·폴더가 생겼습니다. 저장소의 최신 상태를 확인한 뒤 다시 제안해 주세요.'
+                  : '이 제안을 만든 뒤 아래 파일이 저장소에서 바뀌었거나, 이름이 겹치는 파일·폴더가 생겼습니다. 작성자가 최신 내용으로 다시 제안해야 반영할 수 있습니다.'}
               </Caption>
               {proposal.conflicts.map((path) => (
                 <Body key={path} style={{ fontFamily: monoFont, fontSize: fontSize.sm }}>

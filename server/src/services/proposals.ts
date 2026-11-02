@@ -5,6 +5,7 @@ import type {
   ProposalChange,
   ProposalStatus,
 } from '@listup/shared';
+import type Database from 'better-sqlite3';
 import type { Db } from '../db/index.ts';
 import { findPathConflict, readManifest, type EntryRow } from './snapshots.ts';
 
@@ -118,21 +119,36 @@ export function readComments(db: Db, proposalId: string): Comment[] {
  * (스냅샷 참조는 repo_blobs 가 생기기 전 데이터와, 지운 파일을 되살리는 제안을 위한 것)
  */
 export function blobBelongsToRepo(db: Db, repoId: string, hash: string): boolean {
-  const uploaded = db
-    .prepare<[string, string], { ok: number }>(
-      `SELECT 1 AS ok FROM repo_blobs WHERE repo_id = ? AND hash = ?`,
-    )
-    .get(repoId, hash);
-  if (uploaded) return true;
-  const referenced = db
-    .prepare<[string, string, string], { ok: number }>(
-      `SELECT 1 AS ok
-         FROM snapshot_changes c JOIN snapshots s ON s.id = c.snapshot_id
-        WHERE s.repo_id = ? AND (c.blob_hash = ? OR c.prev_blob_hash = ?)
-        LIMIT 1`,
-    )
-    .get(repoId, hash, hash);
-  return referenced !== undefined;
+  const { uploaded, referenced } = belongsStatements(db);
+  if (uploaded.get(repoId, hash)) return true;
+  return referenced.get(repoId, hash, hash) !== undefined;
+}
+
+type BelongsStatements = {
+  uploaded: Database.Statement<[string, string], { ok: number }>;
+  referenced: Database.Statement<[string, string, string], { ok: number }>;
+};
+
+/** 제안 하나에 최대 200번 불리므로 문장은 DB 당 한 번만 준비해 둔다. */
+const belongsCache = new WeakMap<Db, BelongsStatements>();
+
+function belongsStatements(db: Db): BelongsStatements {
+  let cached = belongsCache.get(db);
+  if (!cached) {
+    cached = {
+      uploaded: db.prepare<[string, string], { ok: number }>(
+        `SELECT 1 AS ok FROM repo_blobs WHERE repo_id = ? AND hash = ?`,
+      ),
+      referenced: db.prepare<[string, string, string], { ok: number }>(
+        `SELECT 1 AS ok
+           FROM snapshot_changes c JOIN snapshots s ON s.id = c.snapshot_id
+          WHERE s.repo_id = ? AND (c.blob_hash = ? OR c.prev_blob_hash = ?)
+          LIMIT 1`,
+      ),
+    };
+    belongsCache.set(db, cached);
+  }
+  return cached;
 }
 
 /** manifest 의 파일 크기 합. */
@@ -170,12 +186,12 @@ export function findConflicts(
   headSnapshotId: string | null,
 ): string[] {
   if (baseSnapshotId === headSnapshotId) return [];
-  const base = readManifest(db, baseSnapshotId);
   const head = readManifest(db, headSnapshotId);
   const conflicts: string[] = [];
 
   for (const change of changes) {
-    const baseHash = base.get(change.path)?.blob_hash ?? null;
+    // base 의 해시는 제안을 만들 때 그 시점 head 에서 적어 둔 값이라 base 를 다시 재구성할 필요가 없다.
+    const baseHash = change.base_blob_hash;
     const headHash = head.get(change.path)?.blob_hash ?? null;
     if (baseHash === headHash) continue;
     // head 가 이미 제안과 똑같은 상태라면 충돌이 아니라 이미 반영된 것이다.

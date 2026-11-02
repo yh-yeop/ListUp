@@ -114,6 +114,9 @@ export default function RepoFilesScreen() {
 
   const repo = state.data?.repo;
   const tree = state.data?.tree;
+  // 폴더를 옮긴 직후에는 새 목록이 올 때까지 이전 폴더의 tree 가 남는다. 그 기준으로
+  // 덮어쓰기 확인·「이미 올라가 있음」 판정을 하면 틀리므로 목록이 최신일 때만 올린다.
+  const treeFresh = !state.loading && tree?.path === path;
   const isEditor = hasRole(repo?.role, 'editor');
   // 과거 시점에서는 편집 권한이 있어도 바꿀 수 없다.
   const canEdit = isEditor && !snapshotId;
@@ -194,7 +197,7 @@ export default function RepoFilesScreen() {
   }
 
   async function upload() {
-    if (uploading || preparing) return;
+    if (uploading || preparing || !treeFresh) return;
     let sources: UploadSource[];
     try {
       sources = await pickFiles(true);
@@ -289,6 +292,8 @@ export default function RepoFilesScreen() {
 
   /** 파일 하나, 또는 폴더를 zip 으로 받는다. */
   async function download(targetPath: string, fileName: string, archive = false) {
+    // 받는 중에 다른 행(검색 결과 포함)을 또 누르면 같은 캐시 파일을 덮어쓰거나 선택기가 두 번 뜬다.
+    if (busyPath !== null) return;
     setBusyPath(targetPath);
     try {
       const result = await downloadFromRepo(repoId, { path: targetPath, snapshotId, archive, fileName });
@@ -375,8 +380,9 @@ export default function RepoFilesScreen() {
             </Row>
             {repo.description ? <Body muted>{repo.description}</Body> : null}
             <Row gap={spacing.md} wrap>
-              <Caption>파일 {repo.fileCount}개</Caption>
-              <Caption>{formatBytes(repo.totalSize)}</Caption>
+              {/* 개수·용량은 현재(head) 값이라 과거 시점 보기에서는 틀리므로 숨긴다. */}
+              {snapshotId ? null : <Caption>파일 {repo.fileCount}개</Caption>}
+              {snapshotId ? null : <Caption>{formatBytes(repo.totalSize)}</Caption>}
               <Caption>멤버 {repo.memberCount}명</Caption>
             </Row>
           </View>
@@ -421,7 +427,7 @@ export default function RepoFilesScreen() {
                   icon="cloud-upload-outline"
                   onPress={upload}
                   loading={uploading}
-                  disabled={preparing}
+                  disabled={preparing || !treeFresh}
                 />
               ) : null}
               {canEdit && CAN_PICK_FOLDER ? (
@@ -607,6 +613,7 @@ export default function RepoFilesScreen() {
                               icon={iconForMime(file.mimeType)}
                               value={editing.value}
                               busy={renaming}
+                              hint="전체 경로입니다. 앞의 폴더 부분을 지우면 맨 위로 옮겨집니다."
                               onChange={(value) => setEditing({ ...editing, value })}
                               onConfirm={() => void confirmRename()}
                               onCancel={() => setEditing(null)}

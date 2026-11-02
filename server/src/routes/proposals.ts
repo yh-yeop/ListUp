@@ -143,7 +143,9 @@ export async function registerProposalRoutes(app: FastifyInstance, ctx: AppConte
 
     const changes = [...prepared.values()];
     const addCount = changes.filter((c) => c.op === 'add').length;
-    if (base.size + addCount > MAX_FILES_PER_REPO) {
+    const deleteCount = changes.filter((c) => c.op === 'delete').length;
+    // 병합의 결과 수 검사와 같은 기준 — 삭제로 비는 자리를 빼야 생성 409·병합 통과로 어긋나지 않는다.
+    if (base.size + addCount - deleteCount > MAX_FILES_PER_REPO) {
       throw conflict(`저장소당 파일은 최대 ${MAX_FILES_PER_REPO}개입니다.`);
     }
     const pathConflicts = findPathConflicts(base, changes);

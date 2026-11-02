@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { KeyboardAvoidingView, Platform, View } from 'react-native';
 import { Body, Button, Card, ErrorNotice, Field, Input, PasswordInput, Screen, Subtitle, Title } from '../src/components/ui';
 import { ApiError } from '../src/api/client';
+import { PendingInviteNote } from '../src/components/InviteSummary';
 import { RememberLogin } from '../src/components/RememberLogin';
 import { credentialsSupported } from '../src/lib/credentials';
 import { useAuth } from '../src/state/auth';
@@ -56,6 +57,7 @@ export default function ResetPasswordScreen() {
           </Subtitle>
         </View>
 
+        <PendingInviteNote action="로그인" />
         <Card style={{ gap: spacing.lg }}>
           <Field label="아이디">
             <Input

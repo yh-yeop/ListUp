@@ -364,7 +364,10 @@ function fileSource(args: { repoId: string; path: string; snapshotId?: string; p
 }
 
 function cursorOf(args: { before?: number; beforeId?: string }) {
-  return args.before !== undefined && args.beforeId !== undefined ? { before: args.before, beforeId: args.beforeId } : undefined;
+  if (args.before === undefined && args.beforeId === undefined) return undefined;
+  // 하나만 주면 첫 페이지로 돌아가 같은 페이지를 되풀이하게 된다(서버도 400).
+  if (args.before === undefined || args.beforeId === undefined) throw new Error('before 와 beforeId 는 함께 주세요 (앞 응답의 next).');
+  return { before: args.before, beforeId: args.beforeId };
 }
 
 /**
