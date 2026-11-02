@@ -660,3 +660,36 @@ completeSession: entry && entry.bytes === size → digest, rehashed=false; 아�
 8. `checkUploadPlan` 사례가 `server/test/files.test.ts` 의 이름 겹침 사례와 짝; 충돌 시 PUT 0번; `tree.recursive` 없거나 `maxRepoBytes` 없으면 그 검사만 생략.
 9. `check:sync` 통과(구조 블록 새 파일: transfer-store·TransferHost·pure/transfer-report·pure/upload-sessions·upload-sessions·pure/upload-check), ARCHITECTURE 전송 절·README 문구가 실제 동작(세션 20h 기억, 5분 창)과 일치, 릴리즈 노트.
 10. 회귀 순서: `check:sync` → `typecheck` → `npm test` → `test:e2e` → `--web` 재빌드 → `test:desktop`.
+
+## §8c Fable 최종 검수 (2026-11-02)
+
+대상: `77005aa..cf376e8`(단계 1·2a·2b·3·4). 코드는 읽기만 했고, 직접 돌린 것: `check:sync` 통과(6개), `npm test` 346(서버 229·앱 103·mcp 14), `node e2e/run.mjs --no-build 6-transfer 9-compare 10-polish` 74개 통과. 나머지 e2e 264·desktop 43 은 구현자 보고.
+
+### 체크리스트
+1. **통과** — 화면 3곳에서 `useState<UploadProgress>`·`useTransferControl`·AbortController 가 사라졌다(index.tsx·compare.tsx·new-proposal.tsx diff). `TransferProgress.tsx` 는 `{job, footnote}` 만 받고 상태는 `transfer-store.ts` 하나(`state.jobs`·`controllers`).
+2. **통과** — 10-polish ③④, 6-transfer ①②③·충돌, 9-compare 마무리·떠난 뒤 제안이 모두 녹색. 기존 이름(`파일 올리기`·`멈추기`·`progressbar /^올리는 중/`·`멈췄습니다 — N/3개 올림`·확인창 `이미 올라가 있는 2개는 건너뜁니다`)은 그대로다(transfer-report.ts:91, TransferProgress.tsx:36).
+3. **통과** — `transfer.ts:314` `discard = !(err instanceof ApiError) || 4xx`, `:319` 멈춤이면 discard, `:324` finally 는 `discard && !isAbandoned` 일 때만 `cancelUpload`. status 0·5xx·TransferOffline 은 남긴다. e2e 6-transfer ② 가 끊긴 5초 동안 DELETE 없음을, 10-polish ①④ 가 멈춤 때 DELETE 를 확인.
+4. **통과** — `pure/upload-sessions.ts:40-45` 키 = `baseUrl\nrepoId\n(relativePath||name NFC)\nsize\nlastModified`, mtime 없음·0 이면 null. 이어 간 세션의 첫 실패 → `transfer.ts:303-312` forget·cancel·새 세션 한 번(e2e 6-transfer ③). `openSession :184` 가 repoId·name·size 를 대조.
+5. **통과** — `TransferHost.tsx:25,37` 카드 하나(가장 최근 job) + `외 N개 진행 중`, job 이 없으면 아무것도 안 그림(`:30`). compare.tsx 의 `router.push`·`refresh` 는 `mountedRef` 뒤(diff), new-proposal 의 setState 도 `mountedRef`. index 는 `finishedSeq` 효과로 목록 갱신.
+6. **통과** — `transfer.ts:268` finishing, `:437` committing 보고. `canCancel`(transfer-report.ts:25-34): 마지막 finishing·committing·전부 보낸 뒤 거짓. aria-label 은 `${job.label} ${percent}%` 고정(9-compare 가 마무리 중에도 `/^올리는 중/` 1개 확인).
+7. **통과** — storage.test 6건이 copy 경로(`rehashed:false`)·재시작 폴백(`rehashed:true`)·앞쪽 offset 재전송(폴백)·removeSession 뒤 Map 0 을 본다. `uploads.ts` 캐시는 `userId` 일치 + `requireAccess`(diff), `record()` 뒤에만 삽입, TTL 시험(mock.timers). gc.ts 가 `removeSession` 으로 지워 Map 도 비운다. API_LEVEL 6·REQUIRED 2·docs/API.md·shared 주석 일치.
+8. **통과** — upload-check.test 20건(파일↔폴더·새 항목끼리·덮어쓰기·NFD·수·용량·null). e2e 충돌 사례에서 POST·PUT 0번·이력 그대로. `index.tsx listWholeRepo` 가 `tree.recursive` 없으면 null → 겹침 생략, `maxRepoBytes` null → 용량 생략(upload-check.ts:64-67).
+9. **통과(마무리 커밋 남음)** — `check:sync` 통과, 구조 블록에 새 파일 6개 반영, ARCHITECTURE 전송 절·API.md·README 문구가 실제 동작(5분 창·20시간·mtime 없으면 새로)과 일치. **릴리즈 노트·`version:set 1.10.0`·TODO 완료 절은 아직 없다**(package.json 1.9.0, `docs/releases/v1.10.0.md` 없음, TODO 항목 3 `[ ]`).
+10. **통과** — 위 직접 실행 + 구현자 보고(e2e 264·desktop 43).
+
+### 구현자 이탈 판정
+- 2a `abandonTransfer`(서버 전환·로그아웃 → 커밋·제안 안 함) — **채택**. 그냥 abort 하면 옛 서버의 blob 해시로 새 서버에 커밋을 보낸다. `uploadAndCommit :436`·compare 열람자 task 가 `isAbandoned` 를 본다.
+- 2a 토스트를 카드 위로 쌓음·compare 받기 루프를 2a 에서 옮김 — **채택**(progressbar 둘이 되지 않게 하려면 2a 에서 옮겨야 했다).
+- 2b `CommitFailed`·"전부 보낸 뒤 멈추기 없음" — **채택**. 커밋 실패 문구에 올린 수를 싣는 깔끔한 길이고, 전부 보낸 상태의 멈추기는 효과가 없다.
+- 3 abandon 때 세션을 지우지도 잊지도 않음 — **채택**(요청이 이제 다른 서버로 가므로 지울 수 없고, 그 서버로 돌아오면 이어 갈 수 있다). 5분 창을 getUpload/startUpload 에도 적용 — **채택**. 로컬 읽기 실패를 4xx 처럼 — **채택**. 웹·안드로이드 비교 소스에 lastModified — **채택**(키에 필요).
+- 4 전체 목록으로 수·용량 계산(getRepo 생략) — **채택**(요약보다 정확). 목록 없으면 전부 새 파일로 셈 — **일부 채택**: 1.2 서버에서 덮어쓰기를 새 파일로 세어 5,000 근처에서 거짓 양성이 날 수 있으나 그 서버는 이미 수준 2 라 드물다. TODO 로.
+
+### 릴리즈 전 고쳐야 할 것 (blocking)
+- 코드 결함 없음. **마무리 커밋만 남았다**: `npm run version:set -- 1.10.0`, `docs/releases/v1.10.0.md`(위 변경 + API_LEVEL 6 + "안드로이드 받기 진행률·PC will-download 는 다음"), TODO 항목 3 → 완료 절(5·6 은 남은 일로 신설), REFACTOR §9 결과 요약.
+
+### 나중에 (non-blocking → TODO)
+1. 401 로 세션이 끊길 때(`client.ts:270,368` 이 `authToken = null` 을 직접 써 `setApiTarget` 을 지나지 않음) 전송이 abandon 되지 않는다 — 조각이 401 로 실패하고 커밋도 401 → `CommitFailed` 토스트 뒤 로그아웃. 무해하지만 "진행 중이던 전송을 멈췄습니다" 안내가 없다. 401 핸들러에서 `abortAllTransfers` 를 부르면 된다.
+2. 안드로이드 문서 선택기(`copyToCacheDirectory`)의 `lastModified` 는 캐시 복사 시각이라(files.ts:34) 키가 매번 달라 「파일 올리기」로 고른 파일은 이어 가지 못한다(폴더 올리기·웹·PC 앱은 된다). README 는 "고친 시각을 모르는 파일" 로 뭉뚱그렸다 — 문구를 분명히 하거나 선택기 결과의 시각을 쓰지 않는 쪽으로.
+3. 전체 목록이 없는 서버(1.2)에서 덮어쓰기를 새 파일로 세는 거짓 양성(위 판정).
+4. 서버에서 complete 가 성공했지만 앱이 10분 넘게 지나 돌아오면 `getUpload` 404 → 새 세션으로 처음부터(문서대로, 받아들임).
+5. 단계 5·6(안드로이드 받기 진행률·이어받기, PC will-download)은 §8b 판정 7·8·9 를 적용해 다음 릴리즈에.
