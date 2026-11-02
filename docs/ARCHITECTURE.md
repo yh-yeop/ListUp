@@ -84,6 +84,11 @@ users ──┬─< repo_members >─┬── repos ──┬─< repo_files >�
   실패(4xx·파일을 못 읽음)일 때뿐이고, 끊김·5xx 에는 남깁니다. 여러 파일이면 끊긴 파일 뒤의 나머지는
   「연결이 끊겨 보내지 못했습니다」로 남기고 멈춥니다. PC 앱 파일은 `folders.scan` 이 주는 `mtimeMs` 로
   가르므로, 그것을 주지 않는 1.9 PC 앱에서는 이어 가지 않고 처음부터 보냅니다.
+- **올리기 전 검사** — 파일·폴더 이름 겹침(파일 `a` 와 `a/b.txt`), 저장소 파일 수(5,000개)·용량(`maxRepoBytes`)은
+  커밋에서야 막히면 다 올린 바이트가 헛것이 되므로, 앱이 바이트를 보내기 전에 서버와 같은 규칙으로 봅니다
+  (`lib/pure/upload-check.ts`). 파일 화면은 저장소 전체 목록(`recursive=1`)을, 내 폴더와 비교는 이미 받은 그
+  폴더 아래 목록과 저장소 요약을 씁니다. 걸리면 아무것도 올리지 않고 알립니다. 전체 목록이 없는 서버(1.2 까지)면
+  겹침만, `maxRepoBytes` 를 주지 않는 서버(API_LEVEL 6 미만)면 용량만 건너뜁니다 — 최종 판정은 늘 서버가 합니다.
 - **내려받기** — 앱은 짧게 사는 다운로드 링크를 받아 브라우저(웹)·다운로드 작업(네이티브)에 넘깁니다.
   파일 전체를 메모리에 올리지 않고, 이어받기(`Range`)도 됩니다. 폴더는 같은 링크로 zip 을 흘려보냅니다
   (`yazl`, 압축 없이 담기, 미리 계산한 `Content-Length`, ZIP64).
@@ -243,6 +248,7 @@ app/
    │  ├─ transfer-plan.ts     이미 올라간 파일 건너뛰기 판정 ← transfer
    │  ├─ upload-sessions.ts   끊긴 세션 기억 키(서버·저장소·경로·크기·고친 시각, 시각 모르면 없음)·20시간/200개 정리 ← upload-sessions
    │  ├─ transfer-report.ts   전송 단계 이름·멈출 수 있는지, 올린 결과·커밋 실패 토스트 문구 ← TransferProgress·repo/[repoId]/index·compare
+   │  ├─ upload-check.ts      올리기 전 검사 — 파일·폴더 이름 겹침, 파일 수·용량 한도(서버 findPathConflict·manifestBytes 와 같은 규칙) ← repo/[repoId]/index·compare
    │  ├─ compare-core.ts      폴더 대조(이름 NFC/NFD 맞추기) ← folder-compare
    │  ├─ server-store.ts      서버 목록 읽기·정리, 예전 저장 키 이전 규칙(storeFromLegacy) ← state/servers
    │  ├─ repo-search.ts       저장소 찾기(이름 일치 먼저, 5개부터 칸을 보임) ← search

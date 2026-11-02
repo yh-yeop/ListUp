@@ -86,7 +86,7 @@ export function setApiTarget(url: string | null, token: string | null): void {
   const nextUrl = url === null ? null : url.replace(/\/+$/, '');
   const serverChanged = nextUrl !== apiBaseUrl;
   // 업로드 한도는 서버마다 다르므로 주소가 바뀌면 다시 받아온다.
-  if (serverChanged) maxUploadBytesCache = null;
+  if (serverChanged) serverLimitsCache = null;
   apiBaseUrl = nextUrl;
   authToken = token;
   for (const listener of targetListeners) listener({ serverChanged, token });
@@ -109,26 +109,42 @@ export function onApiTargetChange(listener: (change: ApiTargetChange) => void): 
   };
 }
 
-/** 서버가 알려준 파일 하나의 업로드 한도(바이트). */
-let maxUploadBytesCache: number | null = null;
+/** 서버가 알려준 한도. 서버마다 다르므로 주소가 바뀌면 비운다(setApiTarget). */
+let serverLimitsCache: ServerLimits | null = null;
+
+/** 서버 설정의 업로드 한도. */
+export interface ServerLimits {
+  /** 파일 하나의 한도(바이트, LISTUP_MAX_UPLOAD_MB). */
+  maxUploadBytes: number;
+  /** 저장소 하나의 용량 한도(바이트, LISTUP_MAX_REPO_MB). 알려 주지 않는 서버(API_LEVEL 6 미만)·연결 실패면 null. */
+  maxRepoBytes: number | null;
+}
 
 /**
- * 파일 하나의 업로드 한도(바이트). 실제 한도는 서버 설정(LISTUP_MAX_UPLOAD_MB)이므로
- * 서버(/api/health)에 물어보고, 응답에 값이 없거나 서버에 닿지 못하면 공용 기본값으로 거른다.
- * 최종 판정은 어차피 서버(413)가 한다.
+ * 서버의 업로드 한도. 실제 한도는 서버 설정이므로 서버(/api/health)에 물어보고, 응답에 값이 없거나 서버에
+ * 닿지 못하면 파일 하나는 공용 기본값으로 거르고 저장소 용량은 보지 않는다(null). 최종 판정은 어차피 서버(413)가 한다.
  */
-export async function getMaxUploadBytes(): Promise<number> {
-  if (maxUploadBytesCache !== null) return maxUploadBytesCache;
+export async function getServerLimits(): Promise<ServerLimits> {
+  if (serverLimitsCache !== null) return serverLimitsCache;
   try {
-    const health = await request<{ maxUploadBytes?: unknown }>('/api/health');
+    const health = await request<{ maxUploadBytes?: unknown; maxRepoBytes?: unknown }>('/api/health');
     if (typeof health.maxUploadBytes === 'number' && health.maxUploadBytes > 0) {
-      maxUploadBytesCache = health.maxUploadBytes;
-      return health.maxUploadBytes;
+      const limits: ServerLimits = {
+        maxUploadBytes: health.maxUploadBytes,
+        maxRepoBytes: typeof health.maxRepoBytes === 'number' && health.maxRepoBytes > 0 ? health.maxRepoBytes : null,
+      };
+      serverLimitsCache = limits;
+      return limits;
     }
   } catch {
     // 일시적 연결 실패 — 기본값으로 진행하고 다음 기회에 다시 물어본다.
   }
-  return MAX_FILE_SIZE;
+  return { maxUploadBytes: MAX_FILE_SIZE, maxRepoBytes: null };
+}
+
+/** 파일 하나의 업로드 한도(바이트) — {@link getServerLimits} 의 한 부분. */
+export async function getMaxUploadBytes(): Promise<number> {
+  return (await getServerLimits()).maxUploadBytes;
 }
 
 export class ApiError extends Error {

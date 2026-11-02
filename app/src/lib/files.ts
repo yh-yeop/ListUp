@@ -43,28 +43,40 @@ export async function pickFiles(multiple = true): Promise<UploadSource[]> {
   });
 }
 
+/** 고른 폴더의 파일들. truncated 면 저장소 파일 수 한도에서 잘라 앞의 것만 담았다. */
+export interface PickedFolder {
+  sources: UploadSource[];
+  truncated: boolean;
+}
+
 /**
  * 폴더를 통째로 고른다 — 폴더 안의 파일을 relativePath(맨 위 폴더 이름부터)와 함께 돌려준다.
- * 저장소 파일 수 한도보다 많으면 거기서 멈춘다(서버가 어차피 거절한다).
+ * 저장소 파일 수 한도보다 많으면 거기서 멈추고(서버가 어차피 거절한다) truncated 로 알린다 — 조용히 자르면
+ * 사용자는 폴더가 다 올라간 줄 안다.
  * - 웹: 폴더 선택 입력(webkitdirectory)
  * - 안드로이드: 시스템 폴더 선택기. iOS 는 지원하지 않는다.
  */
-export async function pickFolder(): Promise<UploadSource[]> {
+export async function pickFolder(): Promise<PickedFolder> {
   if (Platform.OS === 'web') return pickFolderOnWeb();
-  if (Platform.OS !== 'android') return [];
+  if (Platform.OS !== 'android') return { sources: [], truncated: false };
   let root: Directory;
   try {
     root = await Directory.pickDirectoryAsync();
   } catch {
-    return []; // 취소
+    return { sources: [], truncated: false }; // 취소
   }
   const sources: UploadSource[] = [];
+  let truncated = false;
   const walk = (dir: Directory, prefix: string) => {
     for (const entry of dir.list()) {
-      if (sources.length >= MAX_FILES_PER_REPO) return;
+      if (truncated) return;
       if (entry instanceof Directory) {
         walk(entry, `${prefix}/${entry.name}`);
       } else {
+        if (sources.length >= MAX_FILES_PER_REPO) {
+          truncated = true;
+          return;
+        }
         const info = entry.info();
         sources.push({
           kind: 'native',
@@ -79,10 +91,10 @@ export async function pickFolder(): Promise<UploadSource[]> {
     }
   };
   walk(root, root.name);
-  return sources;
+  return { sources, truncated };
 }
 
-function pickFolderOnWeb(): Promise<UploadSource[]> {
+function pickFolderOnWeb(): Promise<PickedFolder> {
   return new Promise((resolve) => {
     const input = document.createElement('input');
     input.type = 'file';
@@ -90,12 +102,13 @@ function pickFolderOnWeb(): Promise<UploadSource[]> {
     // 폴더를 고르게 한다 — 각 File 에 폴더 안 경로(webkitRelativePath)가 붙는다.
     input.setAttribute('webkitdirectory', '');
     input.style.display = 'none';
-    const finish = (sources: UploadSource[]) => {
+    const finish = (sources: UploadSource[], truncated = false) => {
       input.remove();
-      resolve(sources);
+      resolve({ sources, truncated });
     };
     input.addEventListener('change', () => {
-      const files = Array.from(input.files ?? []).slice(0, MAX_FILES_PER_REPO);
+      const all = Array.from(input.files ?? []);
+      const files = all.slice(0, MAX_FILES_PER_REPO);
       finish(
         files.map((file) => ({
           kind: 'web' as const,
@@ -105,6 +118,7 @@ function pickFolderOnWeb(): Promise<UploadSource[]> {
           relativePath: (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name,
           lastModified: file.lastModified,
         })),
+        all.length > files.length,
       );
     });
     input.addEventListener('cancel', () => finish([]));

@@ -230,6 +230,35 @@ export default async function run(t, env) {
     t.must(tree.files.map((f) => f.name).join() === 'a.txt', '폴더 구조 그대로 (사진/여름/a.txt)');
     t.must((await history()).length === beforeFolder + 1, '폴더도 스냅샷 하나로');
 
+    // 이름이 겹치는 폴더는 올리기 전에 막는다(U2-4) — 파일 '충돌' 이 있는데 폴더 '충돌/안.txt' 를 고르면
+    // 다 올린 뒤 커밋에서 409 가 나는 대신, 바이트를 하나도 보내지 않고 바로 알린다.
+    const form = new FormData();
+    form.append('file', new Blob(['파일']), '충돌');
+    const clashFile = await fetch(`${A}/api/repos/${repo.id}/files?path=${encodeURIComponent('충돌')}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: form,
+    });
+    t.must(clashFile.ok, `파일 '충돌' 을 만들었다 (${clashFile.status})`);
+    await page.reload();
+    await page.getByRole('button', { name: '충돌 내려받기' }).first().waitFor({ timeout: 10000 });
+    fs.mkdirSync(path.join(work, '충돌'), { recursive: true });
+    fs.writeFileSync(path.join(work, '충돌', '안.txt'), '안');
+    const beforeClash = (await history()).length;
+    const clash = uploadRequests();
+    const chooserClash = page.waitForEvent('filechooser');
+    await page.getByRole('button', { name: '폴더 올리기' }).click();
+    await (await chooserClash).setFiles(path.join(work, '충돌'));
+    const clashToast = page.getByRole('alert').filter({ hasText: '이름이 겹쳐' });
+    await clashToast.waitFor({ timeout: 10000 });
+    t.must((await clashToast.innerText()).includes('충돌/안.txt ↔ 파일 충돌'), '알림에 겹치는 경로와 상대를 적는다');
+    await page.waitForTimeout(1000);
+    clash.stop();
+    t.must(clash.puts.length === 0 && clash.posts.length === 0, `겹치면 아무것도 보내지 않는다 (POST ${clash.posts.length}·PUT ${clash.puts.length}번)`);
+    t.must((await history()).length === beforeClash, '겹치면 이력이 그대로');
+    await clashToast.click();
+    await clashToast.waitFor({ state: 'detached', timeout: 5000 });
+
     // 파일 받기 — 다운로드 링크로 브라우저가 직접
     const download = page.waitForEvent('download');
     await page.getByRole('button', { name: 'small.txt 내려받기' }).first().click();

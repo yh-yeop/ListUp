@@ -2,7 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { Stack, router, useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Platform, Pressable, Switch, Text, View } from 'react-native';
-import { formatBytes, hasRole, normalizePath, type RepoSummary } from '@listup/shared';
+import { MAX_FILES_PER_REPO, formatBytes, hasRole, normalizePath, type RepoSummary } from '@listup/shared';
 import {
   Badge,
   Body,
@@ -18,11 +18,12 @@ import {
   Subtitle,
   Title,
 } from '../../../src/components/ui';
-import { ApiError, api, getMaxUploadBytes, resolveApiUrl } from '../../../src/api/client';
+import { ApiError, api, getServerLimits, resolveApiUrl } from '../../../src/api/client';
 import { confirmAction, notify, notifyError, notifySuccess } from '../../../src/lib/dialogs';
 import { compareFolder, listRepoFolder, type RepoFile } from '../../../src/lib/folder-compare';
 import { localFolderSupported, pickLocalFolder, type LocalEntry, type LocalFolder } from '../../../src/lib/local-folder';
 import { OFFLINE_HINT, describeCommitFailure } from '../../../src/lib/pure/transfer-report';
+import { checkUploadPlan, describeUploadCheck } from '../../../src/lib/pure/upload-check';
 import { CommitFailed, committingProgress, isAbandoned, uploadAndCommit, uploadMany } from '../../../src/lib/transfer';
 import { TransferBusy, runTransfer, useTransfers } from '../../../src/lib/transfer-store';
 import { fontSize, monoFont, radius, spacing, useTheme } from '../../../src/theme';
@@ -192,7 +193,7 @@ export default function CompareScreen() {
   }
 
   async function upload(entries: LocalEntry[]) {
-    const maxBytes = await getMaxUploadBytes();
+    const { maxUploadBytes: maxBytes, maxRepoBytes } = await getServerLimits();
     const items = entries
       .filter((entry) => entry.size <= maxBytes)
       .map((entry) => ({ entry, path: normalizePath(basePath ? `${basePath}/${entry.relativePath}` : entry.relativePath) }));
@@ -201,6 +202,25 @@ export default function CompareScreen() {
     if (valid.length === 0) {
       notifyError('올릴 수 있는 파일이 없습니다.', `한 파일 ${formatBytes(maxBytes)} 를 넘거나 쓸 수 없는 이름입니다.`);
       return;
+    }
+    // 올리기 전 검사(lib/pure/upload-check.ts) — 이름 겹침·파일 수·용량은 커밋·제안에서야 막혀 다 올린 바이트가
+    // 헛것이 되므로 미리 본다. repoFiles 는 이 폴더 아래 전부(하위 폴더까지)이고, 올릴 경로도 모두 이 폴더 아래라
+    // 겹침을 보기에 충분하다(이 폴더가 있으면 그 위 경로는 모두 폴더다). 파일 수·용량은 저장소 전체 기준이라 요약(repo)으로.
+    if (repo && repoFiles) {
+      const notice = describeUploadCheck(
+        checkUploadPlan({
+          items: valid.map((item) => ({ path: item.path, size: item.entry.size })),
+          existing: new Map(repoFiles.map((file) => [file.path, file.size])),
+          fileCount: repo.fileCount,
+          totalSize: repo.totalSize,
+          maxFiles: MAX_FILES_PER_REPO,
+          maxRepoBytes,
+        }),
+      );
+      if (notice) {
+        notify(notice.title, notice.message, notice.tone);
+        return;
+      }
     }
     const totalBytes = valid.reduce((sum, item) => sum + item.entry.size, 0);
     const ok = await confirmAction({

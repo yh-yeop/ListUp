@@ -3,11 +3,13 @@ import { Stack, router, useFocusEffect, useLocalSearchParams } from 'expo-router
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { ActivityIndicator, Platform, Pressable, RefreshControl, Text, View } from 'react-native';
 import {
+  MAX_FILES_PER_REPO,
   ROLE_LABEL,
   formatBytes,
   formatRelativeTime,
   hasRole,
   normalizePath,
+  type FileEntry,
   type RepoSummary,
   type TreeListing,
 } from '@listup/shared';
@@ -29,12 +31,13 @@ import {
 } from '../../../src/components/ui';
 import { Breadcrumb, RepoNav } from '../../../src/components/RepoNav';
 import { SearchResults } from '../../../src/components/SearchResults';
-import { ApiError, api, getMaxUploadBytes, type UploadSource } from '../../../src/api/client';
+import { ApiError, api, getServerLimits, type UploadSource } from '../../../src/api/client';
 import { confirmAction, notify, notifyError } from '../../../src/lib/dialogs';
-import { downloadFromRepo, pickFiles, pickFolder } from '../../../src/lib/files';
+import { downloadFromRepo, pickFiles, pickFolder, type PickedFolder } from '../../../src/lib/files';
 import { listRepoFolder } from '../../../src/lib/folder-compare';
 import { localFolderSupported } from '../../../src/lib/local-folder';
 import { MAX_FAILURES_SHOWN, describeCommitFailure, describeUploadOutcome } from '../../../src/lib/pure/transfer-report';
+import { TRUNCATED_NOTE, checkUploadPlan, describeUploadCheck } from '../../../src/lib/pure/upload-check';
 import {
   CommitFailed,
   isAbandoned,
@@ -156,9 +159,8 @@ export default function RepoFilesScreen() {
     router.setParams({ snapshot: undefined, message: undefined, at: undefined });
   }
 
-  /** 서버가 거부할 크기는 올리지 않고 바로 안내한다. 한도는 서버 설정을 따른다. */
-  async function withinLimit(sources: UploadSource[]): Promise<UploadSource[]> {
-    const maxBytes = await getMaxUploadBytes();
+  /** 서버가 거부할 크기는 올리지 않고 바로 안내한다. 한도는 서버 설정을 따른다(getServerLimits). */
+  function withinLimit(sources: UploadSource[], maxBytes: number): UploadSource[] {
     const tooLarge = sources.filter((source) => source.size > maxBytes);
     if (tooLarge.length > 0) {
       const names = tooLarge.slice(0, MAX_FAILURES_SHOWN).map((source) => source.name).join(', ');
@@ -166,6 +168,37 @@ export default function RepoFilesScreen() {
       notifyError(`${names}${more} 은(는) ${formatBytes(maxBytes)} 를 넘어 올릴 수 없습니다.`);
     }
     return sources.filter((source) => source.size <= maxBytes);
+  }
+
+  /** 저장소 전체 파일(하위 폴더까지). 전체 목록을 주지 않는 옛 서버(1.2 까지)거나 받지 못하면 null. */
+  async function listWholeRepo(): Promise<FileEntry[] | null> {
+    try {
+      const { tree: whole } = await api.listFiles(repoId, '', undefined, { recursive: true });
+      return whole.recursive ? whole.files : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * 올리기 전 검사(lib/pure/upload-check.ts) — 파일·폴더 이름 겹침, 저장소 파일 수·용량 한도는 커밋에서야 막혀
+   * 다 올린 바이트가 헛것이 되므로 미리 본다. 걸리면 알리고 false(아무것도 올리지 않는다).
+   * 전체 목록이 없으면 겹침만, 서버가 용량 한도를 알려 주지 않으면 용량만 건너뛴다. 최종 판정은 서버가 한다.
+   */
+  function passesUploadCheck(items: UploadItem[], whole: FileEntry[] | null, maxRepoBytes: number | null): boolean {
+    const check = checkUploadPlan({
+      items: items.map((item) => ({ path: item.path, size: item.source.size })),
+      existing: whole ? new Map(whole.map((file) => [file.path, file.size])) : null,
+      // 전체 목록이 있으면 그것이 지금 저장소 그대로이고, 없으면 화면이 가진 저장소 요약으로.
+      fileCount: whole ? whole.length : (repo?.fileCount ?? 0),
+      totalSize: whole ? whole.reduce((sum, file) => sum + file.size, 0) : (repo?.totalSize ?? 0),
+      maxFiles: MAX_FILES_PER_REPO,
+      maxRepoBytes,
+    });
+    const notice = describeUploadCheck(check);
+    if (!notice) return true;
+    notify(notice.title, notice.message, notice.tone);
+    return false;
   }
 
   /**
@@ -217,7 +250,8 @@ export default function RepoFilesScreen() {
     if (sources.length === 0) return;
     setPreparing(true);
     try {
-      const accepted = await withinLimit(sources);
+      const [limits, whole] = await Promise.all([getServerLimits(), listWholeRepo()]);
+      const accepted = withinLimit(sources, limits.maxUploadBytes);
       if (accepted.length === 0) return;
 
       // 이미 올라가 있는 그대로인 파일은 건너뛴다.
@@ -229,6 +263,7 @@ export default function RepoFilesScreen() {
         notify('모두 이미 올라가 있습니다.', '같은 크기의 같은 파일이 저장소에 있어 건너뛰었습니다.');
         return;
       }
+      if (!passesUploadCheck(changed, whole, limits.maxRepoBytes)) return;
 
       // 현재 폴더에 같은 이름이 있으면 올리기 전에 한 번에 묻는다. 취소하면 아무것도 올리지 않는다.
       const existing = new Set((tree?.files ?? []).map((file) => file.name.normalize('NFC')));
@@ -252,17 +287,19 @@ export default function RepoFilesScreen() {
   /** 폴더를 통째로 — 폴더 구조 그대로 지금 폴더 아래에 올리고 커밋 하나로 반영한다. */
   async function uploadFolder() {
     if (uploading || preparing) return;
-    let sources: UploadSource[];
+    let picked: PickedFolder;
     try {
-      sources = await pickFolder();
+      picked = await pickFolder();
     } catch {
       notifyError('폴더를 선택하지 못했습니다.');
       return;
     }
+    const { sources, truncated } = picked;
     if (sources.length === 0) return;
     setPreparing(true);
     try {
-      const accepted = await withinLimit(sources);
+      const [limits, whole] = await Promise.all([getServerLimits(), listWholeRepo()]);
+      const accepted = withinLimit(sources, limits.maxUploadBytes);
       if (accepted.length === 0) return;
 
       const folderName = (accepted[0].relativePath ?? accepted[0].name).split('/')[0];
@@ -271,9 +308,10 @@ export default function RepoFilesScreen() {
         return { source, path: path ? `${path}/${inner}` : inner };
       });
       // 멈췄다가 같은 폴더를 다시 올리면, 이미 올라간 그대로인 파일은 다시 보내지 않는다.
+      // 전체 목록을 받았으면 그것으로(경로가 저장소 전체 기준이라 그대로 견준다), 아니면 그 폴더만 따로 훑는다.
       let remote: RemoteFiles = new Map();
       try {
-        remote = remoteFilesOf(await listRepoFolder(repoId, path ? `${path}/${folderName}` : folderName));
+        remote = remoteFilesOf(whole ?? (await listRepoFolder(repoId, path ? `${path}/${folderName}` : folderName)));
       } catch {
         // 못 받으면 전부 올린다 — 서버가 내용이 같은 파일은 반영하지 않는다.
       }
@@ -282,12 +320,14 @@ export default function RepoFilesScreen() {
         notify(`'${folderName}' 은(는) 모두 이미 올라가 있습니다.`, `파일 ${unchanged.length}개가 저장소에 그대로 있습니다.`);
         return;
       }
+      if (!passesUploadCheck(changed, whole, limits.maxRepoBytes)) return;
 
       const totalBytes = changed.reduce((sum, item) => sum + item.source.size, 0);
       const ok = await confirmAction({
         title: `'${folderName}' 폴더를 올릴까요?`,
         message:
           `파일 ${changed.length}개 · ${formatBytes(totalBytes)}\n` +
+          (truncated ? `${TRUNCATED_NOTE}\n` : '') +
           (unchanged.length > 0 ? `이미 올라가 있는 ${unchanged.length}개는 건너뜁니다.\n` : '') +
           `${path ? `'${path}' 아래에` : '저장소 맨 위에'} 폴더 구조 그대로 올립니다. 같은 경로의 파일은 새 내용으로 바뀌고, 이전 버전은 변경 이력에 남습니다.`,
         confirmLabel: '올리기',
