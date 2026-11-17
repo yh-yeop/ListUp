@@ -129,7 +129,7 @@ describe('CSV', () => {
 
 describe('에러 종류 이름', () => {
   it('클래스 이름만 — 메시지는 보지 않고, 이상한 이름은 Error 로', () => {
-    assert.equal(errorTypeOf(new TypeError('C:\\Users\\someone\\secret.txt 를 못 읽음')), 'TypeError');
+    assert.equal(errorTypeOf(new TypeError('C:\\Users\\user\\secret.txt 를 못 읽음')), 'TypeError');
     class ApiError extends Error {}
     assert.equal(errorTypeOf(new ApiError('x')), 'ApiError');
     const named = new Error('x');
