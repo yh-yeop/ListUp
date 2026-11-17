@@ -390,7 +390,9 @@ async function savePending(): Promise<void> {
 
 function onAppState(next: AppStateStatus) {
   const s = session;
-  if (!s) return;
+  // 강제 종료 흉내 중이면 그대로 둔다 — 웹은 새로 고침하며 visibilitychange(hidden)가 먼저 와서, 여기서 저장하면
+  // 임시 기록이 background(정상 종료)로 바뀌어 crashed=1 이 남지 않는다.
+  if (!s || s.crashing) return;
   const visible = isVisible(next);
   if (visible === s.visible) return;
   // 바뀌기 전까지를 먼저 셈하고, 백그라운드로 가면 바로 저장한다 — 그 뒤에 OS 가 앱을 치워도 정상 종료로 남게.

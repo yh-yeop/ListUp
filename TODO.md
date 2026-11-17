@@ -508,6 +508,9 @@ iCloud Keychain 으로 거의 자동 복구되는 반면 Android Keystore 는 �
   기기 분류는 RAM·코어를 몰라 `모바일-보급형` 으로 떨어진다(`app/src/lib/telemetry.ts` nativeStore). 안 되면 expo-device(totalMemory)를 들인다.
 - [ ] **안드로이드**: 최근 앱에서 밀어 끄기 → `crashed=0`, 「강제 종료 흉내」(치명적 예외) → `crashed=1`, 공유 시트로 내보내기.
   `npm run test:android` 에 동의 창 「기록하지 않기」 누르기를 넣었지만 돌려 보지 못했다(`e2e/android.mjs`).
+- [ ] **브라우저 「강제 종료 흉내」(새로 고침)가 `crashed=0` 으로 남는다** — 2026-11-17 실측. PC 앱(`app.exit(1)`)은 2/2 `crashed=1`.
+  새로 고침 때 visibilitychange(hidden)가 임시 기록을 background 로 바꾸는 것을 막았지만(`onAppState` 의 `crashing`) 여전히 0 — 새로 고침 사이 순서를 더 봐야 한다(`lib/telemetry.ts` debugCrash·finishOnExit).
+  같은 실측에서 브라우저 첫 1초 `min_fps_1s` 0 이 두 번 — 창이 뜨는 순간 rAF 가 멈춘 1초로 보인다.
 - [ ] **Windows PC 앱**: 저장 대화상자 내보내기, `%APPDATA%\ListUp\telemetry.csv`, `os` 가 `Windows 11`/`Windows 10` 으로 갈리는지,
   작업 관리자로 끈 실행이 `crashed=1` 로 들어오는지. 리눅스 Electron 으로만 실측했다.
 
