@@ -1,3 +1,4 @@
+import { Ionicons } from '@expo/vector-icons';
 import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, View } from 'react-native';
@@ -20,6 +21,7 @@ import { AppVersion } from '../src/components/AppVersion';
 import { HostCard } from '../src/components/HostCard';
 import { credentialsSupported, loadLogin } from '../src/lib/credentials';
 import { useHostStatus } from '../src/lib/desktop';
+import { useTelemetryConsent } from '../src/lib/telemetry';
 import { openReleasePage, updateChecksEnabled } from '../src/lib/updates';
 import { useAuth } from '../src/state/auth';
 import {
@@ -43,6 +45,8 @@ export default function ServersScreen() {
   const savedLogins = useSavedLogins(servers);
   // PC 앱이면 이 PC 에서 서버를 여는 카드를 맨 위에.
   const hostStatus = useHostStatus();
+  const { colors } = useTheme();
+  const telemetry = useTelemetryConsent();
 
   const choose = async (entry: ServerEntry) => {
     if (switchingId) return;
@@ -108,6 +112,22 @@ export default function ServersScreen() {
 
       {/* 로그인 전에도 이 앱의 버전과 업데이트를 볼 수 있게 — 설치형 클라이언트의 첫 화면이다. */}
       <AppVersion />
+
+      {/* 실행 기록(학교 과제용) 설정 — 로그인하지 않아도 끄고 지울 수 있게 첫 화면에도 둔다. */}
+      <Pressable
+        onPress={() => router.push('/telemetry')}
+        accessibilityRole="button"
+        accessibilityLabel="실행 기록 설정 열기"
+        style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
+      >
+        <Row style={{ justifyContent: 'space-between' }}>
+          <Caption>실행 기록</Caption>
+          <Row gap={spacing.xs}>
+            <Caption>{telemetry.ready ? (telemetry.consent === 'granted' ? '켜짐' : '꺼짐') : ''}</Caption>
+            <Ionicons name="chevron-forward" size={14} color={colors.textFaint} />
+          </Row>
+        </Row>
+      </Pressable>
     </Screen>
   );
 }

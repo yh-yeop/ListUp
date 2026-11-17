@@ -35,6 +35,19 @@ export const IPC = {
   updatesState: 'updates:state',
   updatesCheck: 'updates:check',
   updatesInstall: 'updates:install',
+  telemetrySystem: 'telemetry:system',
+  telemetryMemory: 'telemetry:memory',
+  telemetryRead: 'telemetry:read',
+  telemetryWrite: 'telemetry:write',
+  telemetryAppend: 'telemetry:append',
+  telemetryRemove: 'telemetry:remove',
+  /** 동기(sendSync) — main 은 ipcMain.on 으로 받아 event.returnValue 를 늘 넣는다. */
+  telemetryFinish: 'telemetry:finish',
+  telemetryFolder: 'telemetry:folder',
+  telemetryExport: 'telemetry:export',
+  telemetryOpenFolder: 'telemetry:open-folder',
+  /** 단방향(send) — 답을 기다리지 않는다. 받자마자 프로그램이 끝난다. */
+  telemetryDebugCrash: 'telemetry:debug-crash',
   /** main → 창: 상태가 바뀌었다. */
   hostChanged: 'host:changed',
   /** main → 창: 업데이트 상태가 바뀌었다. */

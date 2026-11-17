@@ -3,9 +3,11 @@ import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
 import { View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { TelemetryConsent } from '../src/components/TelemetryConsent';
 import { ToastHost } from '../src/components/Toast';
 import { TransferHost } from '../src/components/TransferHost';
 import { Loading } from '../src/components/ui';
+import { initTelemetry } from '../src/lib/telemetry';
 import { suggestUpdateOnce } from '../src/lib/updates';
 import { AuthProvider, useAuth } from '../src/state/auth';
 import { useTheme } from '../src/theme';
@@ -62,6 +64,8 @@ function RootNavigator() {
       <Stack.Screen name="host" options={{ title: '이 PC 서버' }} />
       {/* 초대 링크는 로그인 전에도 연다 — 코드를 들고 로그인·가입으로 보낸다. */}
       <Stack.Screen name="join" options={{ title: '초대 코드로 참여' }} />
+      {/* 실행 기록(학교 과제용, 사용자가 동의했을 때만) 설정 — 첫 화면인 서버 목록에서도 연다. */}
+      <Stack.Screen name="telemetry" options={{ title: '실행 기록' }} />
 
       {/* 로그인 전에만 */}
       <Stack.Protected guard={!user}>
@@ -91,8 +95,17 @@ function RootNavigator() {
   );
 }
 
+/** 실행 기록 동의 — 처음 실행할 때 한 번 묻는다. 시작 화면(토큰 확인) 위에는 띄우지 않는다. */
+function TelemetryConsentAfterLoading() {
+  const { loading } = useAuth();
+  return loading ? null : <TelemetryConsent />;
+}
+
 export default function RootLayout() {
   const { dark } = useTheme();
+
+  // 실행 기록 — 동의한 기기에서만 수집을 시작한다(동의 전에는 아무것도 기록하지 않는다). lib/telemetry.ts
+  useEffect(() => initTelemetry(), []);
 
   return (
     <SafeAreaProvider>
@@ -104,6 +117,7 @@ export default function RootLayout() {
           <TransferHost>
             <ToastHost />
           </TransferHost>
+          <TelemetryConsentAfterLoading />
         </View>
       </AuthProvider>
     </SafeAreaProvider>

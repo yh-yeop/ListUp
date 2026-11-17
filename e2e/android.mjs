@@ -357,6 +357,10 @@ try {
   await tap((n) => /packageinstaller/.test(n.pkg) && /^(Open|열기)$/i.test(n.text), { timeout: 30_000, label: '설치 완료 화면의 열기' });
   t.ok('설치가 끝나면 열기로 새 버전이 뜬다');
 
+  // 첫 실행 — 실행 기록 동의 창(pm clear 로 비웠으므로 늘 뜬다). 거부해도 앱은 그대로 동작해야 한다.
+  await tap('기록하지 않기', { timeout: 60_000, label: '실행 기록 동의 창의 「기록하지 않기」' });
+  t.ok('실행 기록 동의 창 — 거부하고 넘어간다');
+
   say('\n● 버전·서버·아이디 가입');
   await waitFor(`ListUp 안드로이드 앱 v${VERSION} · AGPL-3.0`, { timeout: 60_000 });
   t.ok(`서버 목록에 안드로이드 앱 버전 (v${VERSION})`);

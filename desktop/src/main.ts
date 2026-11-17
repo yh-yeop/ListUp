@@ -27,6 +27,7 @@ import { credentialsAvailable, getCredential, removeCredential, setCredential } 
 import { Host, serverLogFile } from './host.ts';
 import { IPC } from './protocol.ts';
 import { readSettings, writeSettings } from './settings.ts';
+import { registerTelemetryIpc } from './telemetry.ts';
 import { inspectTools } from './tunnel.ts';
 import { Updater } from './updater.ts';
 
@@ -282,6 +283,8 @@ function registerIpc(): void {
     readChunk(root, relativePath, offset, length),
   );
   ipcMain.handle(IPC.foldersSave, (_e, root: string, relativePath: string, url: string) => saveUrl(root, relativePath, url));
+
+  registerTelemetryIpc(ipcMain, () => BrowserWindow.getFocusedWindow() ?? win);
 }
 
 app.on('second-instance', (_event, argv) => showWindow(appUrlFromDeepLink(argv)));

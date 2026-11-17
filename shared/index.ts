@@ -715,6 +715,60 @@ export interface DesktopUpdates {
   install(): Promise<void>;
 }
 
+/**
+ * 실행 기록(텔레메트리) 파일 — 앱 데이터 폴더 안에 이 이름으로만 둔다. 전송은 하지 않는다.
+ *   telemetry.csv           실행 1회 = 1행 (TELEMETRY_COLUMNS)
+ *   telemetry-errors.csv    session_id,error_type,count — 에러 종류(예외 클래스 이름)별 개수. 메시지 원문은 없다
+ *   telemetry-pending.json  실행 중 30초마다 덮어쓰는 임시 기록. 정상 종료하면 지운다
+ */
+export type TelemetryFileName = 'telemetry.csv' | 'telemetry-errors.csv' | 'telemetry-pending.json';
+
+/** 종료 직전에 한꺼번에 붙일 내용 — 파일이 없거나 비어 있으면 header 를 먼저 쓴다. */
+export interface TelemetryAppend {
+  name: TelemetryFileName;
+  /** 끝에 줄바꿈이 붙은 CSV 줄들. */
+  text: string;
+  header: string;
+}
+
+/** PC 의 넓은 사양 — 기기 분류(device_class)·os 열에만 쓴다. 모델명·하드웨어 ID 는 없다. */
+export interface DesktopSystemInfo {
+  /** 논리 코어 수. */
+  cores: number;
+  /** 총 RAM(MB). */
+  totalRamMb: number;
+  /** OS 종류와 메이저 버전만 — "Windows 11", "macOS 15", "Linux 6". */
+  os: string;
+}
+
+/**
+ * PC 앱의 실행 기록 저장소 (1.11 부터). 파일은 main 이 앱 데이터 폴더(userData)에 비동기로 쓴다 —
+ * 창(메인 스레드)은 I/O 를 기다리지 않는다. 종료 직전의 finishSync 만 동기다.
+ */
+export interface DesktopTelemetry {
+  systemInfo(): Promise<DesktopSystemInfo>;
+  /** 이 프로그램(main·창·GPU 등 모든 Electron 프로세스)의 지금 메모리(working set) 합, MB. */
+  memoryMb(): Promise<number>;
+  /** 없으면 null. */
+  read(name: TelemetryFileName): Promise<string | null>;
+  /** 통째로 바꿔 쓴다(임시 파일 → 이름 바꾸기). */
+  write(name: TelemetryFileName, text: string): Promise<void>;
+  /** 끝에 붙인다. 파일이 없거나 비어 있으면 header 를 먼저 쓴다. */
+  append(name: TelemetryFileName, text: string, header: string): Promise<void>;
+  /** 없어도 오류가 아니다. */
+  remove(name: TelemetryFileName): Promise<void>;
+  /** 창이 닫히기 직전 — 동기(sendSync)로 appends 를 붙이고 telemetry-pending.json 을 지운다. */
+  finishSync(appends: TelemetryAppend[]): void;
+  /** 기록 파일이 있는 폴더(앱 데이터 폴더)의 경로 — 화면에 보여 주기만 한다. */
+  folder(): Promise<string>;
+  /** 저장 대화상자로 telemetry.csv(와 telemetry-errors.csv)를 복사한다. 취소하거나 기록이 없으면 null, 저장했으면 그 csv 경로. */
+  exportFiles(): Promise<string | null>;
+  /** 기록 파일이 있는 폴더를 파일 탐색기로 연다. */
+  openFolder(): Promise<void>;
+  /** 디버그: 정리 없이 프로그램을 바로 끝낸다(강제 종료 흉내 — 다음 실행에서 crashed=1). */
+  debugCrash(): void;
+}
+
 export interface DesktopBridge {
   /** PC 앱 버전. */
   version: string;
@@ -723,4 +777,6 @@ export interface DesktopBridge {
   folders: DesktopFolders;
   /** 1.7.0 부터. */
   updates?: DesktopUpdates;
+  /** 1.11.0 부터 — 실행 기록 저장소. */
+  telemetry?: DesktopTelemetry;
 }
