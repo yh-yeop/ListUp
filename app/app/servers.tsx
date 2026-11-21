@@ -10,6 +10,7 @@ import {
   Card,
   EmptyState,
   ErrorNotice,
+  HelpLink,
   IconButton,
   Row,
   Screen,
@@ -79,7 +80,8 @@ export default function ServersScreen() {
         <EmptyState
           icon="server-outline"
           title="아직 기억하는 서버가 없습니다"
-          description="서버 추가로 들어갈 ListUp 서버의 주소를 넣으세요. 주소는 초대 코드를 준 사람에게 받습니다."
+          description="서버 추가로 들어갈 ListUp 서버의 주소를 넣으세요. 주소는 초대 코드를 준 사람에게 받습니다. 초대 링크를 받았다면 그 링크를 열면 서버가 저절로 더해집니다."
+          action={<HelpLink label="서버·초대가 뭔가요? 사용법 보기" />}
         />
       ) : (
         <View style={{ gap: spacing.md }}>
