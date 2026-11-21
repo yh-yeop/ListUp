@@ -373,4 +373,20 @@ export const MIGRATIONS: {
       CREATE INDEX idx_repo_events_repo ON repo_events(repo_id, seq DESC);
     `,
   },
+  {
+    // 복구 코드. 재설정 코드는 운영자만 발급해서, 운영자와 연락이 안 되면 비밀번호를 잊은 사람이 못 들어왔다.
+    // 본인이 미리 만들어 둔 코드로 스스로 재설정한다(services/recovery-codes.ts). 원문은 만들 때 한 번만 보여주고
+    // SHA-256 만 둔다. 코드가 길어(≈79비트) 해시로 바로 찾을 수 있어야 아이디 없이 재설정(아이디 찾기)이 되므로 UNIQUE.
+    version: 10,
+    up: `
+      CREATE TABLE recovery_codes (
+        id         TEXT PRIMARY KEY,
+        user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        code_hash  TEXT NOT NULL UNIQUE,
+        used_at    INTEGER,
+        created_at INTEGER NOT NULL
+      );
+      CREATE INDEX idx_recovery_codes_user ON recovery_codes(user_id);
+    `,
+  },
 ];

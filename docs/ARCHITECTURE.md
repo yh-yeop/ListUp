@@ -25,7 +25,8 @@ users ──┬─< repo_members >─┬── repos ──┬─< repo_files >�
         │                  ├── upload_sessions (나눠 올리기 중)
         │                  └── proposals ──< proposal_changes
         ├─────────────────────< proposal_comments
-        └─< password_resets (운영자가 발급한 재설정 코드, 해시만)
+        ├─< password_resets (운영자가 발급한 재설정 코드, 해시만)
+        └─< recovery_codes (본인이 미리 만든 복구 코드, 해시만 — 아이디 없이 찾도록 UNIQUE)
 ```
 
 ### 스냅샷 = 바뀐 것만 기록
@@ -191,6 +192,7 @@ UPDATE invites SET use_count = use_count + 1
 | 약하거나 깨진 서명 키 | `LISTUP_AUTH_SECRET` 은 32자 이상(빈 값 거부, `config.ts`). `npm run serve`·PC 앱은 데이터 폴더의 `auth-secret.txt` 를 `server/src/lib/secret.ts` `ensureAuthSecret` 하나로 — 없으면 randomBytes(32) hex 를 원자적으로(0600) 만들고, 있는데 64자 16진수가 아니면 새로 만들지 않고 멈춘다(새 키는 전원 로그아웃) |
 | 비밀번호 대입 | 로그인 실패를 아이디·IP 기준으로 세어 한도를 넘으면 일정 시간 차단 (`lib/rate-limit.ts`) |
 | 유출된 토큰 | 사용자마다 토큰 세대(`users.token_epoch`)를 두고 토큰에 실어, 비밀번호를 바꾸거나 "다른 기기 모두 로그아웃"을 하면 세대를 올려 이전 토큰을 한 번에 끊는다 |
+| 비밀번호를 잊은 사람이 운영자 없이 못 들어옴 | 본인이 미리 만든 복구 코드(16자, ≈79비트, 한 번씩)로 `/auth/reset`. 해시만 저장, 만들 때 현재 비밀번호 재확인, 틀린 시도는 로그인 제한과 같이 셈, 성공하면 토큰 세대 올림. 남의 아이디 + 내 코드는 거절하고 코드도 쓰지 않는다 |
 | 로그아웃 뒤에도 살아 있는 토큰 | 토큰을 저장하지 않으므로 앱이 지우기만 하면 복사본이 만료(기본 30일)까지 통했다. `/auth/logout` 이 그 토큰의 SHA-256 을 만료 시각까지 `revoked_tokens` 에 적고 인증 훅이 거른다. 만료가 지나면 GC 가 지운다 |
 | 몰래 들어온 멤버 | 멤버 참여·내보내기·역할 변경·소유권 이전, 초대 발급·회수를 `repo_events` 에 같은 트랜잭션으로 남기고 소유자에게 보인다(`services/events.ts`) |
 | 계정 존재 여부 노출 | 로그인 실패 메시지를 하나로 통일하고, 없는 계정도 더미 해시를 검증해 응답 시간을 맞춤 |

@@ -17,6 +17,12 @@ import { RateLimiter } from '../lib/rate-limit.ts';
 import { newId } from '../lib/ids.ts';
 import { body, requireUser, requiredString } from '../lib/request.ts';
 import { consumeResetCode } from '../services/password-reset.ts';
+import {
+  consumeRecoveryCode,
+  issueRecoveryCodes,
+  looksLikeRecoveryCode,
+  recoveryCodesStatus,
+} from '../services/recovery-codes.ts';
 
 interface UserRow {
   id: string;
@@ -131,41 +137,87 @@ export async function registerAuthRoutes(app: FastifyInstance, ctx: AppContext):
   });
 
   /**
-   * 재설정 코드로 새 비밀번호 — 서버 운영자가 발급한 코드(npm run reset-password)를 쓴다.
+   * 코드로 새 비밀번호 — 두 가지 코드를 받는다.
+   * - 운영자 재설정 코드(`ABCDE-12345`, npm run reset-password·PC 앱이 발급, 30분): 아이디와 함께.
+   * - 본인 복구 코드(`ABCD-EFGH-JKMN-PQRS`, 「내 정보」에서 미리 만든 것, API_LEVEL 7): 아이디 없이도 된다 —
+   *   코드가 그 사람을 가리키므로 아이디를 잊었을 때도 쓴다(응답의 user.email 이 아이디). 아이디를 함께 주면
+   *   그 사람의 코드일 때만 된다.
    * 성공하면 토큰 세대를 올려 다른 기기의 로그인을 끊고, 이 기기는 바로 로그인된다.
-   * 틀린 시도는 로그인과 같은 제한으로 센다(코드 대입 방지).
+   * 틀린 시도는 로그인과 같은 제한으로 센다(코드 대입 방지). 어떤 경우든 실패 문구는 같다.
    */
   app.post('/auth/reset', async (req) => {
     const input = body(req);
     const email = normalizeLoginId(input.username ?? input.email);
     const code = typeof input.code === 'string' ? input.code : '';
-    const fail = () => badRequest('재설정 코드가 올바르지 않거나 만료됐습니다. 서버 운영자에게 다시 받아 주세요.');
+    const recovery = looksLikeRecoveryCode(code);
+    const fail = () =>
+      badRequest(
+        recovery
+          ? '복구 코드가 올바르지 않거나 이미 쓴 코드입니다. 다른 복구 코드를 넣거나 서버 운영자에게 재설정 코드를 받아 주세요.'
+          : '재설정 코드가 올바르지 않거나 만료됐습니다. 서버 운영자에게 다시 받아 주세요.',
+      );
 
     const keys = [`ip:${clientIp(req)}`, ...(email ? [`email:${email}`] : [])];
     assertLoginAllowed(keys);
     const next = validatePassword(input.newPassword);
     if (!next) throw badRequest(`비밀번호는 ${MIN_PASSWORD_LENGTH}자 이상이어야 합니다.`);
+    // 운영자 코드는 누구 것인지 아이디로만 안다. 모양 검사라 실패로 세지 않는다.
+    if (!recovery && !email) throw badRequest('서버 운영자에게 받은 재설정 코드는 아이디와 함께 넣어 주세요.');
 
     const row = email ? db.prepare<[string], UserRow>(`SELECT * FROM users WHERE email = ?`).get(email) : undefined;
     const nextHash = await hashPassword(next);
-    const ok =
-      row !== undefined &&
-      db.transaction(() => {
-        if (!consumeResetCode(db, row.id, code)) return false;
-        db.prepare(`UPDATE users SET password_hash = ?, token_epoch = token_epoch + 1 WHERE id = ?`).run(nextHash, row.id);
-        return true;
-      })();
-    if (!ok) {
+    const userId = db.transaction((): string | null => {
+      let id: string | null;
+      if (recovery) {
+        // 아이디를 줬는데 없는 계정이면 어떤 코드든 실패 — 남의 코드로 들어가지 않게.
+        if (email && !row) return null;
+        id = consumeRecoveryCode(db, code, row?.id);
+      } else {
+        id = row && consumeResetCode(db, row.id, code) ? row.id : null;
+      }
+      if (!id) return null;
+      db.prepare(`UPDATE users SET password_hash = ?, token_epoch = token_epoch + 1 WHERE id = ?`).run(nextHash, id);
+      return id;
+    })();
+    if (!userId) {
       for (const key of keys) loginLimiter.fail(key);
       throw fail();
     }
     for (const key of keys) loginLimiter.succeed(key);
 
-    const updated = db.prepare<[string], UserRow>(`SELECT * FROM users WHERE id = ?`).get(row.id)!;
+    const updated = db.prepare<[string], UserRow>(`SELECT * FROM users WHERE id = ?`).get(userId)!;
     return {
       token: issueToken(updated.id, config.authSecret, config.tokenTtlMs, updated.token_epoch),
       user: toUser(updated),
+      ...(recovery ? { recoveryCodesLeft: recoveryCodesStatus(db, updated.id).remaining } : {}),
     };
+  });
+
+  /** 복구 코드가 남았는지 — 원문은 다시 보여주지 않는다 (API_LEVEL 7). */
+  app.get('/auth/recovery-codes', async (req) => {
+    const user = requireUser(req);
+    return recoveryCodesStatus(db, user.id);
+  });
+
+  /**
+   * 복구 코드를 새로 만든다 — 현재 비밀번호를 다시 확인한다(잠깐 비운 기기에서 남이 만들어 가지 못하게).
+   * 이전 묶음은 모두 못 쓰게 된다. 틀린 비밀번호는 로그인과 같은 제한으로 센다 — 훔친 토큰으로 비밀번호를
+   * 맞혀 보는 창구가 되지 않게. 원문은 이 응답에만 있다.
+   */
+  app.post('/auth/recovery-codes', async (req, reply) => {
+    const user = requireUser(req);
+    const input = body(req);
+    const current = typeof input.currentPassword === 'string' ? input.currentPassword : '';
+    const row = db.prepare<[string], UserRow>(`SELECT * FROM users WHERE id = ?`).get(user.id)!;
+    const keys = [`ip:${clientIp(req)}`, `email:${row.email}`];
+    assertLoginAllowed(keys);
+    // 401 은 앱이 로그아웃으로 해석하므로 /auth/password 처럼 400.
+    if (!(await verifyPassword(current, row.password_hash))) {
+      for (const key of keys) loginLimiter.fail(key);
+      throw badRequest('현재 비밀번호가 올바르지 않습니다.');
+    }
+    for (const key of keys) loginLimiter.succeed(key);
+    return reply.code(201).send(issueRecoveryCodes(db, user.id));
   });
 
   app.get('/auth/me', async (req) => {

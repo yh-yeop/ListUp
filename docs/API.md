@@ -77,7 +77,9 @@ Authorization: Bearer <token>
 | GET | `/auth/me` | 현재 사용자 |
 | PATCH | `/auth/me` | `{displayName}` |
 | POST | `/auth/password` | `{currentPassword, newPassword}` |
-| POST | `/auth/reset` | `{email, code, newPassword}` → `{token, user}` — 로그인 없이 |
+| POST | `/auth/reset` | `{email, code, newPassword}` → `{token, user, recoveryCodesLeft?}` — 로그인 없이. 복구 코드면 `email` 없이도(**수준 7**) |
+| GET | `/auth/recovery-codes` | 내 복구 코드 상태 `{remaining, total, createdAt}` — 원문은 주지 않는다. **수준 7** |
+| POST | `/auth/recovery-codes` | `{currentPassword}` → `{codes, createdAt}` (201). 새 묶음 10개, 이전 것은 모두 무효. **수준 7** |
 | POST | `/auth/logout` | 이 요청에 쓴 토큰을 끊는다 → `{ok}`. **수준 5** |
 | POST | `/auth/logout-others` | 다른 기기 모두 로그아웃 → `{token}`(이 기기가 이어 쓸 새 토큰). **수준 5** |
 
@@ -126,6 +128,19 @@ npm run reset-password -- hong     # 아이디. 서버가 켜져 있어도 됩�
 - 성공하면 비밀번호를 바꾸고 토큰 세대를 올려 **다른 기기의 로그인을 모두 끊고**, 이 요청에는 새
   `token` 을 줍니다(바로 로그인).
 - 틀린 코드·없는 계정·만료는 모두 같은 `400` 입니다. 실패는 로그인과 **같은 제한**으로 세어 `429` 로 막습니다.
+
+### 복구 코드 (`/auth/recovery-codes`, 수준 7)
+
+운영자와 연락이 안 되면 비밀번호를 잊은 사람이 들어올 길이 없어, **본인이 미리** 만들어 두는 코드를 더했습니다.
+
+- 「내 정보」에서 현재 비밀번호를 다시 넣고 만듭니다(`POST`). 한 번에 10개, 모양은 `ABCD-EFGH-JKMN-PQRS`(초대 코드 알파벳
+  16자, 약 79비트 — 만료가 없어 운영자 코드보다 깁니다). 원문은 이 응답에만 있고 DB(`recovery_codes`)에는 SHA-256 만 둡니다.
+  다시 만들면 이전 묶음은 모두 지웁니다. 비밀번호가 틀리면 `400`(`401` 이 아님)이고, 로그인과 같은 제한으로 셉니다 —
+  훔친 토큰으로 비밀번호를 맞혀 보는 창구가 되지 않게.
+- `/auth/reset` 의 `code` 에 복구 코드를 넣으면 됩니다(하이픈·공백·소문자 무관). 코드가 한 사람을 가리키므로 **`email` 없이도**
+  되고(아이디 찾기 — 응답의 `user.email` 이 아이디), `email` 을 함께 주면 그 사람의 코드일 때만 됩니다(남의 코드면 `400`, 코드는
+  쓰이지 않음). 각 코드는 한 번만, 성공하면 운영자 코드와 같이 토큰 세대를 올리고 응답에 남은 수(`recoveryCodesLeft`)를 줍니다.
+- 운영자 코드(10자)를 `email` 없이 보내면 `400` "아이디와 함께" — 모양 검사라 실패로 세지 않습니다.
 
 ---
 

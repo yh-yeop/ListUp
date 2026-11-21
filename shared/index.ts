@@ -442,6 +442,63 @@ export function parseInviteCode(input: string): string | null {
 }
 
 // ---------------------------------------------------------------------------
+// 복구 코드 (API_LEVEL 7)
+// ---------------------------------------------------------------------------
+
+/**
+ * 복구 코드 — 본인이 미리 만들어 두고, 비밀번호를 잊으면 운영자 없이 새 비밀번호를 정하는 데 쓴다.
+ * 초대 코드와 같은 알파벳이지만 만료가 없어 더 길다(31자 × 16 ≈ 79비트). 표시는 `ABCD-EFGH-JKMN-PQRS`.
+ */
+export const RECOVERY_CODE_LENGTH = 16;
+export const RECOVERY_GROUP_SIZE = 4;
+/** 한 번에 만드는 복구 코드 수. 다시 만들면 이전 것은 모두 못 쓴다. */
+export const RECOVERY_CODE_COUNT = 10;
+
+export function formatRecoveryCode(code: string): string {
+  const clean = code.toUpperCase();
+  const groups: string[] = [];
+  for (let i = 0; i < clean.length; i += RECOVERY_GROUP_SIZE) {
+    groups.push(clean.slice(i, i + RECOVERY_GROUP_SIZE));
+  }
+  return groups.join('-');
+}
+
+/** 사용자가 입력한 복구 코드를 표준형으로. 하이픈·공백·소문자를 섞어도 된다. 모양이 아니면 null. */
+export function parseRecoveryCode(input: string): string | null {
+  if (typeof input !== 'string') return null;
+  const clean = input.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (clean.length !== RECOVERY_CODE_LENGTH) return null;
+  for (const ch of clean) {
+    if (!INVITE_ALPHABET.includes(ch)) return null;
+  }
+  return clean;
+}
+
+/** GET /auth/recovery-codes — 원문은 다시 보여주지 않고 남은 수만. */
+export interface RecoveryCodesStatus {
+  /** 아직 쓰지 않은 코드 수. 만든 적이 없으면 0. */
+  remaining: number;
+  /** 마지막으로 만든 묶음의 코드 수(쓴 것 포함). 만든 적이 없으면 0. */
+  total: number;
+  /** 마지막으로 만든 시각. 만든 적이 없으면 null. */
+  createdAt: number | null;
+}
+
+/** POST /auth/recovery-codes — 새로 만든 코드 원문. 이 응답에서 한 번만 볼 수 있다. */
+export interface RecoveryCodesIssued {
+  codes: string[];
+  createdAt: number;
+}
+
+/** POST /auth/reset 응답. */
+export interface ResetPasswordResponse {
+  token: string;
+  user: User;
+  /** 복구 코드로 재설정했을 때 남은 복구 코드 수. 운영자 코드였으면 없다. API_LEVEL 7. */
+  recoveryCodesLeft?: number;
+}
+
+// ---------------------------------------------------------------------------
 // 업로드 제한
 // ---------------------------------------------------------------------------
 
@@ -506,11 +563,13 @@ export const API_VERSION = 1;
  *   없는 서버에서는 앱이 그 버튼·화면만 숨기고, 로그아웃은 예전처럼 기기에서만 지운다.
  * - 6 (1.10.0): health 의 `maxRepoBytes`(저장소 용량 한도), 나눠 올리기 complete 멱등(같은 사용자가 10분 안에
  *   다시 부르면 같은 blob 201), 조각별 해시 이어 계산. 없는 서버에서는 앱이 용량 사전 검사만 건너뛴다.
+ * - 7: 복구 코드(`/auth/recovery-codes`) — 본인이 미리 만들어 둔 코드로 `/auth/reset` 을 운영자 없이, 아이디 없이도.
+ *   없는 서버(404)에서는 앱이 복구 코드 카드에 "서버 업데이트 필요"를 보이고, 재설정은 운영자 코드로만 된다.
  *
  * API_VERSION 을 올리지 않은 이유: 옛 앱(1.1.0)은 API_VERSION 이 같아야만 들어가서, 올리면 멀쩡히
  * 쓸 수 있는 새 서버에서 옛 앱이 모두 막힌다.
  */
-export const API_LEVEL = 6;
+export const API_LEVEL = 7;
 
 /** 이 앱이 쓰는 기능이 있는 가장 낮은 서버 API_LEVEL. 앱의 업로드·내려받기가 수준 2 를 쓴다. */
 export const REQUIRED_SERVER_API_LEVEL = 2;
