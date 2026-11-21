@@ -196,6 +196,22 @@ describe('여러 파일 커밋', () => {
     assert.equal((await commit(owner, [{ path: 'x.txt', blobHash: null, expect: 'nothex' }])).statusCode, 400);
   });
 
+  it('파일이 많은 폴더도 커밋 하나로 지운다 — JSON 본문 1MB 한도에 걸리지 않는다', async () => {
+    // 앱은 폴더 지우기를 "안의 파일을 읽은 내용대로만 지우는 커밋"(expect)으로 한다(되돌리기용). 경로가 긴 파일 수천 개면
+    // 본문이 1MB 를 넘어, DELETE 로는 되던 폴더 지우기가 413 으로 막혔다 (2026-11-21 검토).
+    const big = await createRepo(h.app, owner, '큰 폴더');
+    const hash = await uploadBlob(h.app, owner, big, 'x.txt', '같은 내용');
+    const longName = '아주긴한글파일이름'.repeat(10);
+    const paths = Array.from({ length: 3000 }, (_, i) => `큰폴더/${longName}-${i}.txt`);
+    const add = await commit(owner, paths.map((path) => ({ path, blobHash: hash })), big);
+    assert.equal(add.statusCode, 201, add.body.slice(0, 200));
+    const removal = paths.map((path) => ({ path, blobHash: null, expect: hash }));
+    assert.ok(Buffer.byteLength(JSON.stringify({ changes: removal })) > 1024 * 1024, '시험 본문이 1MB 를 넘어야 한다');
+    const del = await commit(owner, removal, big);
+    assert.equal(del.statusCode, 201, del.body.slice(0, 200));
+    assert.equal((del.json() as { deleted: number }).deleted, 3000);
+  });
+
   it('열람 권한으로는 커밋할 수 없다', async () => {
     const hash = await uploadBlob(h.app, viewer, repoId, 'v.txt', 'v');
     assert.equal((await commit(viewer, [{ path: 'v.txt', blobHash: hash }])).statusCode, 403);

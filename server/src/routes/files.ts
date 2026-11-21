@@ -3,6 +3,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import {
   MAX_FILES_PER_REPO,
   MAX_NAME_LENGTH,
+  MAX_PATH_LENGTH,
   baseName,
   normalizeDirPath,
   normalizePath,
@@ -45,6 +46,13 @@ export function assertNoPathConflict(manifest: Map<string, EntryRow>, filePath: 
       : `상위 경로에 파일이 있습니다: ${clash}`,
   );
 }
+
+/**
+ * 여러 파일 커밋의 JSON 본문 한도 — 서버 전체 기본(1MB, app.ts)으로는 경로가 긴 파일 수천 개를 한 번에 못 담는다.
+ * 앱의 폴더 지우기·되돌리기·폴더 올리기가 변경 수천 개를 커밋 하나로 보낸다. 변경 수 상한(MAX_FILES_PER_REPO)과 경로 길이
+ * 상한(한글이면 글자당 3바이트) + 해시 두 개·키 이름만큼으로 잡는다(≈ 9MB).
+ */
+const COMMIT_BODY_LIMIT = MAX_FILES_PER_REPO * (MAX_PATH_LENGTH * 3 + 256);
 
 /** 저장소 총 용량이 한도를 넘으면 413. 업로드·제안 생성·병합이 같은 메시지를 쓴다. */
 export function assertRepoBytes(config: Config, totalBytes: number): void {
@@ -182,7 +190,7 @@ export async function registerFileRoutes(app: FastifyInstance, ctx: AppContext):
    * 폴더를 올릴 때 파일마다 스냅샷이 생기지 않게 한다. blobHash 가 null 이면 삭제.
    * 내용이 같은 파일은 건너뛰고, 바뀐 것이 하나도 없으면 스냅샷을 만들지 않는다.
    */
-  app.post('/repos/:repoId/files/commit', async (req, reply) => {
+  app.post('/repos/:repoId/files/commit', { bodyLimit: COMMIT_BODY_LIMIT }, async (req, reply) => {
     const user = requireUser(req);
     const { repoId } = req.params as { repoId: string };
     requireAccess(db, repoId, user.id, 'editor');
