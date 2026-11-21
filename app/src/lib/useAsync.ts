@@ -30,22 +30,33 @@ export function useAsync<T>(loader: () => Promise<T>, deps: unknown[]): AsyncSta
   // 실패했을 때 받아 둔 목록을 지킬지 보려고(run 은 한 번만 만든다).
   const shown = useRef({ hasData: false, showingError: false });
   shown.current = { hasData: data !== null, showingError: error !== null };
+  // deps 가 바뀐 횟수와, 지금 data 가 몇 번째 deps 로 받은 것인지 — 폴더를 옮긴 직후의 실패에 옛 폴더 목록을 지키지 않게.
+  const depsGen = useRef(0);
+  const dataGen = useRef(-1);
 
   const run = useCallback(async (mode: 'initial' | 'refresh') => {
     const id = ++requestId.current;
+    const gen = depsGen.current;
     if (mode === 'refresh') setRefreshing(true);
     else setLoading(true);
 
     try {
       const result = await loaderRef.current();
       if (id !== requestId.current) return;
+      dataGen.current = gen;
       setData(result);
       setError(null);
     } catch (err) {
       if (id !== requestId.current) return;
       const message = err instanceof ApiError ? err.message : '불러오지 못했습니다.';
       // 연결이 잠깐 끊겨 새로고침만 실패했으면 보던 목록을 지우지 않고 알리기만 한다(lib/pure/refresh-failure.ts).
-      if (keepDataOnRefreshFailure({ mode, ...shown.current, status: err instanceof ApiError ? err.status : undefined })) {
+      const keep = keepDataOnRefreshFailure({
+        mode,
+        ...shown.current,
+        dataForCurrentDeps: dataGen.current === depsGen.current,
+        status: err instanceof ApiError ? err.status : undefined,
+      });
+      if (keep) {
         notifyError('새로 고치지 못했습니다 — 보던 목록을 그대로 둡니다.', message);
         return;
       }
@@ -59,6 +70,7 @@ export function useAsync<T>(loader: () => Promise<T>, deps: unknown[]): AsyncSta
   }, []);
 
   useEffect(() => {
+    depsGen.current += 1;
     void run('initial');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, deps);

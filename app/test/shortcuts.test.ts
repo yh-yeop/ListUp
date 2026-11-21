@@ -17,6 +17,9 @@ describe('키보드 단축키', () => {
   it('한글 입력 상태의 R(ㄱ)도 새로고침 — 자판 위치로', () => {
     assert.equal(matchShortcut({ key: 'ㄱ', code: 'KeyR' }), 'refresh');
     assert.equal(matchShortcut({ key: 'ㄱ', code: 'KeyR', editing: true }), null);
+    // 드보락·콜맥은 KeyR 자리가 p — 영문 글자는 위치가 아니라 글자로 본다.
+    assert.equal(matchShortcut({ key: 'p', code: 'KeyR' }), null);
+    assert.equal(matchShortcut({ key: 'ㄲ', code: 'KeyR' }), 'refresh');
     assert.equal(matchShortcut({ key: 'ㅅ', code: 'KeyT' }), null);
   });
 
