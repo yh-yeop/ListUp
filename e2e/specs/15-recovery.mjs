@@ -99,6 +99,23 @@ export default async function run(t, env) {
   await page.getByText('기억나지 않으면 아래에서 찾을 수 있습니다', { exact: false }).waitFor();
   t.ok('로그인 실패(401) → 아이디 규칙과 되찾는 길 안내');
 
+  // 너무 많이 틀려 막힘(429) — 진짜로 막으면 같은 IP 의 다른 스펙까지 막히므로 응답만 흉내 낸다.
+  await page.route('**/api/auth/login', (route) =>
+    route.fulfill({
+      status: 429,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        error: { code: 'too_many_requests', message: '로그인 시도가 너무 많습니다. 3초 뒤에 다시 시도해 주세요.', details: { retryAfterSeconds: 3 } },
+      }),
+    }),
+  );
+  await page.getByRole('button', { name: '로그인', exact: true }).click();
+  await page.getByText('초 뒤에 다시 시도할 수 있습니다', { exact: false }).waitFor();
+  t.must(await page.getByRole('button', { name: '로그인', exact: true }).isDisabled(), '429 → 남은 초를 세며 로그인 버튼을 막는다');
+  await page.getByText('초 뒤에 다시 시도할 수 있습니다', { exact: false }).waitFor({ state: 'detached', timeout: 8000 });
+  t.must(!(await page.getByRole('button', { name: '로그인', exact: true }).isDisabled()), '시간이 지나면 다시 누를 수 있다');
+  await page.unroute('**/api/auth/login');
+
   // ── 도움말 ────────────────────────────────────────────────
   await page.getByRole('link', { name: '처음이세요? ListUp 사용법' }).click();
   await page.getByText('처음 시작하는 순서').waitFor();

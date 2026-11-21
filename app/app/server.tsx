@@ -11,6 +11,7 @@ import {
   Input,
   Row,
   Screen,
+  HelpLink,
   Subtitle,
   Title,
 } from '../src/components/ui';
@@ -169,6 +170,7 @@ export default function ServerFormScreen() {
               ? '목록에 보일 이름과 주소를 고칩니다.'
               : '들어갈 ListUp 서버의 주소를 넣습니다. 초대 코드를 준 사람에게 주소를 받으세요.'}
           </Subtitle>
+          {editing ? null : <HelpLink label="서버가 뭔가요? 사용법 보기" />}
         </View>
 
         <Card style={{ gap: spacing.lg }}>

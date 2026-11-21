@@ -37,6 +37,13 @@ export default function LoginScreen() {
   const [remember, setRemember] = useState(credentialsSupported);
   /** 아이디·비밀번호가 틀렸다(401) — 오류 아래에 되찾는 길을 바로 보인다. */
   const [wrongCredentials, setWrongCredentials] = useState(false);
+  /** 너무 많이 틀려 서버가 막았다(429) — 풀릴 때까지 남은 초를 세고 그동안 버튼을 막는다. */
+  const [lockedFor, setLockedFor] = useState(0);
+  useEffect(() => {
+    if (lockedFor <= 0) return;
+    const timer = setTimeout(() => setLockedFor((left) => Math.max(0, left - 1)), 1000);
+    return () => clearTimeout(timer);
+  }, [lockedFor]);
   // 401 로 로그인이 끊겨 여기로 왔으면 이유를 알린다. 화면을 떠나면 끝낸다(다른 서버의 로그인 화면에 남지 않게).
   const sessionEnded = useAccountNotice('session-ended');
   useEffect(() => () => clearAccountNotice('session-ended'), []);
@@ -64,7 +71,7 @@ export default function LoginScreen() {
   }, [activeId]);
 
   const submit = async () => {
-    if (busy) return;
+    if (busy || lockedFor > 0) return;
     setError(null);
     setWrongCredentials(false);
     setBusy(true);
@@ -75,6 +82,10 @@ export default function LoginScreen() {
     } catch (err) {
       setError(err instanceof ApiError ? err.message : '로그인에 실패했습니다.');
       setWrongCredentials(err instanceof ApiError && err.status === 401);
+      if (err instanceof ApiError && err.status === 429) {
+        const seconds = (err.details as { retryAfterSeconds?: unknown } | undefined)?.retryAfterSeconds;
+        setLockedFor(typeof seconds === 'number' && seconds > 0 ? Math.ceil(seconds) : 60);
+      }
     } finally {
       setBusy(false);
     }
@@ -146,7 +157,13 @@ export default function LoginScreen() {
               </Caption>
             ) : null}
 
-            <Button label="로그인" onPress={submit} loading={busy} full />
+            {lockedFor > 0 ? (
+              <Caption>
+                {lockedFor}초 뒤에 다시 시도할 수 있습니다. 같은 곳에서 여러 번 틀리면 계정을 지키려고 잠시 막습니다(재설정 코드
+                입력도 같이 막힙니다).
+              </Caption>
+            ) : null}
+            <Button label="로그인" onPress={submit} loading={busy} disabled={lockedFor > 0} full />
 
             <View style={{ flexDirection: 'row', justifyContent: 'center', flexWrap: 'wrap', gap: spacing.lg }}>
               <Pressable

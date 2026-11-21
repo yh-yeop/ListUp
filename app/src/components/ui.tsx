@@ -528,6 +528,16 @@ export function Notice({
   );
 }
 
+/** 사용법 화면으로 가는 작은 글자 링크 — 처음 보는 낱말(서버·초대 코드…)이 나오는 화면 아래에. */
+export function HelpLink({ label = '처음이세요? ListUp 사용법' }: { label?: string }) {
+  const { colors } = useTheme();
+  return (
+    <Pressable onPress={() => router.push('/help')} accessibilityRole="link" hitSlop={12} style={{ alignSelf: 'flex-start' }}>
+      <Text style={{ color: colors.accent, fontSize: fontSize.sm, fontWeight: '600' }}>{label}</Text>
+    </Pressable>
+  );
+}
+
 /** 목록 사이 구분선. */
 export function Divider() {
   const { colors } = useTheme();

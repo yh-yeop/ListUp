@@ -17,6 +17,7 @@ import {
   Field,
   Input,
   Screen,
+  HelpLink,
   Subtitle,
   Title,
 } from '../src/components/ui';
@@ -193,8 +194,10 @@ export default function JoinScreen() {
       <View style={{ gap: spacing.sm }}>
         <Title>초대 코드로 참여</Title>
         <Subtitle>
-          받은 코드를 입력하면 어떤 저장소인지 먼저 확인한 뒤 참여할 수 있습니다.
+          받은 코드를 입력하면 어떤 저장소인지 먼저 확인한 뒤 참여할 수 있습니다. 코드는 저장소 소유자가 「초대」에서 만들어
+          건네줍니다.
         </Subtitle>
+        <HelpLink label="초대 코드·권한이 뭔가요? 사용법 보기" />
       </View>
 
       <Card style={{ gap: spacing.lg }}>

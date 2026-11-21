@@ -118,15 +118,26 @@ export default function ReposScreen() {
       <Stack.Screen
         options={{
           headerRight: () => (
-            <Pressable
-              onPress={() => router.push('/settings')}
-              accessibilityRole="button"
-              accessibilityLabel="내 정보"
-              hitSlop={12}
-              style={{ paddingHorizontal: spacing.md }}
-            >
-              <Ionicons name="person-circle-outline" size={24} color={colors.textMuted} />
-            </Pressable>
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <Pressable
+                onPress={() => router.push('/help')}
+                accessibilityRole="button"
+                accessibilityLabel="사용법 열기"
+                hitSlop={12}
+                style={{ paddingHorizontal: spacing.sm }}
+              >
+                <Ionicons name="help-circle-outline" size={24} color={colors.textMuted} />
+              </Pressable>
+              <Pressable
+                onPress={() => router.push('/settings')}
+                accessibilityRole="button"
+                accessibilityLabel="내 정보"
+                hitSlop={12}
+                style={{ paddingHorizontal: spacing.md }}
+              >
+                <Ionicons name="person-circle-outline" size={24} color={colors.textMuted} />
+              </Pressable>
+            </View>
           ),
         }}
       />
