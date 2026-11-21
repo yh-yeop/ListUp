@@ -108,6 +108,9 @@ export default async function run(t, env) {
   await page.keyboard.press('r');
   await page.getByText('새로 고치지 못했습니다 — 보던 목록을 그대로 둡니다.').waitFor();
   t.must(await page.getByRole('button', { name: 'a.txt 내려받기' }).first().isVisible(), '연결이 끊겨 새로고침이 실패해도 목록이 남는다');
+  const failedToast = page.getByRole('alert').filter({ hasText: '새로 고치지 못했습니다' });
+  await failedToast.getByRole('button', { name: '연결 문제 해결' }).waitFor();
+  t.ok('연결 실패 토스트에 「연결 문제 해결」 버튼');
   await page.unroute(listCall);
 
   // ── 여러 개 골라 지우기 ──────────────────────────────────
@@ -181,5 +184,15 @@ export default async function run(t, env) {
   await page.getByText('되돌렸습니다.').waitFor();
   const root = (await api(A, `/api/repos/${repo.id}/files?path=`, undefined, owner.token)).json.tree.files.map((f) => f.name);
   t.must(root.includes('b.txt'), '되돌리기 → 다시 맨 위에');
+
+  // 찾기 결과에서 「있는 폴더 열기」 → 그 폴더에서 찾은 파일 줄을 잠시 칠한다.
+  await page.getByLabel('파일 찾기').fill('안쪽');
+  await page.getByRole('button', { name: '안쪽.txt 이(가) 있는 폴더 열기' }).click();
+  await page.waitForURL((url) => url.searchParams.get('path') === '폴더');
+  const row = page.getByRole('button', { name: '안쪽.txt 내려받기' }).first();
+  await row.waitFor();
+  const paint = await row.evaluate((el) => getComputedStyle(el).backgroundColor);
+  const other = await page.getByRole('button', { name: 'b.txt 내려받기' }).first().evaluate((el) => getComputedStyle(el).backgroundColor);
+  t.must(paint !== other, `찾은 파일 줄을 칠해 보인다 (${paint} vs ${other})`);
   await ctx.close();
 }

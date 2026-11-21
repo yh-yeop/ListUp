@@ -55,6 +55,12 @@ import { TransferBusy, runTransfer, useTransfers } from '../../../src/lib/transf
 import { useAsync } from '../../../src/lib/useAsync';
 import { fontSize, monoFont, radius, spacing, useTheme } from '../../../src/theme';
 
+/** 웹에서 칠한 줄을 화면 가운데로 — 긴 폴더에서 찾은 파일이 아래에 묻히지 않게. 앱은 그대로 둔다. */
+function scrollIntoViewOnWeb(node: unknown) {
+  if (Platform.OS !== 'web' || !node) return;
+  (node as { scrollIntoView?: (options: object) => void }).scrollIntoView?.({ block: 'center' });
+}
+
 interface RepoView {
   repo: RepoSummary;
   tree: TreeListing;
@@ -102,6 +108,13 @@ export default function RepoFilesScreen() {
   const [bulkBusy, setBulkBusy] = useState(false);
   /** 고른 파일을 옮길 폴더 경로를 적는 중이면 그 값. 아니면 null. */
   const [moveTarget, setMoveTarget] = useState<string | null>(null);
+  /** 찾기 결과에서 폴더를 열었을 때 그 파일 — 폴더 안 여러 줄 중 어느 것인지 잠시 칠해 보인다. */
+  const [highlight, setHighlight] = useState<string | null>(null);
+  useEffect(() => {
+    if (!highlight) return;
+    const timer = setTimeout(() => setHighlight(null), 4000);
+    return () => clearTimeout(timer);
+  }, [highlight]);
 
   // 변경 이력에서 넘어온 과거 시점. 있으면 그 시점의 목록을 읽기 전용으로 보여준다.
   // 폴더 이동은 path 상태만 바꾸므로 snapshot 파라미터는 그대로 유지된다.
@@ -150,6 +163,7 @@ export default function RepoFilesScreen() {
   const canEdit = isEditor && !snapshotId;
 
   function openFolder(nextPath: string) {
+    setHighlight(null);
     setEditing(null);
     setMenuPath(null);
     setSelected(new Set());
@@ -751,9 +765,10 @@ export default function RepoFilesScreen() {
               headId={repo.headSnapshotId}
               busyPath={busyPath}
               onDownload={(filePath, name) => void download(filePath, name)}
-              onOpenFolder={(folder) => {
+              onOpenFolder={(folder, filePath) => {
                 setQuery('');
                 openFolder(folder);
+                setHighlight(filePath);
               }}
               onVersions={snapshotId ? undefined : openVersions}
             />
@@ -1054,8 +1069,14 @@ export default function RepoFilesScreen() {
                                 gap: spacing.md,
                                 paddingVertical: spacing.md,
                                 paddingHorizontal: spacing.lg,
-                                backgroundColor: pressed ? colors.surfaceAlt : 'transparent',
+                                backgroundColor: pressed
+                                  ? colors.surfaceAlt
+                                  : highlight === file.path
+                                    ? colors.accentSoft
+                                    : 'transparent',
                               })}
+                              // 찾기 결과에서 「있는 폴더 열기」로 왔으면 그 줄을 잠시 칠하고 화면 안으로(웹).
+                              ref={highlight === file.path ? scrollIntoViewOnWeb : undefined}
                             >
                               <Ionicons
                                 name={iconForMime(file.mimeType)}

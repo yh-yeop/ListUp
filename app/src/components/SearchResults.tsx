@@ -66,7 +66,8 @@ export function SearchResults({
   headId: string | null;
   busyPath: string | null;
   onDownload: (path: string, name: string) => void;
-  onOpenFolder: (folderPath: string) => void;
+  /** 그 파일이 있는 폴더를 연다 — 화면이 그 파일 줄을 잠시 칠할 수 있게 파일 경로도 준다. */
+  onOpenFolder: (folderPath: string, filePath: string) => void;
   /** 없으면 버전 버튼을 숨긴다(과거 시점 보기). */
   onVersions?: (path: string) => void;
 }) {
@@ -128,7 +129,7 @@ export function SearchResults({
                       <IconButton
                         icon="folder-open-outline"
                         label={`${file.name} 이(가) 있는 폴더 열기`}
-                        onPress={() => onOpenFolder(folder)}
+                        onPress={() => onOpenFolder(folder, file.path)}
                       />
                       {onVersions ? (
                         <IconButton icon="time-outline" label={`${file.name} 버전`} onPress={() => onVersions(file.path)} />

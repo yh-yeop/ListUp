@@ -85,7 +85,7 @@ function ToastItem({ toast }: { toast: Toast }) {
         // 버튼이 있으면 토스트 전체를 누르는 버튼으로 만들지 않는다 — 버튼 안에 버튼이 들어가면 스크린리더가 헷갈린다.
         <View
           accessibilityLiveRegion={live}
-          role="status"
+          role={toast.tone === 'error' ? 'alert' : 'status'}
           aria-live={live}
           style={[styles.toast, { backgroundColor: tone.bg, borderColor: tone.border, alignItems: 'center' }]}
         >

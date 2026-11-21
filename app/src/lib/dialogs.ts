@@ -1,4 +1,6 @@
+import { router } from 'expo-router';
 import { Alert, Platform } from 'react-native';
+import { isConnectionProblem } from './connection-error';
 import { showToast, type ToastAction, type ToastTone } from './toast';
 
 /**
@@ -54,7 +56,19 @@ export function notifySuccess(title: string, message?: string): void {
   notify(title, message, 'success');
 }
 
-/** 실패 안내 — 더 오래 남고 스크린리더가 바로 읽는다. */
+/**
+ * 실패 안내 — 더 오래 남고 스크린리더가 바로 읽는다. 서버에 닿지 못한 실패(client.ts 의 연결 오류 문장)면
+ * ErrorNotice 처럼 「연결 문제 해결」 버튼을 단다 — 받기·올리기·지우기 실패는 토스트로만 알려 갈 곳이 없었다.
+ */
 export function notifyError(title: string, message?: string): void {
+  if (isConnectionProblem(title) || (message !== undefined && isConnectionProblem(message))) {
+    showToast({
+      title: title || message!,
+      message: title ? message : undefined,
+      tone: 'error',
+      action: { label: '연결 문제 해결', onPress: () => router.push('/troubleshoot') },
+    });
+    return;
+  }
   notify(title, message, 'error');
 }
