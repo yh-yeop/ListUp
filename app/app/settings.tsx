@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { Pressable, View } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
 import {
   Body,
   Button,
@@ -26,7 +26,7 @@ import { chooseSaveFolder, getSaveFolder, saveFolderLabel, saveFolderSupported }
 import { useAuth } from '../src/state/auth';
 import { openServerList } from '../src/lib/server-list';
 import { serverTitle } from '../src/state/servers';
-import { spacing, useTheme } from '../src/theme';
+import { fontSize, spacing, useTheme } from '../src/theme';
 
 
 export default function SettingsScreen() {
@@ -171,6 +171,8 @@ export default function SettingsScreen() {
         <Subtitle>{user ? `아이디 ${user.email}` : ''}</Subtitle>
       </View>
 
+      <SectionLabel>계정</SectionLabel>
+
       <Card style={{ gap: spacing.lg }}>
         <Field label="이름" hint="저장소 멤버 목록과 변경 이력에 표시됩니다.">
           <Input value={displayName} onChangeText={setDisplayName} />
@@ -214,6 +216,8 @@ export default function SettingsScreen() {
         />
       </Card>
 
+      <SectionLabel>보안 · 복구</SectionLabel>
+
       <RecoveryCodesCard />
 
       <Card style={{ gap: spacing.md }}>
@@ -231,6 +235,8 @@ export default function SettingsScreen() {
           loading={signingOutOthers}
         />
       </Card>
+
+      <SectionLabel>이 기기 · 앱</SectionLabel>
 
       <Card style={{ gap: spacing.md }}>
         <Pressable
@@ -311,5 +317,15 @@ export default function SettingsScreen() {
         <Button label="로그아웃" variant="danger" icon="log-out-outline" onPress={signOut} loading={signingOut} full />
       </Card>
     </Screen>
+  );
+}
+
+/** 카드 묶음 위의 작은 제목 — 긴 설정 화면을 훑어보기 쉽게. */
+function SectionLabel({ children }: { children: string }) {
+  const { colors } = useTheme();
+  return (
+    <Text role="heading" style={{ color: colors.textMuted, fontSize: fontSize.sm, fontWeight: '700', marginBottom: -spacing.xs }}>
+      {children}
+    </Text>
   );
 }
