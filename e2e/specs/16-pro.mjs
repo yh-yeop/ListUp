@@ -1,6 +1,6 @@
 import { api } from '../lib.mjs';
 
-export const title = '익숙한 사람 — 정렬·폴더 주소·경로 복사·키보드 단축키·여러 개 지우기';
+export const title = '익숙한 사람 — 정렬·폴더 주소·경로 복사·키보드 단축키·여러 개 지우기·옮기기';
 
 export default async function run(t, env) {
   const { A } = env;
@@ -22,6 +22,7 @@ export default async function run(t, env) {
   await put('b.txt', 'x'.repeat(100));
   await put('c.txt', 'x');
   await put('폴더/안쪽.txt', '안');
+  await put('폴더/b.txt', '겹침');
 
   const ctx = await env.newContext();
   await ctx.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: A });
@@ -117,5 +118,24 @@ export default async function run(t, env) {
   const history = (await api(A, `/api/repos/${repo.id}/history`, undefined, owner.token)).json;
   const latest = (history.snapshots ?? history.history ?? [])[0];
   t.must(latest?.message === '파일 2개 삭제', `변경 이력에 커밋 하나로 (${latest?.message})`);
+
+  // ── 여러 개 골라 옮기기 ──────────────────────────────────
+  await put('d.txt', 'd');
+  await page.reload();
+  await page.getByRole('button', { name: '여러 개 고르기' }).click();
+  await page.getByRole('checkbox', { name: 'b.txt 고르기' }).click();
+  await page.getByRole('checkbox', { name: 'd.txt 고르기' }).click();
+  await page.getByRole('button', { name: '고른 파일 2개 옮기기' }).click();
+  await page.getByLabel('옮길 폴더').fill('폴더');
+  await page.getByRole('button', { name: '여기로 옮기기' }).click();
+  await page.getByText('같은 이름이 있어 옮기지 않았습니다', { exact: false }).waitFor();
+  t.must((await api(A, `/api/repos/${repo.id}/files?path=`, undefined, owner.token)).json.tree.files.length === 2, '옮길 폴더에 같은 이름(b.txt)이 있으면 아무것도 옮기지 않는다 (덮어쓰지 않음)');
+  await page.getByLabel('옮길 폴더').fill('보관/2026');
+  await page.getByRole('button', { name: '여기로 옮기기' }).click();
+  await page.getByText('2개를 보관/2026(으)로 옮겼습니다.').waitFor();
+  const moved = (await api(A, `/api/repos/${repo.id}/files?path=${encodeURIComponent('보관/2026')}`, undefined, owner.token)).json.tree.files;
+  t.must(moved.map((f) => f.name).sort().join(',') === 'b.txt,d.txt', '없는 폴더면 새로 만들어 옮긴다');
+  const afterMove = (await api(A, `/api/repos/${repo.id}/history`, undefined, owner.token)).json.snapshots[0];
+  t.must(afterMove.message === '파일 2개를 보관/2026(으)로 옮김', '이력에 한 번으로');
   await ctx.close();
 }

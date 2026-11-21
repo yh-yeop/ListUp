@@ -40,6 +40,7 @@ import { downloadFromRepo, pickFiles, pickFolder, type PickedFolder } from '../.
 import { listRepoFolder } from '../../../src/lib/folder-compare';
 import { localFolderSupported } from '../../../src/lib/local-folder';
 import { MAX_FAILURES_SHOWN, describeCommitFailure, describeUploadOutcome } from '../../../src/lib/pure/transfer-report';
+import { planBulkMove } from '../../../src/lib/pure/bulk-move';
 import { TRUNCATED_NOTE, checkUploadPlan, describeUploadCheck } from '../../../src/lib/pure/upload-check';
 import {
   CommitFailed,
@@ -99,6 +100,8 @@ export default function RepoFilesScreen() {
   const [selecting, setSelecting] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
+  /** 고른 파일을 옮길 폴더 경로를 적는 중이면 그 값. 아니면 null. */
+  const [moveTarget, setMoveTarget] = useState<string | null>(null);
 
   // 변경 이력에서 넘어온 과거 시점. 있으면 그 시점의 목록을 읽기 전용으로 보여준다.
   // 폴더 이동은 path 상태만 바꾸므로 snapshot 파라미터는 그대로 유지된다.
@@ -168,6 +171,7 @@ export default function RepoFilesScreen() {
       }
       case 'escape':
         if (editing) setEditing(null);
+        else if (moveTarget !== null) setMoveTarget(null);
         else if (selecting) stopSelecting();
         else if (menuPath) setMenuPath(null);
         else if (query) {
@@ -188,6 +192,7 @@ export default function RepoFilesScreen() {
   function stopSelecting() {
     setSelecting(false);
     setSelected(new Set());
+    setMoveTarget(null);
   }
 
   function toggleSelected(filePath: string) {
@@ -247,6 +252,51 @@ export default function RepoFilesScreen() {
       state.refresh();
     } catch (err) {
       notifyError(err instanceof ApiError ? err.message : '지우지 못했습니다.');
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
+  /**
+   * 고른 파일을 한 폴더로 — 커밋 하나에 "새 경로 = 같은 내용 + 옛 경로 삭제" 를 담는다(lib/pure/bulk-move.ts). 커밋은 있는
+   * 파일을 조용히 덮어쓰므로 옮길 폴더의 이름을 먼저 보고, 겹치면 아무것도 옮기지 않는다.
+   */
+  async function moveSelected() {
+    if (bulkBusy || moveTarget === null || chosen.length === 0) return;
+    const dest = moveTarget.trim() === '' ? '' : normalizePath(moveTarget);
+    if (dest === null) {
+      notifyError('폴더 경로가 올바르지 않습니다.', '빈 이름이나 . / .. 은 쓸 수 없습니다.');
+      return;
+    }
+    setBulkBusy(true);
+    try {
+      let taken: string[] = [];
+      try {
+        const { tree: there } = await api.listFiles(repoId, dest);
+        taken = [...there.dirs.map((dir) => dir.name), ...there.files.map((file) => file.name)];
+      } catch (err) {
+        // 아직 없는 폴더면 새로 생긴다.
+        if (!(err instanceof ApiError && err.status === 404)) throw err;
+      }
+      const plan = planBulkMove(chosen, dest, taken);
+      if (plan.clashes.length > 0) {
+        notifyError(
+          `${dest || '맨 위'} 에 같은 이름이 있어 옮기지 않았습니다.`,
+          `${plan.clashes.slice(0, MAX_FAILURES_SHOWN).join(', ')}${plan.clashes.length > MAX_FAILURES_SHOWN ? ` 외 ${plan.clashes.length - MAX_FAILURES_SHOWN}개` : ''}`,
+        );
+        return;
+      }
+      if (plan.changes.length === 0) {
+        notify('이미 그 폴더에 있습니다.');
+        return;
+      }
+      const moved = plan.changes.length / 2;
+      await api.commitFiles(repoId, plan.changes, `파일 ${moved}개를 ${dest || '맨 위'}(으)로 옮김`);
+      notify(`${moved}개를 ${dest || '맨 위'}(으)로 옮겼습니다.`);
+      stopSelecting();
+      state.refresh();
+    } catch (err) {
+      notifyError(err instanceof ApiError ? err.message : '옮기지 못했습니다.');
     } finally {
       setBulkBusy(false);
     }
@@ -719,6 +769,16 @@ export default function RepoFilesScreen() {
                     />
                     {canEdit ? (
                       <Button
+                        label={`고른 파일 ${chosen.length}개 옮기기`}
+                        icon="arrow-redo-outline"
+                        variant="secondary"
+                        compact
+                        onPress={() => setMoveTarget((prev) => (prev === null ? path : null))}
+                        disabled={chosen.length === 0 || bulkBusy}
+                      />
+                    ) : null}
+                    {canEdit ? (
+                      <Button
                         label={`고른 파일 ${chosen.length}개 지우기`}
                         icon="trash-outline"
                         variant="danger"
@@ -728,6 +788,32 @@ export default function RepoFilesScreen() {
                       />
                     ) : null}
                   </Row>
+                  {moveTarget !== null && canEdit ? (
+                    <View style={{ gap: spacing.sm }}>
+                      <Input
+                        value={moveTarget}
+                        onChangeText={setMoveTarget}
+                        autoFocus
+                        autoCapitalize="none"
+                        autoCorrect={false}
+                        placeholder="폴더 경로 (비우면 맨 위, 예: 보관/2024)"
+                        accessibilityLabel="옮길 폴더"
+                        onSubmitEditing={() => void moveSelected()}
+                        style={{ fontFamily: monoFont, fontSize: fontSize.sm }}
+                      />
+                      <Caption>없는 폴더면 새로 만들어집니다. 변경 이력에는 한 번으로 남습니다.</Caption>
+                      <Row gap={spacing.sm} style={{ justifyContent: 'flex-end' }}>
+                        <Button label="취소" variant="ghost" compact onPress={() => setMoveTarget(null)} disabled={bulkBusy} />
+                        <Button
+                          label="여기로 옮기기"
+                          compact
+                          onPress={() => void moveSelected()}
+                          loading={bulkBusy}
+                          disabled={chosen.length === 0}
+                        />
+                      </Row>
+                    </View>
+                  ) : null}
                 </View>
               ) : null}
 

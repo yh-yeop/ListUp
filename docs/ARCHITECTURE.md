@@ -261,6 +261,7 @@ app/
    │  ├─ server-store.ts      서버 목록 읽기·정리, 예전 저장 키 이전 규칙(storeFromLegacy) ← state/servers
    │  ├─ repo-search.ts       저장소 찾기(이름 일치 먼저, 5개부터 칸을 보임) ← search
    │  ├─ events.ts            활동 기록 한 줄을 문장으로(모르는 종류는 "알 수 없는 활동") ← repo/[repoId]/activity
+   │  ├─ bulk-move.ts         여러 파일 옮기기를 커밋 하나로(새 경로=같은 blobHash + 옛 경로 삭제), 옮길 폴더 이름 겹침이면 안 옮김 ← repo/[repoId]/index
    │  ├─ file-sort.ts         이름(ko Collator)·크기·최근 정렬, 같은 값은 이름순, 폴더는 크기·이름만 ← file-sort
    │  ├─ shortcuts.ts         키 → 동작(글 쓰는 칸에서는 Esc 만, Ctrl·⌘ 은 건드리지 않음), 도움말의 단축키 목록 ← shortcuts
    │  ├─ troubleshoot.ts      닿지 않은 이유·주소 모양(이 기기·공유기 안·빠른 터널·https 의 http)별 확인 목록 ← troubleshoot
