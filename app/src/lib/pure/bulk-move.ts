@@ -81,3 +81,16 @@ export const EXPECT_API_LEVEL = 7;
 export function canUndoByCommit(apiLevel: number | null): boolean {
   return apiLevel !== null && apiLevel >= EXPECT_API_LEVEL;
 }
+
+/**
+ * 409 의 `details.stale`(그 사이 바뀐 경로)을 사람이 읽을 한 줄로 — "a.txt, 사진/b.jpg 외 2개". 서버 문구는 "바뀐 파일이 있어"까지만
+ * 말해, 파일이 많은 폴더에서는 어느 것인지 다시 찾아야 했다. stale 이 없으면(옛 서버·다른 409) undefined.
+ */
+export function describeStale(details: unknown, max = 3): string | undefined {
+  const stale = (details as { stale?: unknown } | null | undefined)?.stale;
+  if (!Array.isArray(stale)) return undefined;
+  const paths = stale.filter((item): item is string => typeof item === 'string');
+  if (paths.length === 0) return undefined;
+  const shown = paths.slice(0, max).join(', ');
+  return paths.length > max ? `바뀐 파일: ${shown} 외 ${paths.length - max}개` : `바뀐 파일: ${shown}`;
+}

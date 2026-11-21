@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { canUndoByCommit, invertChanges, planBulkMove } from '../src/lib/pure/bulk-move';
+import { canUndoByCommit, describeStale, invertChanges, planBulkMove } from '../src/lib/pure/bulk-move';
 
 const a = { path: 'a.txt', name: 'a.txt', blobHash: 'ha' };
 const b = { path: '사진/b.jpg', name: 'b.jpg', blobHash: 'hb' };
@@ -67,5 +67,18 @@ describe('되돌리기를 줄 서버', () => {
     assert.equal(canUndoByCommit(8), true);
     assert.equal(canUndoByCommit(6), false);
     assert.equal(canUndoByCommit(null), false, '수준을 모르면 주지 않는다');
+  });
+});
+
+describe('그 사이 바뀐 파일 알리기 (409 details.stale)', () => {
+  it('경로를 앞에서 몇 개만, 나머지는 수로', () => {
+    assert.equal(describeStale({ stale: ['a.txt'] }), '바뀐 파일: a.txt');
+    assert.equal(describeStale({ stale: ['a', 'b', 'c', 'd', 'e'] }), '바뀐 파일: a, b, c 외 2개');
+  });
+  it('stale 이 없으면(옛 서버·다른 409) 덧붙이지 않는다', () => {
+    assert.equal(describeStale(undefined), undefined);
+    assert.equal(describeStale({}), undefined);
+    assert.equal(describeStale({ stale: [] }), undefined);
+    assert.equal(describeStale({ stale: 'a.txt' }), undefined);
   });
 });

@@ -179,6 +179,8 @@ export default async function run(t, env) {
   await put('d.txt', '또 새 버전');
   await page.getByRole('button', { name: 'd.txt 삭제' }).click();
   await page.getByText('목록을 본 뒤 다른 사람이 바꾼 파일이 있어').waitFor();
+  await page.getByText('바뀐 파일: d.txt').waitFor();
+  t.ok('409 알림에 그 사이 바뀐 파일 이름 (details.stale)');
   const rootNames = async () =>
     (await api(A, `/api/repos/${repo.id}/files?path=`, undefined, owner.token)).json.tree.files.map((f) => f.name);
   t.must((await rootNames()).includes('d.txt'), '그 사이 새 버전이 올라온 파일은 지우지 않는다');

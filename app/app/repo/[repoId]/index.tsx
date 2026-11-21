@@ -40,7 +40,7 @@ import { downloadFromRepo, pickFiles, pickFolder, type PickedFolder } from '../.
 import { listRepoFolder } from '../../../src/lib/folder-compare';
 import { localFolderSupported } from '../../../src/lib/local-folder';
 import { MAX_FAILURES_SHOWN, describeCommitFailure, describeUploadOutcome } from '../../../src/lib/pure/transfer-report';
-import { canUndoByCommit, invertChanges, planBulkMove, type ExpectedChange } from '../../../src/lib/pure/bulk-move';
+import { canUndoByCommit, describeStale, invertChanges, planBulkMove, type ExpectedChange } from '../../../src/lib/pure/bulk-move';
 import { TRUNCATED_NOTE, checkUploadPlan, describeUploadCheck } from '../../../src/lib/pure/upload-check';
 import {
   CommitFailed,
@@ -268,7 +268,7 @@ export default function RepoFilesScreen() {
       stopSelecting();
       state.refresh();
     } catch (err) {
-      notifyError(err instanceof ApiError ? err.message : '지우지 못했습니다.');
+      notifyError(err instanceof ApiError ? err.message : '지우지 못했습니다.', err instanceof ApiError ? describeStale(err.details) : undefined);
       // 그 사이 다른 사람이 바꿨다(409) — 지금 목록을 보여 줘야 다시 고를 수 있다.
       if (err instanceof ApiError && err.status === 409) state.refresh();
     } finally {
@@ -316,7 +316,7 @@ export default function RepoFilesScreen() {
       stopSelecting();
       state.refresh();
     } catch (err) {
-      notifyError(err instanceof ApiError ? err.message : '옮기지 못했습니다.');
+      notifyError(err instanceof ApiError ? err.message : '옮기지 못했습니다.', err instanceof ApiError ? describeStale(err.details) : undefined);
       // 그 사이 다른 사람이 바꿨다(409) — 지금 목록을 보여 줘야 다시 고를 수 있다.
       if (err instanceof ApiError && err.status === 409) state.refresh();
     } finally {
@@ -354,7 +354,11 @@ export default function RepoFilesScreen() {
             notifySuccess('되돌렸습니다.');
           } catch (err) {
             if (err instanceof ApiError && err.status === 409) {
-              notifyError('그 사이 바뀐 파일이 있어 되돌리지 않았습니다.', '변경 이력 → 휴지통에서 하나씩 되돌릴 수 있습니다.');
+              const stale = describeStale(err.details);
+              notifyError(
+                '그 사이 바뀐 파일이 있어 되돌리지 않았습니다.',
+                `${stale ? `${stale} — ` : ''}변경 이력 → 휴지통에서 하나씩 되돌릴 수 있습니다.`,
+              );
             } else {
               notifyError('되돌리지 못했습니다.', err instanceof ApiError ? err.message : undefined);
             }
@@ -625,7 +629,7 @@ export default function RepoFilesScreen() {
       }
       state.refresh();
     } catch (err) {
-      notifyError(err instanceof ApiError ? err.message : '삭제하지 못했습니다.');
+      notifyError(err instanceof ApiError ? err.message : '삭제하지 못했습니다.', err instanceof ApiError ? describeStale(err.details) : undefined);
       if (err instanceof ApiError && err.status === 409) state.refresh();
     } finally {
       setBusyPath(null);
