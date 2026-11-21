@@ -56,7 +56,9 @@ Authorization: Bearer <token>
   로그인 없는 초대 미리보기 —
   수준 4 이하 서버에서는 앱이 그 버튼·화면을 숨기고, 로그아웃은 기기에서만 지운다),
   6 = 1.10.0 (health 의 `maxRepoBytes`, 나눠 올리기 complete 멱등 — 같은 사용자가 10분 안에 다시 부르면 같은 blob,
-  조각별 해시 이어 계산 — 수준 5 이하 서버에서는 앱이 용량 사전 검사만 건너뛴다).
+  조각별 해시 이어 계산 — 수준 5 이하 서버에서는 앱이 용량 사전 검사만 건너뛴다),
+  7 = 다음 릴리즈 (복구 코드 `/auth/recovery-codes`·코드만으로 `/auth/reset`, 여러 파일 커밋의 `expect` — 수준 6 이하
+  서버에서는 앱이 복구 코드 카드에 "서버 업데이트 필요"를 보이고, `expect` 는 무시된다).
   **필드가 없는 서버(1.1.0 까지)는 `1`** 입니다.
 - `version` — 서버 버전(`server/package.json`). 사람에게 보여주는 용도이고 호환 판단에는 쓰지 않습니다.
 - `maxUploadBytes` — 파일 하나의 업로드 한도. 앱이 올리기 전에 검사합니다.
@@ -110,6 +112,8 @@ Authorization: Bearer <token>
 
 - **로그인 실패는 횟수를 셉니다.** 같은 아이디 기준과 같은 IP 기준을 따로 세고, 한도를 넘으면
   `429` 로 잠시 막습니다(막힌 동안은 올바른 비밀번호도 막힙니다). 성공하면 기록이 지워집니다.
+  `/auth/password`·`/auth/recovery-codes` 의 현재 비밀번호 확인과 `/auth/reset` 의 코드도 같은 기록으로 셉니다(훔친 토큰으로
+  비밀번호를 맞혀 보지 못하게). 시도는 확인 **전에** 세므로 한꺼번에 보낸 요청도 한도를 넘어 확인되지 않습니다.
 - **`/auth/password` 는 성공 시 새 `token` 을 함께 줍니다.** 비밀번호를 바꾸면 그 사용자의
   기존 토큰이 **모두** 무효가 되므로(다른 기기 로그아웃), 요청을 보낸 기기는 이 새 토큰으로
   갈아 끼워야 합니다.
@@ -193,7 +197,7 @@ npm run reset-password -- --find 홍  # 아이디를 잊은 사람 — 이름·�
 | --- | --- | --- | --- |
 | GET | `/repos/:repoId/files?path=&snapshot=&recursive=` | viewer | 폴더 목록. `snapshot` 을 주면 과거 시점, `recursive=1` 이면 하위 폴더 파일까지 모두 `files` 에(`dirs` 는 비고 `recursive: true`) |
 | POST | `/repos/:repoId/files?path=` | editor | multipart 업로드 = 직접 커밋 |
-| POST | `/repos/:repoId/files/commit` | editor | `{changes:[{path, blobHash\|null}], message?}` — 여러 파일을 스냅샷 하나로. `blobHash` 는 이 저장소에 올렸거나 **이력에 있던** 내용이면 된다 — 되돌리기는 버전·휴지통의 `blobHash` 로 다시 올리지 않고 커밋한다(제안도 같다) |
+| POST | `/repos/:repoId/files/commit` | editor | `{changes:[{path, blobHash\|null, expect?}], message?}` — 여러 파일을 스냅샷 하나로. `blobHash` 는 이 저장소에 올렸거나 **이력에 있던** 내용이면 된다 — 되돌리기는 버전·휴지통의 `blobHash` 로 다시 올리지 않고 커밋한다(제안도 같다) |
 | DELETE | `/repos/:repoId/files?path=` | editor | 파일 또는 폴더 삭제 |
 | POST | `/repos/:repoId/files/move` | editor | `{from, to}` — 파일·폴더 이동/이름 변경 |
 | GET | `/repos/:repoId/raw?path=&snapshot=&inline=1` | viewer | 파일 내려받기 (`Range` 지원) |
@@ -273,8 +277,11 @@ POST /api/repos/:repoId/files/commit
 { "changes": [ { "path": "사진/1.jpg", "blobHash": "a1b2…" }, { "path": "옛날.txt", "blobHash": null } ], "message": "폴더 올리기" }
 ```
 
-- 한 번에 반영하고 **스냅샷 하나**를 만듭니다. `blobHash: null` 은 삭제(없는 파일이면 무시).
+- 한 번에 반영하고 **스냅샷 하나**를 만듭니다. `blobHash: null` 은 삭제(없는 파일이면 `400`).
 - 이 저장소에 올렸거나 이력에 있는 blob 만 담을 수 있습니다. 이름 충돌 `409`, 한도 `413`/`409`.
+- `expect`(선택, apiLevel 7): 그 경로의 지금 내용이 이 해시일 때만, `null` 이면 그 경로에 파일이 없을 때만 반영합니다.
+  하나라도 어긋나면 아무것도 반영하지 않고 `409` 에 `details.stale`(어긋난 경로). 앱의 여러 개 옮기기·지우기가 옛 목록으로
+  만든 커밋이 그 사이 올라온 새 버전을 되돌리거나 옮길 자리의 파일을 덮어쓰지 않게 씁니다. 옛 서버는 이 필드를 무시합니다.
 - 응답 `{snapshotId, unchanged, added, updated, deleted}`. 바뀐 것이 없으면 `200` 에 `unchanged: true`.
 
 ### 폴더 삭제
