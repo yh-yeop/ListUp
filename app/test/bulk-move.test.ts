@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { planBulkMove } from '../src/lib/pure/bulk-move';
+import { invertChanges, planBulkMove } from '../src/lib/pure/bulk-move';
 
 const a = { path: 'a.txt', name: 'a.txt', blobHash: 'ha' };
 const b = { path: '사진/b.jpg', name: 'b.jpg', blobHash: 'hb' };
@@ -35,5 +35,28 @@ describe('여러 파일 옮기기 계획', () => {
   it('고른 것끼리 이름이 같아도 겹침', () => {
     const plan = planBulkMove([b, { path: '그림/b.jpg', name: 'b.jpg', blobHash: 'hc' }], '보관', []);
     assert.deepEqual(plan.clashes, ['b.jpg']);
+  });
+});
+
+describe('방금 한 커밋 되돌리기', () => {
+  it('옮기기를 되돌리면 새 자리는 지우고 옛 자리에 같은 내용 — expect 도 맞바뀐다', () => {
+    const plan = planBulkMove([a, b], '보관', []);
+    assert.deepEqual(invertChanges(plan.changes), [
+      { path: '보관/a.txt', blobHash: null, expect: 'ha' },
+      { path: 'a.txt', blobHash: 'ha', expect: null },
+      { path: '보관/b.jpg', blobHash: null, expect: 'hb' },
+      { path: '사진/b.jpg', blobHash: 'hb', expect: null },
+    ]);
+  });
+
+  it('지우기를 되돌리면 비어 있을 때만 같은 내용으로 다시 생긴다', () => {
+    assert.deepEqual(invertChanges([{ path: 'a.txt', blobHash: null, expect: 'ha' }]), [
+      { path: 'a.txt', blobHash: 'ha', expect: null },
+    ]);
+  });
+
+  it('두 번 되돌리면 처음과 같다', () => {
+    const plan = planBulkMove([a], '보관', []);
+    assert.deepEqual(invertChanges(invertChanges(plan.changes)), plan.changes);
   });
 });

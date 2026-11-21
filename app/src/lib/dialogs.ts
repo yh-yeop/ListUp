@@ -1,5 +1,5 @@
 import { Alert, Platform } from 'react-native';
-import { showToast, type ToastTone } from './toast';
+import { showToast, type ToastAction, type ToastTone } from './toast';
 
 /**
  * 확인 대화상자. react-native-web 의 Alert 는 버튼을 지원하지 않으므로
@@ -39,6 +39,14 @@ export function confirmAction(options: {
 export function notify(title: string, message?: string, tone: ToastTone = 'info'): void {
   if (!title && !message) return;
   showToast({ title: title || message!, message: title ? message : undefined, tone });
+}
+
+/**
+ * 버튼이 달린 안내 — 지우기·옮기기 뒤 「되돌리기」처럼, 확인 대화상자 대신 해 놓고 바로 무를 길을 준다.
+ * 보통 안내보다 오래(10초 이상) 남는다.
+ */
+export function notifyWithAction(title: string, message: string | undefined, action: ToastAction): void {
+  showToast({ title, message, tone: 'info', action });
 }
 
 /** 해낸 일 안내 (저장했습니다, 복사했습니다 …). */

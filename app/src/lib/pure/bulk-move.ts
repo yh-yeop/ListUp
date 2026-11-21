@@ -53,3 +53,19 @@ export function planBulkMove(files: MovableFile[], dest: string, taken: Iterable
   ]);
   return { changes, unchanged, clashes };
 }
+
+/** `expect` 를 단 커밋 변경 — 바꾸기 전 내용(expect)과 바꾼 뒤 내용(blobHash)을 둘 다 안다. */
+export interface ExpectedChange {
+  path: string;
+  blobHash: string | null;
+  expect: string | null;
+}
+
+/**
+ * 방금 한 커밋을 되돌리는 커밋 — 각 변경의 바꾼 뒤(blobHash)와 바꾸기 전(expect)을 맞바꾼다. 지운 파일은 같은 내용으로 다시
+ * 생기고, 옮긴 파일은 제자리로 돌아온다. `expect` 가 그대로 따라가므로 그 사이 누가 또 바꿨으면 서버가 409 로 거절한다
+ * (남의 새 버전을 되돌리기로 덮지 않는다). 내용이 이 저장소 이력에 있어 다시 올리지 않아도 된다.
+ */
+export function invertChanges(changes: ExpectedChange[]): ExpectedChange[] {
+  return changes.map((change) => ({ path: change.path, blobHash: change.expect, expect: change.blobHash }));
+}

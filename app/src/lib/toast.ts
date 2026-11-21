@@ -5,11 +5,18 @@
 
 export type ToastTone = 'info' | 'success' | 'error';
 
+/** 토스트 안의 버튼 하나(예: 「되돌리기」). 누르면 토스트를 닫고 부른다. */
+export interface ToastAction {
+  label: string;
+  onPress: () => void;
+}
+
 export interface Toast {
   id: number;
   title: string;
   message?: string;
   tone: ToastTone;
+  action?: ToastAction;
 }
 
 /** 한 번에 보이는 최대 개수. 넘으면 오래된 것부터 내린다. */
@@ -28,7 +35,9 @@ function emit() {
 function durationOf(toast: Toast): number {
   const length = toast.title.length + (toast.message?.length ?? 0);
   const base = toast.tone === 'error' ? 6000 : 3500;
-  return Math.min(12_000, base + length * 40);
+  // 버튼이 있으면(되돌리기) 읽고 누를 시간을 넉넉히.
+  const min = toast.action ? 10_000 : 0;
+  return Math.max(min, Math.min(12_000, base + length * 40));
 }
 
 export function dismissToast(id: number): void {

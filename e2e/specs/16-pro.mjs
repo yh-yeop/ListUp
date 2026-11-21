@@ -1,6 +1,6 @@
 import { api } from '../lib.mjs';
 
-export const title = '익숙한 사람 — 정렬·폴더 주소·경로 복사·키보드 단축키·여러 개 지우기·옮기기';
+export const title = '익숙한 사람 — 정렬·폴더 주소·경로 복사·키보드 단축키·여러 개 지우기·옮기기·되돌리기';
 
 export default async function run(t, env) {
   const { A } = env;
@@ -137,5 +137,25 @@ export default async function run(t, env) {
   t.must(moved.map((f) => f.name).sort().join(',') === 'b.txt,d.txt', '없는 폴더면 새로 만들어 옮긴다');
   const afterMove = (await api(A, `/api/repos/${repo.id}/history`, undefined, owner.token)).json.snapshots[0];
   t.must(afterMove.message === '파일 2개를 보관/2026(으)로 옮김', '이력에 한 번으로');
+
+  // ── 방금 한 일 되돌리기 (토스트의 「되돌리기」) ──────────────
+  await page.getByRole('button', { name: '되돌리기' }).click();
+  await page.getByText('되돌렸습니다.').waitFor();
+  const back = (await api(A, `/api/repos/${repo.id}/files?path=`, undefined, owner.token)).json.tree.files.map((f) => f.name).sort();
+  t.must(back.join(',') === 'b.txt,d.txt', `옮기기 되돌리기 → 제자리 (${back.join(',')})`);
+  const undone = (await api(A, `/api/repos/${repo.id}/history`, undefined, owner.token)).json.snapshots[0];
+  t.must(undone.message === '되돌리기: 파일 2개를 보관/2026(으)로 옮김', `되돌리기도 커밋 하나 (${undone.message})`);
+  await page.getByRole('button', { name: 'd.txt 내려받기' }).first().waitFor();
+
+  // 지우기 되돌리기 — 그 사이 같은 이름이 생겼으면 덮지 않는다(409).
+  await page.getByRole('button', { name: '여러 개 고르기' }).click();
+  await page.getByRole('checkbox', { name: 'd.txt 고르기' }).click();
+  await page.getByRole('button', { name: '고른 파일 1개 지우기' }).click();
+  await page.getByText('1개를 지웠습니다.').waitFor();
+  await put('d.txt', '다른 사람이 새로 올림');
+  await page.getByRole('button', { name: '되돌리기' }).click();
+  await page.getByText('그 사이 바뀐 파일이 있어 되돌리지 않았습니다.').waitFor();
+  const kept = (await api(A, `/api/repos/${repo.id}/history`, undefined, owner.token)).json.snapshots[0];
+  t.must(!kept.message.startsWith('되돌리기'), '그 사이 바뀌었으면 되돌리지 않는다 (남의 새 파일을 덮지 않음)');
   await ctx.close();
 }

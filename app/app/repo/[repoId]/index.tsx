@@ -33,14 +33,14 @@ import {
 import { Breadcrumb, RepoNav } from '../../../src/components/RepoNav';
 import { SearchResults } from '../../../src/components/SearchResults';
 import { ApiError, api, getServerLimits, type UploadSource } from '../../../src/api/client';
-import { confirmAction, notify, notifyError, notifySuccess } from '../../../src/lib/dialogs';
+import { confirmAction, notify, notifyError, notifySuccess, notifyWithAction } from '../../../src/lib/dialogs';
 import { parentPath, shortcutsSupported, useKeyboardShortcuts } from '../../../src/lib/shortcuts';
 import { nextSortOrder, sortDirs, sortFiles, useFileSort, type SortKey, type SortOrder } from '../../../src/lib/file-sort';
 import { downloadFromRepo, pickFiles, pickFolder, type PickedFolder } from '../../../src/lib/files';
 import { listRepoFolder } from '../../../src/lib/folder-compare';
 import { localFolderSupported } from '../../../src/lib/local-folder';
 import { MAX_FAILURES_SHOWN, describeCommitFailure, describeUploadOutcome } from '../../../src/lib/pure/transfer-report';
-import { planBulkMove } from '../../../src/lib/pure/bulk-move';
+import { invertChanges, planBulkMove, type ExpectedChange } from '../../../src/lib/pure/bulk-move';
 import { TRUNCATED_NOTE, checkUploadPlan, describeUploadCheck } from '../../../src/lib/pure/upload-check';
 import {
   CommitFailed,
@@ -242,13 +242,11 @@ export default function RepoFilesScreen() {
     if (!ok) return;
     setBulkBusy(true);
     try {
-      await api.commitFiles(
-        repoId,
-        // 목록에서 본 내용 그대로일 때만 — 그 사이 다른 사람이 올린 새 버전을 모르고 지우지 않게(서버가 409).
-        chosen.map((file) => ({ path: file.path, blobHash: null, expect: file.blobHash })),
-        `파일 ${chosen.length}개 삭제`,
-      );
-      notify(`${chosen.length}개를 지웠습니다.`, '변경 이력 → 휴지통에서 되돌릴 수 있습니다.');
+      // 목록에서 본 내용 그대로일 때만 — 그 사이 다른 사람이 올린 새 버전을 모르고 지우지 않게(서버가 409).
+      const changes = chosen.map((file) => ({ path: file.path, blobHash: null, expect: file.blobHash }));
+      const message = `파일 ${chosen.length}개 삭제`;
+      await api.commitFiles(repoId, changes, message);
+      offerUndo(`${chosen.length}개를 지웠습니다.`, changes, message);
       stopSelecting();
       state.refresh();
     } catch (err) {
@@ -294,8 +292,9 @@ export default function RepoFilesScreen() {
         return;
       }
       const moved = plan.changes.length / 2;
-      await api.commitFiles(repoId, plan.changes, `파일 ${moved}개를 ${dest || '맨 위'}(으)로 옮김`);
-      notify(`${moved}개를 ${dest || '맨 위'}(으)로 옮겼습니다.`);
+      const message = `파일 ${moved}개를 ${dest || '맨 위'}(으)로 옮김`;
+      await api.commitFiles(repoId, plan.changes, message);
+      offerUndo(`${moved}개를 ${dest || '맨 위'}(으)로 옮겼습니다.`, plan.changes, message);
       stopSelecting();
       state.refresh();
     } catch (err) {
@@ -305,6 +304,32 @@ export default function RepoFilesScreen() {
     } finally {
       setBulkBusy(false);
     }
+  }
+
+  /**
+   * 방금 한 지우기·옮기기를 토스트의 「되돌리기」로 무른다 — 같은 내용으로 맞바꾼 커밋 하나(lib/pure/bulk-move.ts
+   * invertChanges). 그 사이 누가 또 바꿨으면 서버가 409 로 거절하므로 남의 새 버전을 덮지 않는다.
+   */
+  function offerUndo(title: string, changes: ExpectedChange[], message: string) {
+    notifyWithAction(title, '실수였다면 바로 되돌릴 수 있습니다. 나중에는 변경 이력 → 휴지통에서.', {
+      label: '되돌리기',
+      onPress: () => {
+        void (async () => {
+          try {
+            await api.commitFiles(repoId, invertChanges(changes), `되돌리기: ${message}`);
+            notifySuccess('되돌렸습니다.');
+          } catch (err) {
+            if (err instanceof ApiError && err.status === 409) {
+              notifyError('그 사이 바뀐 파일이 있어 되돌리지 않았습니다.', '변경 이력 → 휴지통에서 하나씩 되돌릴 수 있습니다.');
+            } else {
+              notifyError('되돌리지 못했습니다.', err instanceof ApiError ? err.message : undefined);
+            }
+          } finally {
+            state.refresh();
+          }
+        })();
+      },
+    });
   }
 
   /** 경로를 클립보드로 — 채팅으로 "이 파일" 을 가리킬 때. */
@@ -540,10 +565,13 @@ export default function RepoFilesScreen() {
     });
     if (!ok) return;
 
+    // 파일이면 지운 내용을 알고 있어 바로 되돌릴 수 있다. 폴더는 휴지통에서.
+    const file = isFolder ? undefined : files.find((entry) => entry.path === targetPath);
     setBusyPath(targetPath);
     try {
       await api.deletePath(repoId, targetPath);
-      notify('지웠습니다.', '변경 이력 → 휴지통에서 되돌릴 수 있습니다.');
+      if (file) offerUndo('지웠습니다.', [{ path: file.path, blobHash: null, expect: file.blobHash }], `삭제: ${file.path}`);
+      else notify('지웠습니다.', '변경 이력 → 휴지통에서 되돌릴 수 있습니다.');
       state.refresh();
     } catch (err) {
       notifyError(err instanceof ApiError ? err.message : '삭제하지 못했습니다.');
