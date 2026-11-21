@@ -311,12 +311,19 @@ export default function RepoFilesScreen() {
    * invertChanges). 그 사이 누가 또 바꿨으면 서버가 409 로 거절하므로 남의 새 버전을 덮지 않는다.
    */
   function offerUndo(title: string, changes: ExpectedChange[], message: string) {
-    notifyWithAction(title, '실수였다면 바로 되돌릴 수 있습니다. 나중에는 변경 이력 → 휴지통에서.', {
+    offerUndoWith(title, '실수였다면 바로 되돌릴 수 있습니다. 나중에는 변경 이력 → 휴지통에서.', async () => {
+      await api.commitFiles(repoId, invertChanges(changes), `되돌리기: ${message}`);
+    });
+  }
+
+  /** 「되돌리기」 버튼이 달린 안내 — 누르면 `undo` 를 하고 결과를 알린 뒤 목록을 다시 읽는다. */
+  function offerUndoWith(title: string, message: string, undo: () => Promise<void>) {
+    notifyWithAction(title, message, {
       label: '되돌리기',
       onPress: () => {
         void (async () => {
           try {
-            await api.commitFiles(repoId, invertChanges(changes), `되돌리기: ${message}`);
+            await undo();
             notifySuccess('되돌렸습니다.');
           } catch (err) {
             if (err instanceof ApiError && err.status === 409) {
@@ -596,9 +603,15 @@ export default function RepoFilesScreen() {
       return;
     }
     setRenaming(true);
+    const from = editing.path;
     try {
-      await api.movePath(repoId, editing.path, to);
+      await api.movePath(repoId, from, to);
       setEditing(null);
+      // 다른 폴더로 옮기면 목록에서 말없이 사라졌다 — 어디로 갔는지 알리고 바로 무를 길을 준다.
+      const sameFolder = parentPath(from) === parentPath(to);
+      offerUndoWith(sameFolder ? '이름을 바꿨습니다.' : '옮겼습니다.', `${from} → ${to}`, async () => {
+        await api.movePath(repoId, to, from);
+      });
       state.refresh();
     } catch (err) {
       notifyError(err instanceof ApiError ? err.message : '이름을 바꾸지 못했습니다.');

@@ -157,5 +157,18 @@ export default async function run(t, env) {
   await page.getByText('그 사이 바뀐 파일이 있어 되돌리지 않았습니다.').waitFor();
   const kept = (await api(A, `/api/repos/${repo.id}/history`, undefined, owner.token)).json.snapshots[0];
   t.must(!kept.message.startsWith('되돌리기'), '그 사이 바뀌었으면 되돌리지 않는다 (남의 새 파일을 덮지 않음)');
+
+  // 이름 변경으로 다른 폴더에 옮기면 어디로 갔는지 알리고 되돌릴 수 있다 (예전엔 말없이 목록에서 사라졌다).
+  await page.reload();
+  await page.getByRole('button', { name: 'b.txt 더보기' }).first().click();
+  await page.getByRole('button', { name: 'b.txt 이름 변경' }).click();
+  await page.getByLabel('새 경로').fill('보관/b.txt');
+  await page.getByRole('button', { name: '확인', exact: true }).click();
+  await page.getByText('b.txt → 보관/b.txt').waitFor();
+  t.ok('다른 폴더로 옮기면 「옮겼습니다 — b.txt → 보관/b.txt」');
+  await page.getByRole('button', { name: '되돌리기' }).click();
+  await page.getByText('되돌렸습니다.').waitFor();
+  const root = (await api(A, `/api/repos/${repo.id}/files?path=`, undefined, owner.token)).json.tree.files.map((f) => f.name);
+  t.must(root.includes('b.txt'), '되돌리기 → 다시 맨 위에');
   await ctx.close();
 }
