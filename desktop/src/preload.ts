@@ -24,6 +24,7 @@ const bridge: DesktopBridge = {
     update: (patch) => ipcRenderer.invoke(IPC.hostUpdate, patch),
     inspectTools: () => ipcRenderer.invoke(IPC.hostTools),
     issueResetCode: (email) => ipcRenderer.invoke(IPC.hostResetCode, email),
+    findUsers: (query) => ipcRenderer.invoke(IPC.hostFindUsers, query),
     backup: () => ipcRenderer.invoke(IPC.hostBackup),
     chooseDataFolder: () => ipcRenderer.invoke(IPC.hostChooseData),
     openDataFolder: () => ipcRenderer.invoke(IPC.hostOpenData),

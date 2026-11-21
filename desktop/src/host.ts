@@ -305,7 +305,9 @@ export class Host extends EventEmitter {
   }
 
   /** 켜져 있는 서버에 일을 시킨다. 꺼져 있으면 DB 만 여는 프로세스를 잠깐 띄운다. */
-  private async request<T>(body: { type: 'reset-code'; email: string } | { type: 'backup'; dir: string }): Promise<T> {
+  private async request<T>(
+    body: { type: 'reset-code'; email: string } | { type: 'find-users'; query: string } | { type: 'backup'; dir: string },
+  ): Promise<T> {
     const id = this.nextId++;
     if (this.child && this.state === 'running') {
       const child = this.child;
@@ -334,6 +336,12 @@ export class Host extends EventEmitter {
   issueResetCode(email: string): Promise<{ code: string; expiresAt: number } | null> {
     if (this.state !== 'running') return Promise.reject(new Error('서버가 켜져 있을 때만 발급할 수 있습니다.'));
     return this.request({ type: 'reset-code', email });
+  }
+
+  /** 이름·아이디 일부로 계정 찾기 — 재설정 코드와 같이 서버가 켜져 있을 때만. */
+  findUsers(query: string): Promise<{ loginId: string; displayName: string; createdAt: number }[]> {
+    if (this.state !== 'running') return Promise.reject(new Error('서버가 켜져 있을 때만 찾을 수 있습니다.'));
+    return this.request({ type: 'find-users', query });
   }
 
   backup(dir: string): Promise<string> {

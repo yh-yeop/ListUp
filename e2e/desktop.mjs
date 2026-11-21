@@ -250,6 +250,13 @@ try {
   const reset = await api(`http://127.0.0.1:${PORT}`, '/api/auth/reset', { email: EMAIL, code: codeText, newPassword: 'newpassword99' });
   t.must(reset.status === 200, '발급한 코드로 실제로 비밀번호를 바꿀 수 있다');
 
+  // 6-1. 아이디를 모르는 사람 — 이름·아이디 일부로 찾아 고르면 위 칸에 채운다
+  await resetInput.fill('');
+  await page.getByLabel('계정 찾기').fill('owner-');
+  await page.getByRole('button', { name: '계정 찾기' }).click();
+  await page.getByRole('button', { name: `${EMAIL} 아이디를 위 칸에 넣기` }).click();
+  t.must((await resetInput.inputValue()) === EMAIL, '계정 찾기 → 고르면 재설정 칸에 아이디');
+
   // 7. 실행 중에는 포트를 못 바꾼다
   t.must(await page.getByRole('button', { name: '저장', exact: true }).isDisabled(), '실행 중에는 포트 저장이 막힌다');
 

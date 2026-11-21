@@ -243,6 +243,7 @@ function registerIpc(): void {
   });
   ipcMain.handle(IPC.hostTools, () => inspectTools());
   ipcMain.handle(IPC.hostResetCode, (_e, email: string) => host.issueResetCode(email));
+  ipcMain.handle(IPC.hostFindUsers, (_e, query: string) => host.findUsers(String(query ?? '')));
   ipcMain.handle(IPC.hostBackup, async () => {
     const picked = await pickFolder({ title: '백업을 담을 폴더' });
     if (picked.canceled || !picked.filePaths[0]) return null;

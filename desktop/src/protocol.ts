@@ -2,6 +2,7 @@
 
 export type ServerRequest =
   | { id: number; type: 'reset-code'; email: string }
+  | { id: number; type: 'find-users'; query: string }
   | { id: number; type: 'backup'; dir: string }
   | { id: number; type: 'stop' };
 
@@ -23,6 +24,7 @@ export const IPC = {
   hostUpdate: 'host:update',
   hostTools: 'host:tools',
   hostResetCode: 'host:reset-code',
+  hostFindUsers: 'host:find-users',
   hostBackup: 'host:backup',
   hostChooseData: 'host:choose-data',
   hostOpenData: 'host:open-data',

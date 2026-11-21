@@ -374,6 +374,24 @@ function ResetCodeCard({ running }: { running: boolean }) {
 
   const until = issued ? formatDateTime(issued.expiresAt) : '';
 
+  // 아이디를 모르는 사람 — 이름·아이디 일부로 찾아 고르면 위 칸에 채운다(1.10 까지의 PC 앱 본체에는 findUsers 가 없다).
+  const canFind = typeof host.findUsers === 'function';
+  const [query, setQuery] = useState('');
+  const [found, setFound] = useState<{ loginId: string; displayName: string; createdAt: number }[] | null>(null);
+  const [finding, setFinding] = useState(false);
+  const find = async () => {
+    if (finding || !running || !query.trim() || !host.findUsers) return;
+    setFinding(true);
+    setError(null);
+    try {
+      setFound(await host.findUsers(query.trim()));
+    } catch (err) {
+      setError(desktopErrorMessage(err, '찾지 못했습니다.'));
+    } finally {
+      setFinding(false);
+    }
+  };
+
   return (
     <Card style={{ gap: spacing.md }}>
       <Body style={{ fontWeight: '600' }}>비밀번호를 잊은 사람</Body>
@@ -403,6 +421,43 @@ function ResetCodeCard({ running }: { running: boolean }) {
       {!running ? <Caption>서버가 켜져 있을 때 발급할 수 있습니다.</Caption> : null}
       {issued ? (
         <CopyLine label={`${issued.email} · ${until}까지`} value={issued.code} />
+      ) : null}
+
+      {canFind ? (
+        <>
+          <Field label="아이디를 모르면 이름으로 찾기" hint="이름이나 아이디의 일부. 본인인지 확인한 뒤 알려 주세요.">
+            <Input
+              value={query}
+              onChangeText={setQuery}
+              autoCorrect={false}
+              placeholder="예: 홍길"
+              accessibilityLabel="계정 찾기"
+              onSubmitEditing={() => void find()}
+            />
+          </Field>
+          <Button
+            label="계정 찾기"
+            icon="search-outline"
+            variant="ghost"
+            loading={finding}
+            disabled={!running || !query.trim()}
+            onPress={() => void find()}
+          />
+          {found && found.length === 0 ? <Caption>그런 이름·아이디의 계정이 없습니다.</Caption> : null}
+          {found && found.length > 0
+            ? found.slice(0, 20).map((user) => (
+                <Button
+                  key={user.loginId}
+                  label={`${user.loginId} · ${user.displayName}`}
+                  accessibilityLabel={`${user.loginId} 아이디를 위 칸에 넣기`}
+                  variant="secondary"
+                  compact
+                  onPress={() => setEmail(user.loginId)}
+                />
+              ))
+            : null}
+          {found && found.length > 20 ? <Caption>더 있습니다. 더 길게 적어 좁혀 주세요.</Caption> : null}
+        </>
       ) : null}
     </Card>
   );

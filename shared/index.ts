@@ -711,6 +711,11 @@ export interface DesktopHost {
   inspectTools(): Promise<HostTools>;
   /** 서버가 켜져 있을 때만. 계정이 없으면 null. */
   issueResetCode(email: string): Promise<{ code: string; expiresAt: number } | null>;
+  /**
+   * 이름·아이디 일부로 계정 찾기 — 아이디를 잊은 사람을 운영자가 찾아 줄 때(서버의 `--find` 와 같다). 한도보다 하나 더
+   * 오면 "더 있음". 서버가 켜져 있을 때만. 1.10 까지의 PC 앱에는 없다.
+   */
+  findUsers?(query: string): Promise<{ loginId: string; displayName: string; createdAt: number }[]>;
   /** 폴더를 골라 DB 사본과 파일을 담는다. 고르지 않으면 null, 담았으면 그 폴더. */
   backup(): Promise<string | null>;
   /** 서버가 꺼져 있을 때만. 고르지 않으면 그대로. */
