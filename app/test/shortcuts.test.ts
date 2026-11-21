@@ -14,6 +14,12 @@ describe('키보드 단축키', () => {
     assert.equal(matchShortcut({ key: 'ArrowUp' }), null, 'Alt 없는 화살표는 스크롤에 둔다');
   });
 
+  it('한글 입력 상태의 R(ㄱ)도 새로고침 — 자판 위치로', () => {
+    assert.equal(matchShortcut({ key: 'ㄱ', code: 'KeyR' }), 'refresh');
+    assert.equal(matchShortcut({ key: 'ㄱ', code: 'KeyR', editing: true }), null);
+    assert.equal(matchShortcut({ key: 'ㅅ', code: 'KeyT' }), null);
+  });
+
   it('글을 쓰는 중에는 Esc 만', () => {
     assert.equal(matchShortcut({ key: '/', editing: true }), null);
     assert.equal(matchShortcut({ key: 'Backspace', editing: true }), null, '칸에서 지우기가 폴더 이동이 되면 안 된다');

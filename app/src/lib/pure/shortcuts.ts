@@ -28,6 +28,8 @@ export interface KeyInput {
   metaKey?: boolean;
   /** 글을 쓰는 칸(input·textarea·contenteditable)에서 눌렀다. */
   editing?: boolean;
+  /** 자판 위치(`KeyR` …) — 한글 입력 상태면 key 가 'ㄱ' 으로 와서, 글자 단축키는 위치로도 본다. */
+  code?: string;
 }
 
 /**
@@ -50,7 +52,8 @@ export function matchShortcut(input: KeyInput): ShortcutAction | null {
     case 'R':
       return 'refresh';
     default:
-      return null;
+      // 한/영 키가 한글이면 R 자리가 'ㄱ' 으로 온다 — 영문으로 바꾸지 않아도 되게 자판 위치로 본다.
+      return input.code === 'KeyR' && !input.altKey ? 'refresh' : null;
   }
 }
 

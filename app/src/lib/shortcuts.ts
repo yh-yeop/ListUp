@@ -29,6 +29,7 @@ export function useKeyboardShortcuts(handler: (action: ShortcutAction) => boolea
         if (event.defaultPrevented || event.isComposing) return;
         const action = matchShortcut({
           key: event.key,
+          code: event.code,
           altKey: event.altKey,
           ctrlKey: event.ctrlKey,
           metaKey: event.metaKey,
