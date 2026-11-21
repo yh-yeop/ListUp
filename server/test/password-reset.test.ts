@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
-import { issueResetCode } from '../src/services/password-reset.ts';
+import { FIND_USERS_LIMIT, findUsers, issueResetCode } from '../src/services/password-reset.ts';
 import { auth, createHarness, signup, type Harness, type Session } from './helpers.ts';
 
 describe('비밀번호 재설정 코드', () => {
@@ -63,5 +63,24 @@ describe('비밀번호 재설정 코드', () => {
       last = (await reset({ email: victim.email, code: 'AAAAA-AAAAA', newPassword: 'guess-1234' })).statusCode;
     }
     assert.equal(last, 429);
+  });
+
+  it('운영자 아이디 찾기 — 이름·아이디 일부, 대소문자 무관, 와일드카드는 글자 그대로', async () => {
+    const found = await signup(h.app, '찾을사람 Kim');
+    const byName = findUsers(h.ctx.db, '찾을사람');
+    assert.deepEqual(
+      byName.map((u) => [u.loginId, u.displayName]),
+      [[found.email, '찾을사람 Kim']],
+    );
+    assert.equal(findUsers(h.ctx.db, 'KIM').length, 1, '이름의 영문 대소문자 무관');
+    assert.equal(findUsers(h.ctx.db, found.email.toUpperCase()).length, 1, '아이디로도');
+    assert.equal(findUsers(h.ctx.db, '%').length, 0, '% 는 모두가 아니라 글자 % 로');
+    assert.equal(findUsers(h.ctx.db, '_').length, 0, '_ 도 글자 그대로');
+    assert.deepEqual(findUsers(h.ctx.db, '   '), []);
+  });
+
+  it('운영자 아이디 찾기는 한도보다 하나 더 돌려줘 "더 있음"을 알 수 있다', async () => {
+    for (let i = 0; i < FIND_USERS_LIMIT + 3; i += 1) await signup(h.app, `흔한이름${i}`);
+    assert.equal(findUsers(h.ctx.db, '흔한이름').length, FIND_USERS_LIMIT + 1);
   });
 });

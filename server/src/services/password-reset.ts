@@ -56,3 +56,32 @@ export function consumeResetCode(db: Db, userId: string, input: string, now = Da
   db.prepare(`UPDATE password_resets SET used_at = ? WHERE id = ?`).run(now, match.id);
   return true;
 }
+
+/** 운영자가 아이디를 찾을 때 보이는 계정 한 줄. */
+export interface FoundUser {
+  loginId: string;
+  displayName: string;
+  createdAt: number;
+}
+
+/** 한 번에 보이는 최대 수 — 흔한 이름이면 더 좁혀 찾게. */
+export const FIND_USERS_LIMIT = 20;
+
+/**
+ * 이름이나 아이디 일부로 계정을 찾는다 — 아이디를 잊은 사람을 운영자가 찾아 줄 때(`npm run reset-password -- --find`).
+ * DB 를 가진 운영자의 도구라 앱에는 열지 않는다(저장소 소유자에게 서버의 계정 목록을 보이면 안 된다).
+ * 대소문자를 가리지 않고, LIKE 의 와일드카드(% _)는 글자 그대로 찾는다.
+ */
+export function findUsers(db: Db, query: string): FoundUser[] {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return [];
+  const pattern = `%${needle.replace(/[\\%_]/g, (ch) => `\\${ch}`)}%`;
+  return db
+    .prepare<[string, string, number], { email: string; display_name: string; created_at: number }>(
+      `SELECT email, display_name, created_at FROM users
+       WHERE lower(email) LIKE ? ESCAPE '\\' OR lower(display_name) LIKE ? ESCAPE '\\'
+       ORDER BY created_at LIMIT ?`,
+    )
+    .all(pattern, pattern, FIND_USERS_LIMIT + 1)
+    .map((row) => ({ loginId: row.email, displayName: row.display_name, createdAt: row.created_at }));
+}
