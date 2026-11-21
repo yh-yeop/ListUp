@@ -122,6 +122,8 @@ export interface ServerLimits {
   maxUploadBytes: number;
   /** 저장소 하나의 용량 한도(바이트, LISTUP_MAX_REPO_MB). 알려 주지 않는 서버(API_LEVEL 6 미만)·연결 실패면 null. */
   maxRepoBytes: number | null;
+  /** 서버의 API 수준(health `apiLevel`, 없는 서버는 1). 서버에 닿지 못했으면 null — 모른다. */
+  apiLevel: number | null;
 }
 
 /**
@@ -131,11 +133,12 @@ export interface ServerLimits {
 export async function getServerLimits(): Promise<ServerLimits> {
   if (serverLimitsCache !== null) return serverLimitsCache;
   try {
-    const health = await request<{ maxUploadBytes?: unknown; maxRepoBytes?: unknown }>('/api/health');
+    const health = await request<{ maxUploadBytes?: unknown; maxRepoBytes?: unknown; apiLevel?: unknown }>('/api/health');
     if (typeof health.maxUploadBytes === 'number' && health.maxUploadBytes > 0) {
       const limits: ServerLimits = {
         maxUploadBytes: health.maxUploadBytes,
         maxRepoBytes: typeof health.maxRepoBytes === 'number' && health.maxRepoBytes > 0 ? health.maxRepoBytes : null,
+        apiLevel: typeof health.apiLevel === 'number' ? health.apiLevel : 1,
       };
       serverLimitsCache = limits;
       return limits;
@@ -143,7 +146,7 @@ export async function getServerLimits(): Promise<ServerLimits> {
   } catch {
     // 일시적 연결 실패 — 기본값으로 진행하고 다음 기회에 다시 물어본다.
   }
-  return { maxUploadBytes: MAX_FILE_SIZE, maxRepoBytes: null };
+  return { maxUploadBytes: MAX_FILE_SIZE, maxRepoBytes: null, apiLevel: null };
 }
 
 /** 파일 하나의 업로드 한도(바이트) — {@link getServerLimits} 의 한 부분. */

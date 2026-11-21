@@ -172,6 +172,27 @@ export default async function run(t, env) {
   const kept = (await api(A, `/api/repos/${repo.id}/history`, undefined, owner.token)).json.snapshots[0];
   t.must(!kept.message.startsWith('되돌리기'), '그 사이 바뀌었으면 되돌리지 않는다 (남의 새 파일을 덮지 않음)');
 
+  // 파일 하나 지우기(⋯ → 삭제)도 목록에서 본 내용일 때만 — 예전엔 DELETE 라 그 사이 올라온 새 버전을 지우고, 「되돌리기」는
+  // 목록의 옛 내용을 되살려 새 버전이 머리에서 사라졌다(2026-11-21 검토).
+  await page.reload();
+  await page.getByRole('button', { name: 'd.txt 더보기' }).first().click();
+  await put('d.txt', '또 새 버전');
+  await page.getByRole('button', { name: 'd.txt 삭제' }).click();
+  await page.getByText('목록을 본 뒤 다른 사람이 바꾼 파일이 있어').waitFor();
+  const rootNames = async () =>
+    (await api(A, `/api/repos/${repo.id}/files?path=`, undefined, owner.token)).json.tree.files.map((f) => f.name);
+  t.must((await rootNames()).includes('d.txt'), '그 사이 새 버전이 올라온 파일은 지우지 않는다');
+  // 새 목록으로 다시 지우면 되고, 되돌리면 지운 그 내용(새 버전)이 돌아온다.
+  await page.reload();
+  await page.getByRole('button', { name: 'd.txt 더보기' }).first().click();
+  await page.getByRole('button', { name: 'd.txt 삭제' }).click();
+  await page.getByText('지웠습니다.', { exact: true }).waitFor();
+  t.must(!(await rootNames()).includes('d.txt'), '파일 하나 지우기');
+  await page.getByRole('button', { name: '되돌리기' }).click();
+  for (let i = 0; i < 50 && !(await rootNames()).includes('d.txt'); i += 1) await page.waitForTimeout(100);
+  const restored = await fetch(`${A}/api/repos/${repo.id}/raw?path=d.txt`, { headers: auth });
+  t.must((await restored.text()) === '또 새 버전', '파일 하나 지우기 되돌리기 → 지운 그 내용');
+
   // 이름 변경으로 다른 폴더에 옮기면 어디로 갔는지 알리고 되돌릴 수 있다 (예전엔 말없이 목록에서 사라졌다).
   await page.reload();
   await page.getByRole('button', { name: 'b.txt 더보기' }).first().click();

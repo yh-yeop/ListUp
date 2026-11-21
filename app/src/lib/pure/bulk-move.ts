@@ -69,3 +69,15 @@ export interface ExpectedChange {
 export function invertChanges(changes: ExpectedChange[]): ExpectedChange[] {
   return changes.map((change) => ({ path: change.path, blobHash: change.expect, expect: change.blobHash }));
 }
+
+/** `files/commit` 의 `expect` 를 아는 서버의 API 수준. 더 옛 서버는 그 필드를 조용히 무시한다. */
+export const EXPECT_API_LEVEL = 7;
+
+/**
+ * 「되돌리기」를 줄지 — 되돌리기 커밋은 `expect` 덕에 그 사이 바뀐 파일을 덮지 않는다. `expect` 를 무시하는 옛 서버(수준 6 이하)에서는
+ * 그 사이 생긴 같은 이름 파일을 덮거나 옮긴 뒤 고친 새 버전을 지울 수 있으니 버튼을 주지 않는다(휴지통은 그대로). 수준을 모르면
+ * (health 에 닿지 못함) 주지 않는다.
+ */
+export function canUndoByCommit(apiLevel: number | null): boolean {
+  return apiLevel !== null && apiLevel >= EXPECT_API_LEVEL;
+}

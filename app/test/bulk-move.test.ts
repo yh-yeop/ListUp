@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { invertChanges, planBulkMove } from '../src/lib/pure/bulk-move';
+import { canUndoByCommit, invertChanges, planBulkMove } from '../src/lib/pure/bulk-move';
 
 const a = { path: 'a.txt', name: 'a.txt', blobHash: 'ha' };
 const b = { path: '사진/b.jpg', name: 'b.jpg', blobHash: 'hb' };
@@ -58,5 +58,14 @@ describe('방금 한 커밋 되돌리기', () => {
   it('두 번 되돌리면 처음과 같다', () => {
     const plan = planBulkMove([a], '보관', []);
     assert.deepEqual(invertChanges(invertChanges(plan.changes)), plan.changes);
+  });
+});
+
+describe('되돌리기를 줄 서버', () => {
+  it('expect 를 아는 서버(수준 7 이상)에서만 — 옛 서버는 expect 를 무시해 그 사이 바뀐 파일을 덮을 수 있다', () => {
+    assert.equal(canUndoByCommit(7), true);
+    assert.equal(canUndoByCommit(8), true);
+    assert.equal(canUndoByCommit(6), false);
+    assert.equal(canUndoByCommit(null), false, '수준을 모르면 주지 않는다');
   });
 });

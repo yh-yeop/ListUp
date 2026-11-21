@@ -40,7 +40,7 @@ import { downloadFromRepo, pickFiles, pickFolder, type PickedFolder } from '../.
 import { listRepoFolder } from '../../../src/lib/folder-compare';
 import { localFolderSupported } from '../../../src/lib/local-folder';
 import { MAX_FAILURES_SHOWN, describeCommitFailure, describeUploadOutcome } from '../../../src/lib/pure/transfer-report';
-import { invertChanges, planBulkMove, type ExpectedChange } from '../../../src/lib/pure/bulk-move';
+import { canUndoByCommit, invertChanges, planBulkMove, type ExpectedChange } from '../../../src/lib/pure/bulk-move';
 import { TRUNCATED_NOTE, checkUploadPlan, describeUploadCheck } from '../../../src/lib/pure/upload-check';
 import {
   CommitFailed,
@@ -56,6 +56,9 @@ import { useAsync } from '../../../src/lib/useAsync';
 import { fontSize, monoFont, radius, spacing, useTheme } from '../../../src/theme';
 
 /** 웹에서 칠한 줄을 화면 가운데로 — 긴 폴더에서 찾은 파일이 아래에 묻히지 않게. 앱은 그대로 둔다. */
+/** 되돌리기 버튼을 줄 수 없을 때의 안내. */
+const TRASH_HINT = '변경 이력 → 휴지통에서 되돌릴 수 있습니다.';
+
 function scrollIntoViewOnWeb(node: unknown) {
   if (Platform.OS !== 'web' || !node) return;
   (node as { scrollIntoView?: (options: object) => void }).scrollIntoView?.({ block: 'center' });
@@ -110,11 +113,6 @@ export default function RepoFilesScreen() {
   const [moveTarget, setMoveTarget] = useState<string | null>(null);
   /** 찾기 결과에서 폴더를 열었을 때 그 파일 — 폴더 안 여러 줄 중 어느 것인지 잠시 칠해 보인다. */
   const [highlight, setHighlight] = useState<string | null>(null);
-  useEffect(() => {
-    if (!highlight) return;
-    const timer = setTimeout(() => setHighlight(null), 4000);
-    return () => clearTimeout(timer);
-  }, [highlight]);
 
   // 변경 이력에서 넘어온 과거 시점. 있으면 그 시점의 목록을 읽기 전용으로 보여준다.
   // 폴더 이동은 path 상태만 바꾸므로 snapshot 파라미터는 그대로 유지된다.
@@ -158,6 +156,12 @@ export default function RepoFilesScreen() {
   // 폴더를 옮긴 직후에는 새 목록이 올 때까지 이전 폴더의 tree 가 남는다. 그 기준으로
   // 덮어쓰기 확인·「이미 올라가 있음」 판정을 하면 틀리므로 목록이 최신일 때만 올린다.
   const treeFresh = !state.loading && tree?.path === path;
+  // 찾은 파일 줄 강조는 그 폴더 목록이 보인 뒤부터 4초 — 느린 연결에서 목록이 오기 전에 꺼지지 않게.
+  useEffect(() => {
+    if (!highlight || !treeFresh) return;
+    const timer = setTimeout(() => setHighlight(null), 4000);
+    return () => clearTimeout(timer);
+  }, [highlight, treeFresh]);
   const isEditor = hasRole(repo?.role, 'editor');
   // 과거 시점에서는 편집 권한이 있어도 바꿀 수 없다.
   const canEdit = isEditor && !snapshotId;
@@ -260,7 +264,7 @@ export default function RepoFilesScreen() {
       const changes = chosen.map((file) => ({ path: file.path, blobHash: null, expect: file.blobHash }));
       const message = `파일 ${chosen.length}개 삭제`;
       await api.commitFiles(repoId, changes, message);
-      offerUndo(`${chosen.length}개를 지웠습니다.`, changes, message);
+      void offerUndo(`${chosen.length}개를 지웠습니다.`, changes, message);
       stopSelecting();
       state.refresh();
     } catch (err) {
@@ -308,7 +312,7 @@ export default function RepoFilesScreen() {
       const moved = plan.changes.length / 2;
       const message = `파일 ${moved}개를 ${dest || '맨 위'}(으)로 옮김`;
       await api.commitFiles(repoId, plan.changes, message);
-      offerUndo(`${moved}개를 ${dest || '맨 위'}(으)로 옮겼습니다.`, plan.changes, message);
+      void offerUndo(`${moved}개를 ${dest || '맨 위'}(으)로 옮겼습니다.`, plan.changes, message);
       stopSelecting();
       state.refresh();
     } catch (err) {
@@ -324,7 +328,12 @@ export default function RepoFilesScreen() {
    * 방금 한 지우기·옮기기를 토스트의 「되돌리기」로 무른다 — 같은 내용으로 맞바꾼 커밋 하나(lib/pure/bulk-move.ts
    * invertChanges). 그 사이 누가 또 바꿨으면 서버가 409 로 거절하므로 남의 새 버전을 덮지 않는다.
    */
-  function offerUndo(title: string, changes: ExpectedChange[], message: string) {
+  async function offerUndo(title: string, changes: ExpectedChange[], message: string) {
+    // expect 를 무시하는 옛 서버에서는 되돌리기가 그 사이 바뀐 파일을 덮을 수 있어 버튼 없이 휴지통만 알린다.
+    if (!canUndoByCommit((await getServerLimits()).apiLevel)) {
+      notify(title, TRASH_HINT);
+      return;
+    }
     offerUndoWith(title, '실수였다면 바로 되돌릴 수 있습니다. 나중에는 변경 이력 → 휴지통에서.', async () => {
       await api.commitFiles(repoId, invertChanges(changes), `되돌리기: ${message}`);
     });
@@ -332,9 +341,13 @@ export default function RepoFilesScreen() {
 
   /** 「되돌리기」 버튼이 달린 안내 — 누르면 `undo` 를 하고 결과를 알린 뒤 목록을 다시 읽는다. */
   function offerUndoWith(title: string, message: string, undo: () => Promise<void>) {
+    // 토스트가 닫히기 전에 두 번 눌러도 한 번만 — 두 번째는 409("그 사이 바뀐 파일")나 404 로 헷갈리게 알렸다.
+    let used = false;
     notifyWithAction(title, message, {
       label: '되돌리기',
       onPress: () => {
+        if (used) return;
+        used = true;
         void (async () => {
           try {
             await undo();
@@ -596,12 +609,19 @@ export default function RepoFilesScreen() {
         const inside = await listRepoFolder(repoId, targetPath);
         const changes = inside.map((entry) => ({ path: entry.path, blobHash: null, expect: entry.blobHash }));
         const message = `삭제: ${targetPath}/ (${changes.length}개)`;
-        await api.commitFiles(repoId, changes, message);
-        offerUndo(`폴더를 지웠습니다 (파일 ${changes.length}개).`, changes, message);
+        if (await deleteByCommit(targetPath, changes, message)) {
+          void offerUndo(`폴더를 지웠습니다 (파일 ${changes.length}개).`, changes, message);
+        } else notify('지웠습니다.', TRASH_HINT);
+      } else if (file) {
+        // 파일 하나도 목록에서 본 내용일 때만 지운다 — DELETE 로 지우면 그 사이 올라온 새 버전을 지우고, 「되돌리기」는 목록의
+        // 옛 내용을 되살려 새 버전이 머리에서 사라졌다(2026-11-21 검토).
+        const changes = [{ path: file.path, blobHash: null, expect: file.blobHash }];
+        const message = `삭제: ${file.path}`;
+        if (await deleteByCommit(targetPath, changes, message)) void offerUndo('지웠습니다.', changes, message);
+        else notify('지웠습니다.', TRASH_HINT);
       } else {
         await api.deletePath(repoId, targetPath);
-        if (file) offerUndo('지웠습니다.', [{ path: file.path, blobHash: null, expect: file.blobHash }], `삭제: ${file.path}`);
-        else notify('지웠습니다.', '변경 이력 → 휴지통에서 되돌릴 수 있습니다.');
+        notify('지웠습니다.', TRASH_HINT);
       }
       state.refresh();
     } catch (err) {
@@ -610,6 +630,24 @@ export default function RepoFilesScreen() {
     } finally {
       setBusyPath(null);
     }
+  }
+
+  /**
+   * 읽어 둔 내용대로만 지우는 커밋(expect) — 그래야 「되돌리기」를 줄 수 있다. 커밋이 413 이면(저장소가 이미 용량 한도를 넘어
+   * 지우기만 하는 커밋도 막힘, 또는 옛 서버가 JSON 본문 1MB 를 넘는 큰 폴더를 못 받음) 예전처럼 DELETE 로 지운다 — 지우기는
+   * 용량을 줄이는 길이라 막히면 안 된다. 커밋으로 지웠으면 true(되돌리기 가능), DELETE 로 지웠으면 false.
+   */
+  async function deleteByCommit(targetPath: string, changes: ExpectedChange[], message: string): Promise<boolean> {
+    if (changes.length > 0) {
+      try {
+        await api.commitFiles(repoId, changes, message);
+        return true;
+      } catch (err) {
+        if (!(err instanceof ApiError && err.status === 413)) throw err;
+      }
+    }
+    await api.deletePath(repoId, targetPath);
+    return false;
   }
 
   function startRename(targetPath: string, isFolder: boolean) {
