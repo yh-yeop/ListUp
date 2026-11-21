@@ -5,16 +5,19 @@ import { KeyboardAvoidingView, Platform, Pressable, View } from 'react-native';
 import {
   Body,
   Button,
+  Caption,
   Card,
   ErrorNotice,
   Field,
   Input,
+  Notice,
   PasswordInput,
   Screen,
   Subtitle,
   Title,
 } from '../src/components/ui';
 import { RememberLogin } from '../src/components/RememberLogin';
+import { clearAccountNotice, useAccountNotice } from '../src/lib/account-notice';
 import { credentialsSupported, loadLogin } from '../src/lib/credentials';
 import { PendingInviteNote } from '../src/components/InviteSummary';
 import { useAuth } from '../src/state/auth';
@@ -32,6 +35,11 @@ export default function LoginScreen() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [remember, setRemember] = useState(credentialsSupported);
+  /** 아이디·비밀번호가 틀렸다(401) — 오류 아래에 되찾는 길을 바로 보인다. */
+  const [wrongCredentials, setWrongCredentials] = useState(false);
+  // 401 로 로그인이 끊겨 여기로 왔으면 이유를 알린다. 화면을 떠나면 끝낸다(다른 서버의 로그인 화면에 남지 않게).
+  const sessionEnded = useAccountNotice('session-ended');
+  useEffect(() => () => clearAccountNotice('session-ended'), []);
 
   // 이 서버에 저장된 계정이 있으면 채워 둔다. 직접 로그아웃했거나 비밀번호가 바뀌어 자동 로그인이
   // 안 된 경우, 여기서 한 번 누르면 된다. 비밀번호가 지워진 경우(바뀌었음)는 이메일만 채운다.
@@ -58,6 +66,7 @@ export default function LoginScreen() {
   const submit = async () => {
     if (busy) return;
     setError(null);
+    setWrongCredentials(false);
     setBusy(true);
     try {
       await login(email.trim(), password, { remember });
@@ -65,6 +74,7 @@ export default function LoginScreen() {
       router.replace('/');
     } catch (err) {
       setError(err instanceof ApiError ? err.message : '로그인에 실패했습니다.');
+      setWrongCredentials(err instanceof ApiError && err.status === 401);
     } finally {
       setBusy(false);
     }
@@ -96,6 +106,13 @@ export default function LoginScreen() {
             </Subtitle>
           </View>
 
+          {sessionEnded ? (
+            <Notice tone="warning" icon="log-out-outline" title="로그인이 끊겼습니다">
+              비밀번호가 바뀌었거나, 다른 기기에서 「다른 기기 모두 로그아웃」을 눌렀거나, 로그인한 지 오래돼 만료됐을 수
+              있습니다. 다시 로그인해 주세요.
+            </Notice>
+          ) : null}
+
           <PendingInviteNote action="로그인" />
           <Card style={{ gap: spacing.lg }}>
             <Field label="아이디">
@@ -122,21 +139,33 @@ export default function LoginScreen() {
             <RememberLogin value={remember} onChange={setRemember} />
 
             {error ? <ErrorNotice message={error} /> : null}
+            {wrongCredentials ? (
+              <Caption>
+                아이디는 대소문자를 가리지 않습니다. 예전에 이메일로 가입했다면 그 이메일이 아이디입니다. 기억나지 않으면
+                아래에서 찾을 수 있습니다.
+              </Caption>
+            ) : null}
 
             <Button label="로그인" onPress={submit} loading={busy} full />
 
-            <Pressable
-              onPress={() =>
-                router.push({ pathname: '/reset-password', params: email.trim() ? { email: email.trim() } : {} })
-              }
-              accessibilityRole="link"
-              hitSlop={12}
-              style={{ alignSelf: 'center' }}
-            >
-              <Body muted style={{ fontSize: fontSize.sm }}>
-                비밀번호를 잊었나요?
-              </Body>
-            </Pressable>
+            <View style={{ flexDirection: 'row', justifyContent: 'center', flexWrap: 'wrap', gap: spacing.lg }}>
+              <Pressable
+                onPress={() =>
+                  router.push({ pathname: '/reset-password', params: email.trim() ? { email: email.trim() } : {} })
+                }
+                accessibilityRole="link"
+                hitSlop={12}
+              >
+                <Body muted style={{ fontSize: fontSize.sm }}>
+                  비밀번호를 잊었나요?
+                </Body>
+              </Pressable>
+              <Pressable onPress={() => router.push('/forgot-id')} accessibilityRole="link" hitSlop={12}>
+                <Body muted style={{ fontSize: fontSize.sm }}>
+                  아이디를 잊었나요?
+                </Body>
+              </Pressable>
+            </View>
 
             <View style={{ flexDirection: 'row', justifyContent: 'center', gap: spacing.xs }}>
               <Body muted>계정이 없으신가요?</Body>
@@ -163,6 +192,10 @@ export default function LoginScreen() {
               </Body>
             </Pressable>
           </View>
+
+          <Pressable onPress={() => router.push('/help')} accessibilityRole="link" hitSlop={12} style={{ alignSelf: 'center' }}>
+            <Body style={{ color: colors.accent, fontSize: fontSize.sm, fontWeight: '600' }}>처음이세요? ListUp 사용법</Body>
+          </Pressable>
         </View>
       </Screen>
     </KeyboardAvoidingView>

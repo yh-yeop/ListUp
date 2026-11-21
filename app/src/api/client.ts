@@ -1,6 +1,7 @@
 import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 import { MAX_FILE_SIZE } from '@listup/shared';
+import { CONNECTION_FAILED, NO_RESPONSE } from '../lib/connection-error';
 import type {
   ApiErrorBody,
   ApiErrorCode,
@@ -16,8 +17,11 @@ import type {
   MyProposal,
   Proposal,
   ProposalDetail,
+  RecoveryCodesIssued,
+  RecoveryCodesStatus,
   RepoEvent,
   RepoSummary,
+  ResetPasswordResponse,
   Role,
   Snapshot,
   TreeListing,
@@ -240,7 +244,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     }, options.timeoutMs ?? REQUEST_TIMEOUT_MS);
   }
   const timeoutError = () =>
-    new ApiError(0, 'internal', '서버 응답이 없습니다. 잠시 후 다시 시도해 주세요.');
+    new ApiError(0, 'internal', `${NO_RESPONSE} 잠시 후 다시 시도해 주세요.`);
 
   try {
     let response: Response;
@@ -256,7 +260,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
       throw new ApiError(
         0,
         'internal',
-        `서버에 연결할 수 없습니다. (${apiBaseUrl})\n서버가 켜져 있는지 확인해 주세요.`,
+        `${CONNECTION_FAILED} (${apiBaseUrl})\n서버가 켜져 있는지 확인해 주세요.`,
         err,
       );
     }
@@ -358,7 +362,7 @@ function sendBytes<T>(
     if (onProgress) xhr.upload.onprogress = (event) => onProgress(event.loaded);
     const networkError = () => {
       settle();
-      reject(new ApiError(0, 'internal', `서버에 연결할 수 없습니다. (${usedBaseUrl})\n연결을 확인해 주세요.`));
+      reject(new ApiError(0, 'internal', `${CONNECTION_FAILED} (${usedBaseUrl})\n연결을 확인해 주세요.`));
     };
     xhr.onerror = networkError;
     xhr.ontimeout = networkError;
@@ -431,9 +435,19 @@ export const api = {
   login: (payload: { email: string; password: string }) =>
     request<{ token: string; user: User }>('/api/auth/login', { method: 'POST', body: payload }),
 
-  /** 서버 운영자가 발급한 재설정 코드로 새 비밀번호를 정한다. 성공하면 바로 로그인된다. */
-  resetPassword: (payload: { email: string; code: string; newPassword: string }) =>
-    request<{ token: string; user: User }>('/api/auth/reset', { method: 'POST', body: payload }),
+  /**
+   * 재설정 코드(운영자) 또는 복구 코드(본인, apiLevel 7)로 새 비밀번호를 정한다. 성공하면 바로 로그인된다.
+   * 복구 코드면 아이디를 비워도 된다 — 응답의 user.email 이 아이디다.
+   */
+  resetPassword: (payload: { email?: string; code: string; newPassword: string }) =>
+    request<ResetPasswordResponse>('/api/auth/reset', { method: 'POST', body: payload }),
+
+  /** 내 복구 코드가 몇 개 남았나 (apiLevel 7). 옛 서버는 404. */
+  recoveryCodes: () => request<RecoveryCodesStatus>('/api/auth/recovery-codes'),
+
+  /** 복구 코드를 새로 만든다 — 이전 것은 모두 못 쓰게 된다. 원문은 이 응답에서 한 번만 (apiLevel 7). */
+  issueRecoveryCodes: (payload: { currentPassword: string }) =>
+    request<RecoveryCodesIssued>('/api/auth/recovery-codes', { method: 'POST', body: payload }),
 
   me: () => request<{ user: User }>('/api/auth/me'),
 

@@ -121,6 +121,7 @@ Authorization: Bearer <token>
 
 ```bash
 npm run reset-password -- hong     # 아이디. 서버가 켜져 있어도 됩니다
+npm run reset-password -- --find 홍  # 아이디를 잊은 사람 — 이름·아이디 일부로 찾기(최대 20개)
 ```
 
 - 코드는 초대 코드와 같은 모양(`ABCDE-12345`)이고 **30분 동안 한 번** 씁니다. 새로 발급하면 그 사람의

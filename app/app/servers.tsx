@@ -240,7 +240,15 @@ function ServerCard({
             {lastUsed}
           </Caption>
         </Pressable>
-        <View style={{ justifyContent: 'center', paddingRight: spacing.sm }}>
+        <View style={{ justifyContent: 'center', paddingRight: spacing.sm, flexDirection: 'row', alignItems: 'center' }}>
+          {/* 닿지 않거나 버전이 다르면 무엇을 확인할지 알려 주는 화면으로. */}
+          {check && check.status !== 'ok' ? (
+            <IconButton
+              icon="medkit-outline"
+              label={`${title} 연결 문제 해결`}
+              onPress={() => router.push({ pathname: '/troubleshoot', params: { url: serverUrl(entry) } })}
+            />
+          ) : null}
           <IconButton
             icon="settings-outline"
             label={`${title} 서버 설정`}

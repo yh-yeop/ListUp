@@ -1,5 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useState, type ComponentProps, type ReactNode } from 'react';
+import { router } from 'expo-router';
+import { useState, type ComponentProps, type ComponentPropsWithRef, type ReactNode } from 'react';
 import {
   ActivityIndicator,
   Platform,
@@ -14,6 +15,7 @@ import {
   type ViewStyle,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { isConnectionProblem } from '../lib/connection-error';
 import { CONTENT_MAX_WIDTH, fontSize, radius, spacing, useTheme } from '../theme';
 
 type IconName = ComponentProps<typeof Ionicons>['name'];
@@ -103,16 +105,24 @@ export function Body({
   muted,
   numberOfLines,
   style,
+  selectable,
+  heading,
 }: {
   children: ReactNode;
   muted?: boolean;
   numberOfLines?: number;
   style?: StyleProp<TextStyle>;
+  /** 길게 눌러(웹은 끌어서) 복사할 수 있게 — 명령어·코드처럼 옮겨 적을 글. */
+  selectable?: boolean;
+  /** 카드 제목처럼 스크린리더가 제목으로 읽을 줄. */
+  heading?: boolean;
 }) {
   const { colors } = useTheme();
   return (
     <Text
       numberOfLines={numberOfLines}
+      selectable={selectable}
+      role={heading ? 'heading' : undefined}
       style={[{ color: muted ? colors.textMuted : colors.text, fontSize: fontSize.md }, style]}
     >
       {children}
@@ -282,7 +292,7 @@ export function Field({
 
 const INPUT_FOCUS_BORDER = 2;
 
-export function Input(props: ComponentProps<typeof TextInput>) {
+export function Input(props: ComponentPropsWithRef<typeof TextInput>) {
   const { colors } = useTheme();
   const [focused, setFocused] = useState(false);
   // 포커스 때 테두리가 두꺼워져도 안쪽 글자가 움직이지 않게 여백으로 상쇄한다.
@@ -437,6 +447,7 @@ export function EmptyState({
 
 export function ErrorNotice({ message, onRetry }: { message: string; onRetry?: () => void }) {
   const { colors } = useTheme();
+  const connection = isConnectionProblem(message);
   return (
     <View
       style={{
@@ -452,7 +463,67 @@ export function ErrorNotice({ message, onRetry }: { message: string; onRetry?: (
           {message}
         </Text>
       </View>
-      {onRetry ? <Button label="다시 시도" variant="ghost" compact onPress={onRetry} /> : null}
+      {onRetry || connection ? (
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm }}>
+          {onRetry ? <Button label="다시 시도" variant="ghost" compact onPress={onRetry} /> : null}
+          {/* 서버에 닿지 못한 오류면 무엇을 확인할지 알려 주는 화면으로. */}
+          {connection ? (
+            <Button
+              label="연결 문제 해결"
+              icon="medkit-outline"
+              variant="ghost"
+              compact
+              onPress={() => router.push('/troubleshoot')}
+            />
+          ) : null}
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+/**
+ * 안내 상자 — 오류가 아닌 알림(끊긴 이유, 찾은 아이디, 권유). 제목 한 줄 + 설명 + 아래에 버튼들.
+ * 닫을 수 있으면 오른쪽 위에 닫기(onDismiss).
+ */
+export function Notice({
+  tone = 'info',
+  icon,
+  title,
+  children,
+  actions,
+  onDismiss,
+}: {
+  tone?: 'info' | 'success' | 'warning';
+  icon?: IconName;
+  title: string;
+  children?: ReactNode;
+  actions?: ReactNode;
+  onDismiss?: () => void;
+}) {
+  const { colors } = useTheme();
+  const palette = {
+    info: { bg: colors.accentSoft, fg: colors.accent, icon: 'information-circle' as IconName },
+    success: { bg: colors.successSoft, fg: colors.success, icon: 'checkmark-circle' as IconName },
+    warning: { bg: colors.warningSoft, fg: colors.warning, icon: 'alert-circle' as IconName },
+  }[tone];
+  return (
+    <View style={{ backgroundColor: palette.bg, borderRadius: radius.md, padding: spacing.md, gap: spacing.sm }}>
+      <View style={{ flexDirection: 'row', gap: spacing.sm, alignItems: 'flex-start' }}>
+        <Ionicons name={icon ?? palette.icon} size={18} color={palette.fg} style={{ marginTop: 1 }} />
+        <View style={{ flex: 1, gap: 2 }}>
+          <Text role="status" style={{ color: palette.fg, fontSize: fontSize.sm, fontWeight: '600', lineHeight: 20 }}>
+            {title}
+          </Text>
+          {typeof children === 'string' ? (
+            <Text style={{ color: colors.text, fontSize: fontSize.sm, lineHeight: 20 }}>{children}</Text>
+          ) : (
+            children
+          )}
+        </View>
+        {onDismiss ? <IconButton icon="close" label="안내 닫기" onPress={onDismiss} /> : null}
+      </View>
+      {actions ? <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm }}>{actions}</View> : null}
     </View>
   );
 }

@@ -1,7 +1,8 @@
 import { Ionicons } from '@expo/vector-icons';
+import * as Clipboard from 'expo-clipboard';
 import { Stack, router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { ActivityIndicator, Platform, Pressable, RefreshControl, Text, View } from 'react-native';
+import { ActivityIndicator, Platform, Pressable, RefreshControl, Text, View, type TextInput } from 'react-native';
 import {
   MAX_FILES_PER_REPO,
   ROLE_LABEL,
@@ -32,7 +33,9 @@ import {
 import { Breadcrumb, RepoNav } from '../../../src/components/RepoNav';
 import { SearchResults } from '../../../src/components/SearchResults';
 import { ApiError, api, getServerLimits, type UploadSource } from '../../../src/api/client';
-import { confirmAction, notify, notifyError } from '../../../src/lib/dialogs';
+import { confirmAction, notify, notifyError, notifySuccess } from '../../../src/lib/dialogs';
+import { parentPath, shortcutsSupported, useKeyboardShortcuts } from '../../../src/lib/shortcuts';
+import { nextSortOrder, sortDirs, sortFiles, useFileSort, type SortKey, type SortOrder } from '../../../src/lib/file-sort';
 import { downloadFromRepo, pickFiles, pickFolder, type PickedFolder } from '../../../src/lib/files';
 import { listRepoFolder } from '../../../src/lib/folder-compare';
 import { localFolderSupported } from '../../../src/lib/local-folder';
@@ -72,9 +75,13 @@ export default function RepoFilesScreen() {
     snapshot,
     message: snapshotMessage,
     at: snapshotAt,
-  } = useLocalSearchParams<{ repoId: string; snapshot?: string; message?: string; at?: string }>();
+    path: initialPath,
+  } = useLocalSearchParams<{ repoId: string; snapshot?: string; message?: string; at?: string; path?: string }>();
   const { colors } = useTheme();
-  const [path, setPath] = useState('');
+  // 보고 있는 폴더는 주소의 ?path= 에도 남긴다 — 새로고침·북마크·주소 공유로 같은 폴더가 열린다.
+  // 주소에서 읽는 것은 처음 한 번뿐이고, 그 뒤로는 이 상태가 기준이다(openFolder 가 주소를 따라 고친다).
+  const [path, setPath] = useState(() => (typeof initialPath === 'string' ? (normalizePath(initialPath) ?? '') : ''));
+  const [sort, setSort] = useFileSort();
   // 올리기는 화면 밖(전송 스토어)에서 이어진다 — 다른 탭에 다녀와도 이 저장소에 올리는 중이면 버튼을 막는다.
   const transfers = useTransfers(repoId);
   const uploading = transfers.active !== null;
@@ -87,6 +94,7 @@ export default function RepoFilesScreen() {
   const [menuPath, setMenuPath] = useState<string | null>(null);
   /** 저장소 전체 파일 이름 검색어. 있으면 폴더 목록 대신 검색 결과를 보인다. */
   const [query, setQuery] = useState('');
+  const searchRef = useRef<TextInput>(null);
 
   // 변경 이력에서 넘어온 과거 시점. 있으면 그 시점의 목록을 읽기 전용으로 보여준다.
   // 폴더 이동은 path 상태만 바꾸므로 snapshot 파라미터는 그대로 유지된다.
@@ -125,6 +133,8 @@ export default function RepoFilesScreen() {
 
   const repo = state.data?.repo;
   const tree = state.data?.tree;
+  const dirs = tree ? sortDirs(tree.dirs, sort) : [];
+  const files = tree ? sortFiles(tree.files, sort) : [];
   // 폴더를 옮긴 직후에는 새 목록이 올 때까지 이전 폴더의 tree 가 남는다. 그 기준으로
   // 덮어쓰기 확인·「이미 올라가 있음」 판정을 하면 틀리므로 목록이 최신일 때만 올린다.
   const treeFresh = !state.loading && tree?.path === path;
@@ -136,6 +146,43 @@ export default function RepoFilesScreen() {
     setEditing(null);
     setMenuPath(null);
     setPath(nextPath);
+    router.setParams({ path: nextPath || undefined });
+  }
+
+  // 웹·PC 앱 단축키(lib/pure/shortcuts.ts). 처리하지 않은 키는 false — 브라우저 기본 동작에 맡긴다.
+  useKeyboardShortcuts((action) => {
+    switch (action) {
+      case 'focus-search':
+        searchRef.current?.focus();
+        return true;
+      case 'folder-up': {
+        const parent = query.trim() ? null : parentPath(path);
+        if (parent === null) return false;
+        openFolder(parent);
+        return true;
+      }
+      case 'escape':
+        if (editing) setEditing(null);
+        else if (menuPath) setMenuPath(null);
+        else if (query) {
+          setQuery('');
+          // 칸을 비운 뒤 다음 단축키(? 등)가 칸에 글자로 들어가지 않게 포커스를 놓는다.
+          searchRef.current?.blur();
+        } else return false;
+        return true;
+      case 'refresh':
+        state.refresh();
+        return true;
+      case 'help':
+        router.push('/help');
+        return true;
+    }
+  });
+
+  /** 경로를 클립보드로 — 채팅으로 "이 파일" 을 가리킬 때. */
+  async function copyPath(targetPath: string) {
+    await Clipboard.setStringAsync(targetPath);
+    notifySuccess('경로를 복사했습니다.', targetPath);
   }
 
   function toggleMenu(targetPath: string) {
@@ -518,8 +565,9 @@ export default function RepoFilesScreen() {
           <Input
             value={query}
             onChangeText={setQuery}
-            placeholder="저장소 전체에서 파일 찾기"
+            placeholder={shortcutsSupported ? '저장소 전체에서 파일 찾기 ( / )' : '저장소 전체에서 파일 찾기'}
             accessibilityLabel="파일 찾기"
+            ref={searchRef}
             autoCapitalize="none"
             autoCorrect={false}
             clearButtonMode="while-editing"
@@ -543,6 +591,9 @@ export default function RepoFilesScreen() {
           ) : (
             <>
               <Breadcrumb path={path} onNavigate={openFolder} />
+              {!state.loading && tree.dirs.length + tree.files.length > 1 ? (
+                <SortBar order={sort} onChange={setSort} />
+              ) : null}
 
               {state.loading ? (
                 // 폴더를 옮기는 동안 이전 폴더 목록이 새 브레드크럼 아래 남지 않게 한다.
@@ -563,13 +614,33 @@ export default function RepoFilesScreen() {
                         snapshotId
                           ? undefined
                           : canEdit
-                            ? '파일을 올리면 여기에 표시됩니다.'
-                            : '편집 권한이 있는 멤버가 파일을 올리면 여기에 표시됩니다.'
+                            ? CAN_PICK_FOLDER
+                              ? '이 기기의 파일이나 폴더를 올리면 여기에 표시됩니다. 올린 파일은 멤버 모두가 내려받을 수 있습니다.'
+                              : '이 기기의 파일을 올리면 여기에 표시됩니다. 올린 파일은 멤버 모두가 내려받을 수 있습니다.'
+                            : '편집 권한이 있는 멤버가 파일을 올리면 여기에 표시됩니다. 올리고 싶은 파일이 있으면 변경 제안으로 보내세요.'
+                      }
+                      action={
+                        // 위 버튼(「파일 올리기」·「변경 제안 만들기」)과 이름이 겹치지 않게 — e2e 가 이름 일부로 찾는다.
+                        snapshotId || path !== '' ? undefined : canEdit ? (
+                          <Button
+                            label="올릴 파일 고르기"
+                            icon="cloud-upload-outline"
+                            onPress={upload}
+                            disabled={uploading || preparing || !treeFresh}
+                          />
+                        ) : (
+                          <Button
+                            label="제안으로 파일 보내기"
+                            icon="git-pull-request-outline"
+                            variant="secondary"
+                            onPress={() => router.push(`/repo/${repoId}/new-proposal?path=${encodeURIComponent(path)}`)}
+                          />
+                        )
                       }
                     />
                   ) : (
                     <>
-                      {tree.dirs.map((dir, index) => (
+                      {dirs.map((dir, index) => (
                         <View key={dir.path}>
                           {index > 0 ? <Divider /> : null}
                           {editing?.path === dir.path ? (
@@ -618,19 +689,27 @@ export default function RepoFilesScreen() {
                                   onPress={() => void download(dir.path, `${dir.name}.zip`, true)}
                                 />
                               )}
-                              {canEdit ? (
-                                <IconButton
-                                  icon="ellipsis-horizontal"
-                                  label={`${dir.name} 폴더 더보기`}
-                                  expanded={menuPath === dir.path}
-                                  onPress={() => toggleMenu(dir.path)}
-                                />
-                              ) : null}
+                              <IconButton
+                                icon="ellipsis-horizontal"
+                                label={`${dir.name} 폴더 더보기`}
+                                expanded={menuPath === dir.path}
+                                onPress={() => toggleMenu(dir.path)}
+                              />
                               <Ionicons name="chevron-forward" size={18} color={colors.textFaint} />
                             </Pressable>
                           )}
-                          {menuPath === dir.path && canEdit && editing?.path !== dir.path ? (
+                          {menuPath === dir.path && editing?.path !== dir.path ? (
                             <RowMenu>
+                              <Button
+                                label="경로 복사"
+                                accessibilityLabel={`${dir.name} 폴더 경로 복사`}
+                                icon="copy-outline"
+                                variant="secondary"
+                                compact
+                                onPress={fromMenu(() => void copyPath(dir.path))}
+                              />
+                              {canEdit ? (
+                                <>
                               <Button
                                 label="이름 변경"
                                 accessibilityLabel={`${dir.name} 폴더 이름 변경`}
@@ -647,14 +726,16 @@ export default function RepoFilesScreen() {
                                 compact
                                 onPress={fromMenu(() => void remove(dir.path, true))}
                               />
+                                </>
+                              ) : null}
                             </RowMenu>
                           ) : null}
                         </View>
                       ))}
 
-                      {tree.files.map((file, index) => (
+                      {files.map((file, index) => (
                         <View key={file.path}>
-                          {index > 0 || tree.dirs.length > 0 ? <Divider /> : null}
+                          {index > 0 || dirs.length > 0 ? <Divider /> : null}
                           {editing?.path === file.path ? (
                             <RenameRow
                               icon={iconForMime(file.mimeType)}
@@ -705,20 +786,26 @@ export default function RepoFilesScreen() {
                                     label={`${file.name} 내려받기`}
                                     onPress={() => void download(file.path, file.name)}
                                   />
-                                  {!snapshotId || canEdit ? (
-                                    <IconButton
-                                      icon="ellipsis-horizontal"
-                                      label={`${file.name} 더보기`}
-                                      expanded={menuPath === file.path}
-                                      onPress={() => toggleMenu(file.path)}
-                                    />
-                                  ) : null}
+                                  <IconButton
+                                    icon="ellipsis-horizontal"
+                                    label={`${file.name} 더보기`}
+                                    expanded={menuPath === file.path}
+                                    onPress={() => toggleMenu(file.path)}
+                                  />
                                 </>
                               )}
                             </Pressable>
                           )}
                           {menuPath === file.path && editing?.path !== file.path ? (
                             <RowMenu>
+                              <Button
+                                label="경로 복사"
+                                accessibilityLabel={`${file.name} 경로 복사`}
+                                icon="copy-outline"
+                                variant="secondary"
+                                compact
+                                onPress={fromMenu(() => void copyPath(file.path))}
+                              />
                               {!snapshotId ? (
                                 <Button
                                   label="버전"
@@ -830,6 +917,57 @@ function RowMenu({ children }: { children: ReactNode }) {
     >
       {children}
     </Row>
+  );
+}
+
+const SORT_LABEL: Record<SortKey, string> = { name: '이름', size: '크기', updated: '최근' };
+const SORT_KEYS: SortKey[] = ['name', 'size', 'updated'];
+
+/**
+ * 정렬 칩 — 누르면 그 기준으로, 이미 그 기준이면 방향을 뒤집는다. 폴더는 늘 위(lib/pure/file-sort.ts).
+ * 화살표는 지금 방향(위 = 작은 것·가나다·오래된 것부터).
+ */
+function SortBar({ order, onChange }: { order: SortOrder; onChange: (order: SortOrder) => void }) {
+  const { colors } = useTheme();
+  const direction = (key: SortKey, desc: boolean) =>
+    key === 'name' ? (desc ? '가나다 거꾸로' : '가나다순') : key === 'size' ? (desc ? '큰 것부터' : '작은 것부터') : desc ? '새것부터' : '오래된 것부터';
+  return (
+    <View
+      role="toolbar"
+      aria-label="정렬"
+      style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: spacing.sm }}
+    >
+      <Caption>정렬</Caption>
+      {SORT_KEYS.map((key) => {
+        const active = order.key === key;
+        return (
+          <Pressable
+            key={key}
+            onPress={() => onChange(nextSortOrder(order, key))}
+            accessibilityRole="button"
+            accessibilityLabel={`${SORT_LABEL[key]}순 정렬${active ? `, 지금 ${direction(key, order.desc)}` : ''}`}
+            aria-pressed={active}
+            style={({ pressed }) => ({
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: 2,
+              paddingVertical: spacing.xs,
+              paddingHorizontal: spacing.md,
+              borderRadius: radius.pill,
+              backgroundColor: active ? colors.accentSoft : colors.surfaceAlt,
+              opacity: pressed ? 0.7 : 1,
+            })}
+          >
+            <Text style={{ color: active ? colors.accent : colors.textMuted, fontSize: fontSize.sm, fontWeight: '600' }}>
+              {SORT_LABEL[key]}
+            </Text>
+            {active ? (
+              <Ionicons name={order.desc ? 'arrow-down' : 'arrow-up'} size={13} color={colors.accent} />
+            ) : null}
+          </Pressable>
+        );
+      })}
+    </View>
   );
 }
 

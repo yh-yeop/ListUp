@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { API_VERSION, REQUIRED_SERVER_API_LEVEL, type HealthResponse } from '@listup/shared';
 import { DEFAULT_API_BASE_URL, IS_CLIENT_BUILD } from '../api/client';
 import { serverUrlCandidates } from '../lib/pure/server-url';
+import type { UnreachableReason } from '../lib/pure/troubleshoot';
 import {
   DEFAULT_SERVER_ID,
   LEGACY_KEYS,
@@ -54,6 +55,12 @@ export function serverTitle(entry: ServerEntry): string {
   return isDefaultServer(entry) ? '기본 서버' : describeUrl(entry.url);
 }
 
+/** 목록에서 그 주소인 서버의 이름. 목록에 없으면 null. */
+export function findServerTitle(servers: ServerEntry[], url: string): string | null {
+  const entry = servers.find((e) => serverUrl(e) === url);
+  return entry ? serverTitle(entry) : null;
+}
+
 export function findServer(store: ServerStore, id: string): ServerEntry | undefined {
   return store.servers.find((entry) => entry.id === id);
 }
@@ -87,7 +94,8 @@ export function normalizeServerUrl(raw: string): string | null {
  */
 export type ServerCheck =
   | { status: 'ok'; version: string | null; name: string | null }
-  | { status: 'unreachable' }
+  /** reason·httpStatus 는 연결 문제 해결 화면이 무엇을 확인할지 고르는 데 쓴다(lib/pure/troubleshoot.ts). */
+  | { status: 'unreachable'; reason?: UnreachableReason; httpStatus?: number }
   | { status: 'server-older' | 'app-older'; version: string | null };
 
 /**
@@ -96,12 +104,26 @@ export type ServerCheck =
  */
 export async function checkServer(url: string): Promise<ServerCheck> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), HEALTH_TIMEOUT_MS);
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, HEALTH_TIMEOUT_MS);
   try {
-    const response = await fetch(`${url}/api/health`, { signal: controller.signal });
-    if (!response.ok) return { status: 'unreachable' };
-    const body = (await response.json()) as Partial<HealthResponse> | null;
-    if (body?.ok !== true) return { status: 'unreachable' };
+    let response: Response;
+    try {
+      response = await fetch(`${url}/api/health`, { signal: controller.signal });
+    } catch {
+      return { status: 'unreachable', reason: timedOut ? 'timeout' : 'network' };
+    }
+    if (!response.ok) return { status: 'unreachable', reason: 'http', httpStatus: response.status };
+    let body: Partial<HealthResponse> | null;
+    try {
+      body = (await response.json()) as Partial<HealthResponse> | null;
+    } catch {
+      return { status: 'unreachable', reason: timedOut ? 'timeout' : 'not-listup' };
+    }
+    if (body?.ok !== true) return { status: 'unreachable', reason: 'not-listup' };
     const version = typeof body.version === 'string' ? body.version : null;
     // apiVersion 이 없는 서버는 버전 확인을 넣기 전(1.0.0)이라 1 이다.
     const apiVersion = typeof body.apiVersion === 'number' ? body.apiVersion : 1;
@@ -114,7 +136,7 @@ export async function checkServer(url: string): Promise<ServerCheck> {
     const name = typeof body.serverName === 'string' && body.serverName.trim() ? body.serverName.trim() : null;
     return { status: 'ok', version, name };
   } catch {
-    return { status: 'unreachable' };
+    return { status: 'unreachable', reason: 'network' };
   } finally {
     clearTimeout(timer);
   }

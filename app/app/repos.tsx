@@ -22,6 +22,8 @@ import { ApiError, api } from '../src/api/client';
 import { REPO_SEARCH_MIN, searchRepos } from '../src/lib/search';
 import { useAsync } from '../src/lib/useAsync';
 import { useAuth } from '../src/state/auth';
+import { AccountNoticeCard } from '../src/components/AccountNoticeCard';
+import { useKeyboardShortcuts } from '../src/lib/shortcuts';
 import { fontSize, spacing, useTheme } from '../src/theme';
 
 export default function ReposScreen() {
@@ -61,6 +63,20 @@ export default function ReposScreen() {
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []),
   );
+
+  // 웹·PC 앱 단축키 — 이 화면에서는 새로고침·사용법만.
+  useKeyboardShortcuts((action) => {
+    if (action === 'refresh') {
+      state.refresh();
+      mine.refresh();
+      return true;
+    }
+    if (action === 'help') {
+      router.push('/help');
+      return true;
+    }
+    return false;
+  });
 
   const submit = async () => {
     if (busy) return;
@@ -114,6 +130,8 @@ export default function ReposScreen() {
           ),
         }}
       />
+
+      <AccountNoticeCard />
 
       <View style={{ gap: spacing.xs }}>
         <Title>내 저장소</Title>
@@ -194,7 +212,20 @@ export default function ReposScreen() {
           <EmptyState
             icon="folder-outline"
             title="아직 저장소가 없습니다"
-            description="새 저장소를 만들거나, 받은 초대 코드로 다른 사람의 저장소에 참여해 보세요."
+            description="받은 초대 코드가 있으면 넣어서 다른 사람의 저장소에 참여하고, 없으면 내 저장소를 시작해 다른 사람을 초대하세요."
+            action={
+              // 위 버튼(「새 저장소」·「초대 코드로 참여」)과 이름이 겹치지 않게 — 화면 읽기·e2e 가 이름으로 찾는다.
+              <Row gap={spacing.sm} wrap style={{ justifyContent: 'center' }}>
+                <Button label="초대 코드 넣기" icon="key-outline" onPress={() => router.push('/join')} />
+                <Button
+                  label="내 저장소 시작하기"
+                  icon="add"
+                  variant="secondary"
+                  onPress={() => setCreating(true)}
+                />
+                <Button label="사용법" icon="help-circle-outline" variant="ghost" onPress={() => router.push('/help')} />
+              </Row>
+            }
           />
         </Card>
       )}

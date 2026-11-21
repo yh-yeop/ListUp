@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 import type { User } from '@listup/shared';
 import { ApiError, IS_CLIENT_BUILD, api, setApiTarget, setUnauthorizedHandler } from '../api/client';
 import { loadLogin, removeLogin, saveLogin } from '../lib/credentials';
+import { clearAccountNotice, setAccountNotice } from '../lib/account-notice';
 import {
   DEFAULT_SERVER_ID,
   activeServer,
@@ -52,8 +53,9 @@ interface AuthState {
     options?: { remember?: boolean },
   ): Promise<void>;
   /**
-   * 서버 운영자에게 받은 재설정 코드로 새 비밀번호를 정하고 그대로 로그인한다.
-   * 그 계정의 다른 기기 로그인은 서버가 끊는다.
+   * 운영자에게 받은 재설정 코드나 미리 만든 복구 코드로 새 비밀번호를 정하고 그대로 로그인한다.
+   * 복구 코드면 아이디를 비워도 된다. 그 계정의 다른 기기 로그인은 서버가 끊는다.
+   * 다음 화면이 아이디·남은 복구 코드를 알리도록 계정 안내(lib/account-notice.ts)를 남긴다.
    */
   resetPassword(
     email: string,
@@ -144,6 +146,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   /** 로그인·가입으로 받은 토큰을 요청을 보냈던 그 서버에 넣는다. */
   const acceptSession = useCallback(
     async (id: string, url: string, token: string, nextUser: User) => {
+      // 다시 들어왔으니 "로그인이 끊겼습니다" 안내는 끝났다.
+      clearAccountNotice('session-ended');
       await commit((s) =>
         updateEntry(s, id, (e) => ({
           ...e,
@@ -242,6 +246,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     setUnauthorizedHandler((token) => {
       // client 는 지금 서버의 지금 토큰일 때만 부르므로, 화면의 사용자는 바로 내린다.
+      // 말없이 로그인 화면으로 가면 왜 끊겼는지 모르므로, 로그인 화면이 이유를 알린다.
+      setAccountNotice({ kind: 'session-ended' });
       setUser(null);
       if (IS_CLIENT_BUILD) setStartAtServerList(true);
       void commit(
@@ -325,6 +331,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const entry = activeServer(storeRef.current);
         if (!entry) throw noServerError();
         const result = await api.signup({ email, password, displayName });
+        setAccountNotice({ kind: 'signed-up' });
         await acceptSession(entry.id, serverUrl(entry), result.token, result.user);
         await rememberLogin(entry.id, email, password, options?.remember);
       },
@@ -332,10 +339,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       async resetPassword(email, code, newPassword, options) {
         const entry = activeServer(storeRef.current);
         if (!entry) throw noServerError();
-        const result = await api.resetPassword({ email, code, newPassword });
+        const result = await api.resetPassword({ ...(email ? { email } : {}), code, newPassword });
+        // 보호 라우트가 재설정 화면을 바로 내리므로, 찾은 아이디·남은 코드는 다음 화면이 알린다.
+        setAccountNotice({
+          kind: 'recovered',
+          loginId: result.user.email,
+          codesLeft: typeof result.recoveryCodesLeft === 'number' ? result.recoveryCodesLeft : null,
+        });
         await acceptSession(entry.id, serverUrl(entry), result.token, result.user);
         // 저장을 끈 채 재설정해도, 예전 비밀번호가 남아 있으면 다음 자동 로그인이 실패하므로 지운다.
-        await rememberLogin(entry.id, email, newPassword, options?.remember ?? false);
+        // 아이디를 비우고 복구 코드로 들어왔으면 서버가 알려 준 아이디로 저장한다.
+        await rememberLogin(entry.id, result.user.email, newPassword, options?.remember ?? false);
       },
 
       async logout() {
@@ -346,6 +360,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           api.logout().catch(() => undefined),
           new Promise((resolve) => setTimeout(resolve, LOGOUT_WAIT_MS)),
         ]);
+        // 직접 로그아웃했으니 "끊겼습니다" 안내를 띄우지 않는다(로그아웃 요청 중에 401 이 와도).
+        clearAccountNotice('session-ended');
         // 토큰을 먼저 메모리에서 내려 더는 보내지 않게 한 뒤 저장한다.
         setApiTarget(entry ? serverUrl(entry) : null, null);
         setUser(null);

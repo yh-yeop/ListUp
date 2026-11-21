@@ -18,6 +18,7 @@ import {
 } from '../src/components/ui';
 import { ApiError } from '../src/api/client';
 import { AppVersion } from '../src/components/AppVersion';
+import { RecoveryCodesCard } from '../src/components/RecoveryCodesCard';
 import { credentialsSupported, loadLogin, removeLogin } from '../src/lib/credentials';
 import { hostSupported } from '../src/lib/desktop';
 import { confirmAction, notifySuccess } from '../src/lib/dialogs';
@@ -213,6 +214,8 @@ export default function SettingsScreen() {
         />
       </Card>
 
+      <RecoveryCodesCard />
+
       <Card style={{ gap: spacing.md }}>
         <Body style={{ fontWeight: '600' }}>다른 기기의 로그인</Body>
         <Caption>
@@ -279,6 +282,18 @@ export default function SettingsScreen() {
             </Row>
           </Pressable>
         ) : null}
+
+        <Pressable
+          onPress={() => router.push('/help')}
+          accessibilityRole="button"
+          accessibilityLabel="사용법 보기"
+          style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
+        >
+          <Row style={{ justifyContent: 'space-between' }}>
+            <Caption>사용법·문제 해결</Caption>
+            <Ionicons name="chevron-forward" size={14} color={colors.textFaint} />
+          </Row>
+        </Pressable>
 
         {/* 버전·업데이트, 그리고 AGPL-3.0 §13 의 소스 코드 링크 — 장식이 아니라 라이선스 조건이다. */}
         <AppVersion />

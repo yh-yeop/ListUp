@@ -59,9 +59,8 @@ export default async function run(t, env) {
     (await api(A, '/api/auth/password', { currentPassword: 'password-a1', newPassword: 'password-a2' }, aTok)).status === 200,
     '다른 곳에서 A 비밀번호 변경',
   );
+  // 내 정보는 열자마자 복구 코드 상태를 물으므로(요청 하나) 그 401 에서 끊긴다.
   await page.getByLabel('내 정보').click();
-  await s.inputs().nth(0).fill('alice2');
-  await page.getByRole('button', { name: '이름 저장' }).click();
   await s.listIntro().waitFor({ timeout: 10000 });
   t.must(s.path() === '/servers', '세션 만료 → 서버 목록');
   t.must((await s.visibleCount(page.getByText('로그인 안 됨', { exact: false }))) === 2, 'A·B 모두 로그인 안 됨 (B 는 로그아웃했음)');

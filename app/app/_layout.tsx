@@ -62,12 +62,16 @@ function RootNavigator() {
       <Stack.Screen name="host" options={{ title: '이 PC 서버' }} />
       {/* 초대 링크는 로그인 전에도 연다 — 코드를 들고 로그인·가입으로 보낸다. */}
       <Stack.Screen name="join" options={{ title: '초대 코드로 참여' }} />
+      {/* 도움말·연결 문제 해결 — 막혔을 때 들어오는 곳이라 로그인과 무관하게 연다. */}
+      <Stack.Screen name="help" options={{ title: '사용법' }} />
+      <Stack.Screen name="troubleshoot" options={{ title: '연결 문제 해결' }} />
 
       {/* 로그인 전에만 */}
       <Stack.Protected guard={!user}>
         <Stack.Screen name="login" options={{ headerShown: false }} />
         <Stack.Screen name="signup" options={{ title: '회원가입' }} />
         <Stack.Screen name="reset-password" options={{ title: '비밀번호 재설정' }} />
+        <Stack.Screen name="forgot-id" options={{ title: '아이디 찾기' }} />
       </Stack.Protected>
 
       {/* 로그인 후에만 */}
