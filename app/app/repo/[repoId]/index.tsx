@@ -586,16 +586,27 @@ export default function RepoFilesScreen() {
     });
     if (!ok) return;
 
-    // 파일이면 지운 내용을 알고 있어 바로 되돌릴 수 있다. 폴더는 휴지통에서.
+    // 파일이면 지운 내용을 알고 있어 바로 되돌릴 수 있다.
     const file = isFolder ? undefined : files.find((entry) => entry.path === targetPath);
     setBusyPath(targetPath);
     try {
-      await api.deletePath(repoId, targetPath);
-      if (file) offerUndo('지웠습니다.', [{ path: file.path, blobHash: null, expect: file.blobHash }], `삭제: ${file.path}`);
-      else notify('지웠습니다.', '변경 이력 → 휴지통에서 되돌릴 수 있습니다.');
+      if (isFolder) {
+        // 폴더는 안의 파일을 먼저 읽어 그 내용대로만 지운다(expect) — 되돌리기를 줄 수 있고, 목록을 읽은 뒤 누가 새 버전을
+        // 올린 파일은 모르고 지우지 않는다(409). 그 사이 새로 생긴 파일은 남는다(본 적 없는 것은 지우지 않음).
+        const inside = await listRepoFolder(repoId, targetPath);
+        const changes = inside.map((entry) => ({ path: entry.path, blobHash: null, expect: entry.blobHash }));
+        const message = `삭제: ${targetPath}/ (${changes.length}개)`;
+        await api.commitFiles(repoId, changes, message);
+        offerUndo(`폴더를 지웠습니다 (파일 ${changes.length}개).`, changes, message);
+      } else {
+        await api.deletePath(repoId, targetPath);
+        if (file) offerUndo('지웠습니다.', [{ path: file.path, blobHash: null, expect: file.blobHash }], `삭제: ${file.path}`);
+        else notify('지웠습니다.', '변경 이력 → 휴지통에서 되돌릴 수 있습니다.');
+      }
       state.refresh();
     } catch (err) {
       notifyError(err instanceof ApiError ? err.message : '삭제하지 못했습니다.');
+      if (err instanceof ApiError && err.status === 409) state.refresh();
     } finally {
       setBusyPath(null);
     }

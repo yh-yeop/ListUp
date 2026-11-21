@@ -194,5 +194,17 @@ export default async function run(t, env) {
   const paint = await row.evaluate((el) => getComputedStyle(el).backgroundColor);
   const other = await page.getByRole('button', { name: 'b.txt 내려받기' }).first().evaluate((el) => getComputedStyle(el).backgroundColor);
   t.must(paint !== other, `찾은 파일 줄을 칠해 보인다 (${paint} vs ${other})`);
+
+  // 폴더 지우기도 되돌릴 수 있다 — 안의 파일을 읽은 내용대로 지우는 커밋 하나.
+  await page.goto(`${A}/repo/${repo.id}`);
+  await page.getByRole('button', { name: '폴더 폴더 더보기' }).click();
+  await page.getByRole('button', { name: '폴더 폴더 삭제' }).click();
+  await page.getByText('폴더를 지웠습니다 (파일 2개).').waitFor();
+  const gone = (await api(A, `/api/repos/${repo.id}/files?path=`, undefined, owner.token)).json.tree.dirs.map((d) => d.name);
+  t.must(!gone.includes('폴더'), '폴더 삭제');
+  await page.getByRole('button', { name: '되돌리기' }).click();
+  await page.getByText('되돌렸습니다.').waitFor();
+  const inner = (await api(A, `/api/repos/${repo.id}/files?path=${encodeURIComponent('폴더')}`, undefined, owner.token)).json.tree.files.map((f) => f.name).sort();
+  t.must(inner.join(',') === 'b.txt,안쪽.txt', `폴더 지우기 되돌리기 → 안의 파일이 그대로 (${inner.join(',')})`);
   await ctx.close();
 }
