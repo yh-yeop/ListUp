@@ -99,6 +99,17 @@ export default async function run(t, env) {
   await page.getByText('키보드 단축키 (웹·PC 앱)').waitFor();
   t.ok('? → 사용법(단축키 목록)');
 
+  // ── 새로고침이 잠깐 실패해도 보던 목록은 그대로 (REFACTOR U2-12) ──
+  await page.goto(`${A}/repo/${repo.id}`);
+  await page.getByRole('button', { name: 'a.txt 내려받기' }).first().waitFor();
+  const listCall = (url) => url.pathname.startsWith('/api/repos/') && url.pathname.endsWith('/files');
+  await page.route(listCall, (route) => route.abort('internetdisconnected'));
+  await page.locator('body').click({ position: { x: 5, y: 5 } });
+  await page.keyboard.press('r');
+  await page.getByText('새로 고치지 못했습니다 — 보던 목록을 그대로 둡니다.').waitFor();
+  t.must(await page.getByRole('button', { name: 'a.txt 내려받기' }).first().isVisible(), '연결이 끊겨 새로고침이 실패해도 목록이 남는다');
+  await page.unroute(listCall);
+
   // ── 여러 개 골라 지우기 ──────────────────────────────────
   await page.goto(`${A}/repo/${repo.id}`);
   await page.getByRole('button', { name: '여러 개 고르기' }).click();

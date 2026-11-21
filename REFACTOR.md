@@ -428,6 +428,7 @@ Opus 가 §4 72건을 코드와 대조했다. 확인한 것: listTrash·재작�
 - **U2-9** — 안드로이드 받기에 onProgress 를 안 넘긴다(index.tsx:294, versions·trash). 진행 UI 를 세 화면에 더하고 PC 앱 will-download IPC(DesktopBridge·protocol·preload·main)까지.
 - **U2-10** — 확인: 안드로이드 `downloadResumableStartAsync` 는 resumeData 가 있을 때만 Range 를 붙이고(FileSystemLegacyModule.kt:681-682) resumeData 는 pauseAsync 로만 생긴다 → 오류 뒤 resumeAsync 는 처음부터. 파일 길이를 resumeData 로 새 작업을 만들면 되지만 zip(/dl archive)은 Range 를 무시해 200 전체를 이어 붙여 망가진다 — 파일만 이어받기·206 확인 설계 필요(files.ts·local-folder.ts). 최소한 files.ts:165-174 주석은 틀렸다.
 - **U2-12** — refresh 일시 실패 때 `state.error` 분기가 받아 둔 목록을 지운다(index.tsx:367, history·versions·trash·proposals 같은 모양). useAsync 를 바꿀지(refresh 실패는 토스트) 화면마다 "data 있으면 목록 + 오류" 로 할지 결정.
+  → **2026-11-21 고침**: useAsync 에서 — refresh 가 연결 문제(status 0)·5xx 로 실패하면 목록을 두고 토스트, 403·404 는 예전처럼 오류(`lib/pure/refresh-failure.ts`).
 - **U2-14** — 직접 고른 파일에도 크기·수정시각 휴리스틱으로 건너뛴다(transfer-plan.ts:34-45). 건너뛴 사실은 알린다(index.tsx:217·233). 직접 고른 파일에는 끌지, "그래도 올리기" 를 둘지 결정.
 
 ### §5c 3단계 (1)

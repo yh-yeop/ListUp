@@ -249,7 +249,7 @@ app/
    ├─ lib/shortcuts.ts        웹·PC 앱 키보드 단축키 훅 — 보이는 화면만 keydown 을 받고, 처리한 키만 기본 동작을 막음
    ├─ lib/account-notice.ts   로그인·가입·재설정 결과를 다음 화면에 넘기는 안내 한 건(찾은 아이디, 끊긴 이유, 복구 코드 권유)
    ├─ lib/connection-error.ts 서버에 닿지 못한 오류 문장 — ErrorNotice 가 알아보고 「연결 문제 해결」 버튼을 붙임
-   ├─ lib/useAsync.ts         화면 데이터 불러오기 훅 — 늦게 온 이전 요청 결과는 버림, 당겨서 새로고침
+   ├─ lib/useAsync.ts         화면 데이터 불러오기 훅 — 늦게 온 이전 요청 결과는 버림, 당겨서 새로고침(연결 문제로 실패하면 목록을 지키고 토스트)
    ├─ lib/useMorePages.ts     '더 보기' 로 이어 받는 목록(이력·버전·제안) — 첫 페이지가 바뀌면 이어 받은 것은 버림
    ├─ lib/pure/               플랫폼 import 가 없는 순수 로직. 원래 파일이 다시 내보내고, app/test 가 node 로 검사
    │  ├─ versions.ts          버전 비교(compareVersions) ← updates
@@ -264,6 +264,7 @@ app/
    │  ├─ bulk-move.ts         여러 파일 옮기기를 커밋 하나로(새 경로=같은 blobHash + 옛 경로 삭제), 옮길 폴더 이름 겹침이면 안 옮김, 방금 한 커밋 되돌리기(blobHash↔expect) ← repo/[repoId]/index
    │  ├─ file-sort.ts         이름(ko Collator)·크기·최근 정렬, 같은 값은 이름순, 폴더는 크기·이름만 ← file-sort
    │  ├─ shortcuts.ts         키 → 동작(글 쓰는 칸에서는 Esc 만, Ctrl·⌘ 은 건드리지 않음), 도움말의 단축키 목록 ← shortcuts
+   │  ├─ refresh-failure.ts   새로고침이 실패했을 때 받아 둔 목록을 지킬지(연결 문제·5xx 는 지킴, 403·404 는 오류로) ← useAsync
    │  ├─ troubleshoot.ts      닿지 않은 이유·주소 모양(이 기기·공유기 안·빠른 터널·https 의 http)별 확인 목록 ← troubleshoot
    │  └─ server-url.ts        일부만 적은 서버 주소(192.168.0.10, 이름만)를 확인해 볼 후보로(serverUrlCandidates) ← state/servers
    ├─ components/             공용 UI + 저장소 탭 네비게이션 + 제안 상태 배지
