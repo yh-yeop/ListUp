@@ -587,7 +587,15 @@ export const api = {
     request<{ ok: true }>(`/api/uploads/${uploadId}`, { method: 'DELETE' }),
 
   /** 올려 둔 파일 여러 개를 커밋 하나로 반영한다. blobHash 가 null 이면 삭제. */
-  commitFiles: (repoId: string, changes: { path: string; blobHash: string | null }[], message?: string) =>
+  /**
+   * 여러 파일을 스냅샷 하나로. `expect` 는 그 경로의 지금 내용이 이 해시일 때만(null 이면 비어 있을 때만) — 옛 목록으로 만든
+   * 커밋이 그 사이 바뀐 파일을 되돌리지 않게(apiLevel 7, 옛 서버는 무시). 어긋나면 409 `details.stale`.
+   */
+  commitFiles: (
+    repoId: string,
+    changes: { path: string; blobHash: string | null; expect?: string | null }[],
+    message?: string,
+  ) =>
     request<CommitResult>(`/api/repos/${repoId}/files/commit`, {
       method: 'POST',
       body: { changes, ...(message ? { message } : {}) },

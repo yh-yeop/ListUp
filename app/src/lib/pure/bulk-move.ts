@@ -4,6 +4,9 @@
  *
  * 커밋은 있는 파일에 쓰면 조용히 덮어쓰므로, 옮길 폴더에 같은 이름이 있으면 옮기지 않고 알린다(clashes). 폴더와 이름이 겹치는
  * 경우도 여기서 거른다. 최종 판정(파일·폴더 이름 겹침 409)은 서버가 한다.
+ *
+ * 각 변경에 `expect` 를 단다(API_LEVEL 7 서버가 본다): 새 경로는 비어 있어야(null), 옛 경로는 목록에서 본 내용 그대로여야 한다.
+ * 목록을 본 뒤 다른 사람이 새 버전을 올렸으면 옛 내용으로 옮겨 새 버전을 머리에서 지우는 대신 서버가 409 로 거절한다.
  */
 
 export interface MovableFile {
@@ -13,7 +16,7 @@ export interface MovableFile {
 }
 
 export interface BulkMovePlan {
-  changes: { path: string; blobHash: string | null }[];
+  changes: { path: string; blobHash: string | null; expect: string | null }[];
   /** 이미 그 폴더에 있어 옮길 필요가 없는 파일. */
   unchanged: string[];
   /** 옮길 폴더에 같은 이름(파일·폴더)이 있거나, 고른 것끼리 이름이 같아 옮기지 못하는 파일 이름. */
@@ -45,8 +48,8 @@ export function planBulkMove(files: MovableFile[], dest: string, taken: Iterable
   }
   if (clashes.length > 0) return { changes: [], unchanged, clashes };
   const changes = moving.flatMap((file) => [
-    { path: target(file.name), blobHash: file.blobHash },
-    { path: file.path, blobHash: null },
+    { path: target(file.name), blobHash: file.blobHash, expect: null },
+    { path: file.path, blobHash: null, expect: file.blobHash },
   ]);
   return { changes, unchanged, clashes };
 }

@@ -195,13 +195,24 @@ export async function registerFileRoutes(app: FastifyInstance, ctx: AppContext):
       throw badRequest(`한 번에 최대 ${MAX_FILES_PER_REPO}개까지 반영할 수 있습니다.`);
     }
     const changes = new Map<string, string | null>();
+    /**
+     * `expect` — 그 경로의 지금 내용이 이 해시일 때만(null 이면 그 경로에 파일이 없을 때만) 반영한다(API_LEVEL 7).
+     * 옛 목록을 보고 만든 커밋(여러 개 옮기기·지우기)이 그 사이 다른 사람이 올린 새 버전을 옛 내용으로 되돌리거나,
+     * 옮길 자리에 생긴 파일을 조용히 덮어쓰지 않게. 없으면 예전처럼 따지지 않는다.
+     */
+    const expected = new Map<string, string | null>();
+    const isHash = (value: unknown): value is string => typeof value === 'string' && /^[0-9a-f]{64}$/.test(value);
     for (const raw of rawChanges) {
-      const item = (raw ?? {}) as { path?: unknown; blobHash?: unknown };
+      const item = (raw ?? {}) as { path?: unknown; blobHash?: unknown; expect?: unknown };
       const filePath = typeof item.path === 'string' ? normalizePath(item.path) : null;
       if (!filePath) throw badRequest('경로가 올바르지 않습니다.');
       if (changes.has(filePath)) throw badRequest(`같은 경로가 두 번 들어 있습니다: ${filePath}`);
-      if (item.blobHash !== null && (typeof item.blobHash !== 'string' || !/^[0-9a-f]{64}$/.test(item.blobHash))) {
+      if (item.blobHash !== null && !isHash(item.blobHash)) {
         throw badRequest(`파일 내용이 올바르지 않습니다: ${filePath}`);
+      }
+      if (item.expect !== undefined) {
+        if (item.expect !== null && !isHash(item.expect)) throw badRequest(`expect 가 올바르지 않습니다: ${filePath}`);
+        expected.set(filePath, item.expect);
       }
       changes.set(filePath, item.blobHash);
     }
@@ -213,6 +224,13 @@ export async function registerFileRoutes(app: FastifyInstance, ctx: AppContext):
       const counts = { added: 0, updated: 0, deleted: 0 };
       const added: string[] = [];
       const blobSize = db.prepare<[string], { size: number }>(`SELECT size FROM blobs WHERE hash = ?`);
+
+      const stale = [...expected].filter(([filePath, want]) => (manifest.get(filePath)?.blob_hash ?? null) !== want);
+      if (stale.length > 0) {
+        throw conflict('목록을 본 뒤 다른 사람이 바꾼 파일이 있어 반영하지 않았습니다. 목록을 새로 고친 뒤 다시 해 주세요.', {
+          stale: stale.map(([filePath]) => filePath),
+        });
+      }
 
       for (const [filePath, hash] of changes) {
         const existing = manifest.get(filePath);

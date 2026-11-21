@@ -160,6 +160,42 @@ describe('여러 파일 커밋', () => {
     assert.equal((await history()).snapshots.length, before);
   });
 
+  it('expect — 그 사이 다른 사람이 바꾼 파일이면 409 이고 아무것도 반영하지 않는다 (여러 개 옮기기·지우기)', async () => {
+    // 목록을 본 뒤 다른 사람이 새 버전을 올렸는데 옛 목록으로 옮기면, 새 자리에 옛 내용이 들어가고 새 버전은 머리에서
+    // 사라졌다(이력에만 남음). 옮길 자리에 그 사이 생긴 파일도 조용히 덮어썼다.
+    const v1 = await uploadBlob(h.app, owner, repoId, '보고서.txt', '처음');
+    assert.equal((await commit(owner, [{ path: '기대/보고서.txt', blobHash: v1 }])).statusCode, 201);
+    const v2 = await uploadBlob(h.app, owner, repoId, '보고서.txt', '다른 사람이 고침');
+    assert.equal((await commit(owner, [{ path: '기대/보고서.txt', blobHash: v2 }])).statusCode, 201);
+
+    const before = (await history()).snapshots.length;
+    const stale = await commit(owner, [
+      { path: '보관/보고서.txt', blobHash: v1, expect: null },
+      { path: '기대/보고서.txt', blobHash: null, expect: v1 },
+    ]);
+    assert.equal(stale.statusCode, 409, stale.body);
+    assert.deepEqual((stale.json() as { error: { details?: { stale?: string[] } } }).error.details?.stale, ['기대/보고서.txt']);
+    assert.equal((await history()).snapshots.length, before, '아무것도 반영하지 않는다');
+
+    // 옮길 자리에 그 사이 같은 이름이 생겼으면(expect: null) 덮어쓰지 않는다.
+    const there = await uploadBlob(h.app, owner, repoId, '보고서.txt', '먼저 와 있던 것');
+    assert.equal((await commit(owner, [{ path: '보관/보고서.txt', blobHash: there }])).statusCode, 201);
+    const clash = await commit(owner, [
+      { path: '보관/보고서.txt', blobHash: v2, expect: null },
+      { path: '기대/보고서.txt', blobHash: null, expect: v2 },
+    ]);
+    assert.equal(clash.statusCode, 409);
+    assert.deepEqual((clash.json() as { error: { details?: { stale?: string[] } } }).error.details?.stale, ['보관/보고서.txt']);
+
+    // 맞으면 그대로 된다.
+    const ok = await commit(owner, [
+      { path: '보관2/보고서.txt', blobHash: v2, expect: null },
+      { path: '기대/보고서.txt', blobHash: null, expect: v2 },
+    ]);
+    assert.equal(ok.statusCode, 201, ok.body);
+    assert.equal((await commit(owner, [{ path: 'x.txt', blobHash: null, expect: 'nothex' }])).statusCode, 400);
+  });
+
   it('열람 권한으로는 커밋할 수 없다', async () => {
     const hash = await uploadBlob(h.app, viewer, repoId, 'v.txt', 'v');
     assert.equal((await commit(viewer, [{ path: 'v.txt', blobHash: hash }])).statusCode, 403);

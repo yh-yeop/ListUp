@@ -10,10 +10,10 @@ describe('여러 파일 옮기기 계획', () => {
     const plan = planBulkMove([a, b], '보관', ['다른.txt']);
     assert.deepEqual(plan.clashes, []);
     assert.deepEqual(plan.changes, [
-      { path: '보관/a.txt', blobHash: 'ha' },
-      { path: 'a.txt', blobHash: null },
-      { path: '보관/b.jpg', blobHash: 'hb' },
-      { path: '사진/b.jpg', blobHash: null },
+      { path: '보관/a.txt', blobHash: 'ha', expect: null },
+      { path: 'a.txt', blobHash: null, expect: 'ha' },
+      { path: '보관/b.jpg', blobHash: 'hb', expect: null },
+      { path: '사진/b.jpg', blobHash: null, expect: 'hb' },
     ]);
   });
 
@@ -21,8 +21,8 @@ describe('여러 파일 옮기기 계획', () => {
     const plan = planBulkMove([a, b], '', ['a.txt', '사진']);
     assert.deepEqual(plan.unchanged, ['a.txt']);
     assert.deepEqual(plan.changes, [
-      { path: 'b.jpg', blobHash: 'hb' },
-      { path: '사진/b.jpg', blobHash: null },
+      { path: 'b.jpg', blobHash: 'hb', expect: null },
+      { path: '사진/b.jpg', blobHash: null, expect: 'hb' },
     ]);
   });
 

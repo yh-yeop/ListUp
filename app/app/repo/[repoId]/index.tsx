@@ -244,7 +244,8 @@ export default function RepoFilesScreen() {
     try {
       await api.commitFiles(
         repoId,
-        chosen.map((file) => ({ path: file.path, blobHash: null })),
+        // 목록에서 본 내용 그대로일 때만 — 그 사이 다른 사람이 올린 새 버전을 모르고 지우지 않게(서버가 409).
+        chosen.map((file) => ({ path: file.path, blobHash: null, expect: file.blobHash })),
         `파일 ${chosen.length}개 삭제`,
       );
       notify(`${chosen.length}개를 지웠습니다.`, '변경 이력 → 휴지통에서 되돌릴 수 있습니다.');
@@ -252,6 +253,8 @@ export default function RepoFilesScreen() {
       state.refresh();
     } catch (err) {
       notifyError(err instanceof ApiError ? err.message : '지우지 못했습니다.');
+      // 그 사이 다른 사람이 바꿨다(409) — 지금 목록을 보여 줘야 다시 고를 수 있다.
+      if (err instanceof ApiError && err.status === 409) state.refresh();
     } finally {
       setBulkBusy(false);
     }
@@ -297,6 +300,8 @@ export default function RepoFilesScreen() {
       state.refresh();
     } catch (err) {
       notifyError(err instanceof ApiError ? err.message : '옮기지 못했습니다.');
+      // 그 사이 다른 사람이 바꿨다(409) — 지금 목록을 보여 줘야 다시 고를 수 있다.
+      if (err instanceof ApiError && err.status === 409) state.refresh();
     } finally {
       setBulkBusy(false);
     }
