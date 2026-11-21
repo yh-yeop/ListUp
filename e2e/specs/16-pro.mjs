@@ -1,6 +1,6 @@
 import { api } from '../lib.mjs';
 
-export const title = '익숙한 사람 — 정렬·폴더 주소·경로 복사·키보드 단축키';
+export const title = '익숙한 사람 — 정렬·폴더 주소·경로 복사·키보드 단축키·여러 개 지우기';
 
 export default async function run(t, env) {
   const { A } = env;
@@ -97,5 +97,25 @@ export default async function run(t, env) {
   await page.keyboard.press('Shift+Slash');
   await page.getByText('키보드 단축키 (웹·PC 앱)').waitFor();
   t.ok('? → 사용법(단축키 목록)');
+
+  // ── 여러 개 골라 지우기 ──────────────────────────────────
+  await page.goto(`${A}/repo/${repo.id}`);
+  await page.getByRole('button', { name: '여러 개 고르기' }).click();
+  await page.getByText('받거나 지울 파일을 누르세요').waitFor();
+  await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: '여러 개 고르기' }).waitFor();
+  t.ok('Esc → 고르기 끝');
+  await page.getByRole('button', { name: '여러 개 고르기' }).click();
+  await page.getByRole('checkbox', { name: 'a.txt 고르기' }).click();
+  await page.getByRole('checkbox', { name: 'c.txt 고르기' }).click();
+  await page.getByText('2개 고름').waitFor();
+  t.must((await page.getByRole('checkbox', { name: 'a.txt 고르기' }).getAttribute('aria-checked')) === 'true', '고른 줄은 체크 상태');
+  await page.getByRole('button', { name: '고른 파일 2개 지우기' }).click();
+  await page.getByText('2개를 지웠습니다.').waitFor();
+  await page.getByRole('button', { name: 'b.txt 내려받기' }).first().waitFor();
+  t.must((await page.getByText(/^[ac]\.txt$/).filter({ visible: true }).count()) === 0, '고른 2개만 사라지고 고르기도 끝');
+  const history = (await api(A, `/api/repos/${repo.id}/history`, undefined, owner.token)).json;
+  const latest = (history.snapshots ?? history.history ?? [])[0];
+  t.must(latest?.message === '파일 2개 삭제', `변경 이력에 커밋 하나로 (${latest?.message})`);
   await ctx.close();
 }

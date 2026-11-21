@@ -95,6 +95,10 @@ export default function RepoFilesScreen() {
   /** 저장소 전체 파일 이름 검색어. 있으면 폴더 목록 대신 검색 결과를 보인다. */
   const [query, setQuery] = useState('');
   const searchRef = useRef<TextInput>(null);
+  /** 여러 개 고르기 — 지금 폴더의 파일을 골라 한꺼번에 받거나 지운다(폴더는 고르지 않는다). */
+  const [selecting, setSelecting] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
 
   // 변경 이력에서 넘어온 과거 시점. 있으면 그 시점의 목록을 읽기 전용으로 보여준다.
   // 폴더 이동은 path 상태만 바꾸므로 snapshot 파라미터는 그대로 유지된다.
@@ -145,6 +149,7 @@ export default function RepoFilesScreen() {
   function openFolder(nextPath: string) {
     setEditing(null);
     setMenuPath(null);
+    setSelected(new Set());
     setPath(nextPath);
     router.setParams({ path: nextPath || undefined });
   }
@@ -163,6 +168,7 @@ export default function RepoFilesScreen() {
       }
       case 'escape':
         if (editing) setEditing(null);
+        else if (selecting) stopSelecting();
         else if (menuPath) setMenuPath(null);
         else if (query) {
           setQuery('');
@@ -178,6 +184,73 @@ export default function RepoFilesScreen() {
         return true;
     }
   });
+
+  function stopSelecting() {
+    setSelecting(false);
+    setSelected(new Set());
+  }
+
+  function toggleSelected(filePath: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(filePath)) next.delete(filePath);
+      else next.add(filePath);
+      return next;
+    });
+  }
+
+  /** 고른 파일 — 목록이 바뀌어 사라진 것은 빼고, 화면 순서대로. */
+  const chosen = files.filter((file) => selected.has(file.path));
+
+  /** 고른 파일을 차례로 받는다. 한 번에 여러 다운로드를 열면 브라우저가 막거나 선택기가 겹친다. */
+  async function downloadSelected() {
+    if (bulkBusy || chosen.length === 0) return;
+    setBulkBusy(true);
+    let failed = 0;
+    try {
+      for (const file of chosen) {
+        try {
+          const result = await downloadFromRepo(repoId, { path: file.path, snapshotId, archive: false, fileName: file.name });
+          if (result.message) notify(result.message);
+        } catch {
+          failed += 1;
+        }
+      }
+    } finally {
+      setBulkBusy(false);
+    }
+    if (failed > 0) notifyError(`${chosen.length}개 중 ${failed}개를 받지 못했습니다.`);
+    else notifySuccess(`${chosen.length}개를 받았습니다.`);
+  }
+
+  /** 고른 파일을 커밋 하나로 지운다 — 변경 이력에 한 번으로 남고, 휴지통에서 되돌릴 수 있다. */
+  async function deleteSelected() {
+    if (bulkBusy || chosen.length === 0) return;
+    const names = chosen.slice(0, MAX_FAILURES_SHOWN).map((file) => file.name).join(', ');
+    const more = chosen.length > MAX_FAILURES_SHOWN ? ` 외 ${chosen.length - MAX_FAILURES_SHOWN}개` : '';
+    const ok = await confirmAction({
+      title: `고른 파일 ${chosen.length}개를 지울까요?`,
+      message: `${names}${more} — 휴지통(변경 이력)에서 되돌릴 수 있습니다.`,
+      confirmLabel: '삭제',
+      destructive: true,
+    });
+    if (!ok) return;
+    setBulkBusy(true);
+    try {
+      await api.commitFiles(
+        repoId,
+        chosen.map((file) => ({ path: file.path, blobHash: null })),
+        `파일 ${chosen.length}개 삭제`,
+      );
+      notify(`${chosen.length}개를 지웠습니다.`, '변경 이력 → 휴지통에서 되돌릴 수 있습니다.');
+      stopSelecting();
+      state.refresh();
+    } catch (err) {
+      notifyError(err instanceof ApiError ? err.message : '지우지 못했습니다.');
+    } finally {
+      setBulkBusy(false);
+    }
+  }
 
   /** 경로를 클립보드로 — 채팅으로 "이 파일" 을 가리킬 때. */
   async function copyPath(targetPath: string) {
@@ -592,7 +665,70 @@ export default function RepoFilesScreen() {
             <>
               <Breadcrumb path={path} onNavigate={openFolder} />
               {!state.loading && tree.dirs.length + tree.files.length > 1 ? (
-                <SortBar order={sort} onChange={setSort} />
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm }}>
+                  <SortBar order={sort} onChange={setSort} />
+                  {tree.files.length > 1 && !selecting ? (
+                    <Button
+                      label="여러 개 고르기"
+                      icon="checkbox-outline"
+                      variant="ghost"
+                      compact
+                      onPress={() => {
+                        setMenuPath(null);
+                        setEditing(null);
+                        setSelecting(true);
+                      }}
+                    />
+                  ) : null}
+                </View>
+              ) : null}
+              {selecting && !state.loading ? (
+                <View
+                  style={{
+                    backgroundColor: colors.accentSoft,
+                    borderRadius: radius.md,
+                    padding: spacing.md,
+                    gap: spacing.sm,
+                  }}
+                >
+                  <Row style={{ justifyContent: 'space-between' }} wrap>
+                    <Body style={{ fontWeight: '600', color: colors.accent }}>
+                      {chosen.length > 0 ? `${chosen.length}개 고름` : '받거나 지울 파일을 누르세요'}
+                    </Body>
+                    <Row gap={spacing.xs}>
+                      <Button
+                        label={chosen.length === files.length ? '선택 풀기' : '전부 선택'}
+                        variant="ghost"
+                        compact
+                        onPress={() =>
+                          setSelected(chosen.length === files.length ? new Set() : new Set(files.map((file) => file.path)))
+                        }
+                      />
+                      <Button label="끝내기" variant="ghost" compact onPress={stopSelecting} />
+                    </Row>
+                  </Row>
+                  <Row gap={spacing.sm} wrap>
+                    <Button
+                      label={`고른 파일 ${chosen.length}개 받기`}
+                      icon="download-outline"
+                      variant="secondary"
+                      compact
+                      onPress={() => void downloadSelected()}
+                      disabled={chosen.length === 0 || bulkBusy}
+                      loading={bulkBusy}
+                    />
+                    {canEdit ? (
+                      <Button
+                        label={`고른 파일 ${chosen.length}개 지우기`}
+                        icon="trash-outline"
+                        variant="danger"
+                        compact
+                        onPress={() => void deleteSelected()}
+                        disabled={chosen.length === 0 || bulkBusy}
+                      />
+                    ) : null}
+                  </Row>
+                </View>
               ) : null}
 
               {state.loading ? (
@@ -746,6 +882,35 @@ export default function RepoFilesScreen() {
                               onConfirm={() => void confirmRename()}
                               onCancel={() => setEditing(null)}
                             />
+                          ) : selecting ? (
+                            <Pressable
+                              onPress={() => toggleSelected(file.path)}
+                              accessibilityRole="checkbox"
+                              aria-checked={selected.has(file.path)}
+                              accessibilityLabel={`${file.name} 고르기`}
+                              style={({ pressed }) => ({
+                                flexDirection: 'row',
+                                alignItems: 'center',
+                                gap: spacing.md,
+                                paddingVertical: spacing.md,
+                                paddingHorizontal: spacing.lg,
+                                backgroundColor: selected.has(file.path) ? colors.accentSoft : pressed ? colors.surfaceAlt : 'transparent',
+                              })}
+                            >
+                              <Ionicons
+                                name={selected.has(file.path) ? 'checkbox' : 'square-outline'}
+                                size={20}
+                                color={selected.has(file.path) ? colors.accent : colors.textMuted}
+                              />
+                              <View style={{ flex: 1 }}>
+                                <Text numberOfLines={1} ellipsizeMode="middle" style={{ color: colors.text, fontSize: fontSize.md }}>
+                                  {file.name}
+                                </Text>
+                                <Caption>
+                                  {formatBytes(file.size)} · {formatRelativeTime(file.updatedAt)}
+                                </Caption>
+                              </View>
+                            </Pressable>
                           ) : (
                             <Pressable
                               onPress={() => void download(file.path, file.name)}
@@ -796,7 +961,7 @@ export default function RepoFilesScreen() {
                               )}
                             </Pressable>
                           )}
-                          {menuPath === file.path && editing?.path !== file.path ? (
+                          {menuPath === file.path && editing?.path !== file.path && !selecting ? (
                             <RowMenu>
                               <Button
                                 label="경로 복사"
