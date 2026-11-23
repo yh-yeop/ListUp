@@ -1,0 +1,10 @@
+session_id,error_type,count
+cfc3250c-a4f5-4dd4-bfda-a44305c809ad,console.error,1
+cfc3250c-a4f5-4dd4-bfda-a44305c809ad,RangeError,1
+cfc3250c-a4f5-4dd4-bfda-a44305c809ad,TypeError,1
+bca0279d-f63e-452c-8287-624bb90ed124,console.error,1
+bca0279d-f63e-452c-8287-624bb90ed124,RangeError,1
+bca0279d-f63e-452c-8287-624bb90ed124,TypeError,1
+c313a888-1c26-4162-bb59-bf8c95c6f827,console.error,1
+c313a888-1c26-4162-bb59-bf8c95c6f827,RangeError,1
+c313a888-1c26-4162-bb59-bf8c95c6f827,TypeError,1

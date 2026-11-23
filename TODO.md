@@ -518,6 +518,19 @@ iCloud Keychain 으로 거의 자동 복구되는 반면 Android Keystore 는 �
 - [ ] PC 앱: `npm run test:desktop` — 새 사례 6-1(관리 화면 계정 찾기)을 처음 돌려 본다
 - [ ] 스크린리더: 정렬 칩(눌림 상태·방향 읽기), 안내 상자(role=status)
 
+### 실행 기록(텔레메트리) — 폰·Windows 에서 확인할 것 (2026-11-17)
+
+- [ ] **안드로이드**: `/proc/self/status`(VmRSS)·`/proc/meminfo`·`/sys/devices/system/cpu/possible` 을 expo-file-system(legacy)
+  `readAsStringAsync('file:///proc/…')` 로 읽을 수 있는지 — 컨테이너에 에뮬레이터가 없어 못 봤다. 못 읽으면 `max_ram_mb` 가 빈 칸,
+  기기 분류는 RAM·코어를 몰라 `모바일-보급형` 으로 떨어진다(`app/src/lib/telemetry.ts` nativeStore). 안 되면 expo-device(totalMemory)를 들인다.
+- [ ] **안드로이드**: 최근 앱에서 밀어 끄기 → `crashed=0`, 「강제 종료 흉내」(치명적 예외) → `crashed=1`, 공유 시트로 내보내기.
+  `npm run test:android` 에 동의 창 「기록하지 않기」 누르기를 넣었지만 돌려 보지 못했다(`e2e/android.mjs`).
+- [ ] **브라우저 「강제 종료 흉내」(새로 고침)가 `crashed=0` 으로 남는다** — 2026-11-17 실측. PC 앱(`app.exit(1)`)은 2/2 `crashed=1`.
+  새로 고침 때 visibilitychange(hidden)가 임시 기록을 background 로 바꾸는 것을 막았지만(`onAppState` 의 `crashing`) 여전히 0 — 새로 고침 사이 순서를 더 봐야 한다(`lib/telemetry.ts` debugCrash·finishOnExit).
+  같은 실측에서 브라우저 첫 1초 `min_fps_1s` 0 이 두 번 — 창이 뜨는 순간 rAF 가 멈춘 1초로 보인다.
+- [ ] **Windows PC 앱**: 저장 대화상자 내보내기, `%APPDATA%\ListUp\telemetry.csv`, `os` 가 `Windows 11`/`Windows 10` 으로 갈리는지,
+  작업 관리자로 끈 실행이 `crashed=1` 로 들어오는지. 리눅스 Electron 으로만 실측했다.
+
 ### 초대 흐름 — 폰에서 확인할 것 (2026-11-02)
 
 - [ ] 초대 링크(앱 링크) → 로그인/가입 → 바로 참여 뒤 **안드로이드 뒤로가기가 「내 저장소」 목록**으로 가는지 — 웹 e2e 만 확인했다.
@@ -815,6 +828,15 @@ Node 22 이상이 필요하다. `better-sqlite3` 는 네이티브 모듈이지�
   protocol `find-users`·preload·main, server-entry 가 `findUsers`). 타입 검사만 — `test:desktop` 에 사례(6-1)를 넣었지만 클라우드에서
   못 돌렸다(검증 대기).
 - [x] **B2 키보드 단축키** — `/` `Backspace`·`Alt+↑` `Esc` `R` `?`(웹·PC 앱). 글 쓰는 칸에서는 Esc 만.
+
+- [x] **실행 기록(텔레메트리) — 학교 데이터 분석 과제용** — 2026-11-17. 친구 PC·폰에서 실행 1회 = CSV 1행을 모아 오류가 몰리는 환경을 군집 분석하려고.
+  - 동의한 기기만, 로컬 파일만(전송 없음). 첫 실행 동의 창(`components/TelemetryConsent.tsx`), 「실행 기록」 화면(`app/telemetry.tsx` — 켜기/끄기·내보내기·
+    폴더 열기·삭제·디버그: 테스트 에러 3개·강제 종료 흉내). 서버 목록·내 정보에서 들어간다.
+  - 수집(`lib/telemetry.ts`): rAF 로 1초 fps(첫 5초·백그라운드 제외)·1초 메모리·보이던 시간, 30초 임시 기록, 창 닫힘에 CSV 한 행, 남은 임시 기록은
+    다음 실행에 crashed=1(백그라운드 뒤면 0). 에러 = 전역 예외 + `ApiError`(api/client)·useAsync 의 잡힌 예외 + console.error, 종류별 개수는 `telemetry-errors.csv`.
+  - 순수 로직 `lib/pure/telemetry.ts` + `app/test/telemetry.test.ts`, PC 앱 저장 `desktop/src/telemetry.ts`(IPC `telemetry:*`, 이름 셋만 허용),
+    `shared` 의 `DesktopTelemetry`. 합치기 `scripts/merge_telemetry.py`. README 「실행 기록」. 소개 페이지는 yh-yeop.github.io `p/listup/`.
+  - e2e: 웹 `15-telemetry`(거부·동의·끄기), 기존 스펙은 컨텍스트마다 거부로 미리 둠. desktop e2e 에 저장소 왕복 검사.
 
 - [x] **전송 신뢰성 — 올리기 (3단계, U2-1·U2-2·U2-4·U2-5·U2-7·U3-2·L2-7) / v1.10.0** — 2026-11-02. Fable 계획(REFACTOR.md §8)→비판 Sonnet(§8a)→
   Fable 확정(§8b, 사용자 결정: 1~4 만 v1.10.0·이어 해시 유지·루트 오버레이·API_LEVEL 6)→Opus 수정→Fable 최종 검수(§8c 10항목 통과). 결과 §9.

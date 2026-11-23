@@ -59,6 +59,7 @@ if (!packagedExe && !argv.includes('--no-build')) {
 const electronDir = path.join(ROOT, 'node_modules', 'electron');
 const executablePath = path.join(electronDir, 'dist', fs.readFileSync(path.join(electronDir, 'path.txt'), 'utf8').trim());
 const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'listup-desktop-e2e-'));
+const exportDir = fs.mkdtempSync(path.join(os.tmpdir(), 'listup-desktop-export-'));
 const backupDir = fs.mkdtempSync(path.join(os.tmpdir(), 'listup-desktop-backup-'));
 const compareDir = fs.mkdtempSync(path.join(os.tmpdir(), 'listup-desktop-compare-'));
 const PORT = await freePort();
@@ -66,6 +67,16 @@ fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({ port: PO
 
 const env = { ...process.env, LISTUP_DESKTOP_USER_DATA: userData, LISTUP_LOG_LEVEL: 'info' };
 delete env.ELECTRON_RUN_AS_NODE;
+
+/**
+ * 첫 실행의 실행 기록 동의 창이 흐름을 막지 않게 — 거절로 적어 두고 다시 읽는다(localStorage 는 앱 데이터 폴더에 남는다).
+ * 실행 기록 저장소 자체는 1-2 에서 bridge 로 본다.
+ */
+async function skipTelemetryConsent(p) {
+  await p.waitForURL((url) => url.href.startsWith('app://listup/'));
+  await p.evaluate(() => localStorage.setItem('listup.telemetry.consent', 'denied'));
+  await p.reload();
+}
 
 let passed = 0;
 let failed = 0;
@@ -81,12 +92,15 @@ const t = {
   },
 };
 
+const exportPath = path.join(exportDir, 'telemetry-export.csv');
+const env1 = { ...env, LISTUP_TELEMETRY_EXPORT_PATH: exportPath };
 const app = await _electron.launch(
-  packagedExe ? { executablePath: packagedExe, args: [], env } : { executablePath, args: [path.join(ROOT, 'desktop')], env },
+  packagedExe ? { executablePath: packagedExe, args: [], env: env1 } : { executablePath, args: [path.join(ROOT, 'desktop')], env: env1 },
 );
 say(packagedExe ? `설치본: ${packagedExe}` : '개발 묶음: desktop/.build');
 const page = await app.firstWindow();
 page.on('dialog', (d) => void d.accept());
+await skipTelemetryConsent(page);
 const pageErrors = [];
 page.on('pageerror', (e) => pageErrors.push(e.message));
 const s = screen(page);
@@ -135,6 +149,61 @@ try {
   await page.evaluate(() => localStorage.removeItem('listup.update'));
   await page.reload();
   await s.listIntro().waitFor();
+
+  // 1-2. 실행 기록 저장소 — 앱 데이터 폴더의 세 이름만, 머리줄은 처음 한 번, 마무리(sendSync)는 붙이고 pending 을 지운다
+  {
+    const tm = (method, ...args) => page.evaluate(([m, a]) => window.listupDesktop.telemetry[m](...a), [method, args]);
+    const info = await tm('systemInfo');
+    t.must(info.cores >= 1 && info.totalRamMb > 100 && /^(Windows|macOS|Linux) [\d.]+$/.test(info.os), `실행 기록: PC 사양 (${info.cores}코어, ${info.totalRamMb}MB, ${info.os})`);
+    const mem = await tm('memoryMb');
+    t.must(typeof mem === 'number' && mem > 10, `실행 기록: 이 프로그램의 메모리 (${mem}MB)`);
+    t.must((await tm('folder')) === userData, '실행 기록: 폴더는 앱 데이터 폴더');
+    t.must((await tm('exportFiles')) === null, '실행 기록: 기록이 없으면 내보내기는 null');
+
+    const HEADER = 'session_id,value';
+    await tm('append', 'telemetry.csv', 's1,1\n', HEADER);
+    // 한 창에서 잇달아 보낸 append 두 개 — main 이 파일마다 줄을 세워 보낸 차례대로 붙인다.
+    await page.evaluate((h) => {
+      const x = window.listupDesktop.telemetry;
+      return Promise.all([x.append('telemetry.csv', 's2,2\n', h), x.append('telemetry.csv', 's3,3\n', h)]);
+    }, HEADER);
+    t.must((await tm('read', 'telemetry.csv')) === `${HEADER}\ns1,1\ns2,2\ns3,3\n`, '실행 기록: append — 머리줄은 처음 한 번, 동시에 붙여도 차례로');
+    await tm('write', 'telemetry-pending.json', '{"a":1}');
+    await tm('write', 'telemetry-pending.json', '{"a":2}');
+    t.must((await tm('read', 'telemetry-pending.json')) === '{"a":2}', '실행 기록: write 는 통째로 바꿔 쓴다');
+    t.must(!fs.existsSync(path.join(userData, 'telemetry-pending.json.tmp')), '실행 기록: write 의 임시 파일이 남지 않는다');
+
+    await tm('finishSync', [
+      { name: 'telemetry.csv', text: 's4,4\n', header: HEADER },
+      { name: 'telemetry-errors.csv', text: 's4,TypeError,2\n', header: 'session_id,error_type,count' },
+    ]);
+    t.must(
+      fs.readFileSync(path.join(userData, 'telemetry.csv'), 'utf8') === `${HEADER}\ns1,1\ns2,2\ns3,3\ns4,4\n` &&
+        fs.readFileSync(path.join(userData, 'telemetry-errors.csv'), 'utf8') === 'session_id,error_type,count\ns4,TypeError,2\n',
+      '실행 기록: finishSync — 붙인다(새 파일이면 머리줄부터)',
+    );
+    t.must(!fs.existsSync(path.join(userData, 'telemetry-pending.json')), '실행 기록: finishSync — pending 을 지운다');
+    await tm('finishSync', [{ name: '../x.csv', text: 'x\n', header: 'h' }]);
+    t.must(!fs.existsSync(path.join(userData, '..', 'x.csv')), '실행 기록: finishSync 에 잘못된 이름 — 쓰지 않고 창도 막히지 않는다');
+
+    const exported = await tm('exportFiles');
+    t.must(
+      exported === exportPath &&
+        fs.readFileSync(exportPath, 'utf8') === fs.readFileSync(path.join(userData, 'telemetry.csv'), 'utf8') &&
+        fs.readFileSync(path.join(exportDir, 'telemetry-export-errors.csv'), 'utf8') === fs.readFileSync(path.join(userData, 'telemetry-errors.csv'), 'utf8'),
+      '실행 기록: 내보내기 — csv 와 그 옆에 <이름>-errors.csv',
+    );
+
+    const rejected = await Promise.all(
+      ['settings.json', '../telemetry.csv', 'telemetry.csv/../settings.json'].map((name) =>
+        page.evaluate((n) => window.listupDesktop.telemetry.read(n).then(() => 'read', (e) => String(e)), name),
+      ),
+    );
+    t.must(rejected.every((r) => r.includes('실행 기록 파일 이름이 아닙니다')), '실행 기록: 세 이름 밖의 파일은 거절한다');
+    for (const name of ['telemetry.csv', 'telemetry-errors.csv', 'telemetry-pending.json']) await tm('remove', name);
+    await tm('remove', 'telemetry.csv');
+    t.must((await tm('read', 'telemetry.csv')) === null, '실행 기록: remove — 지우고, 없어도 오류가 아니다');
+  }
 
   // 2. 켜기 → 실행 중, 서버와 브라우저용 웹이 이 포트에서
   await page.getByRole('button', { name: '서버 켜기' }).click();
@@ -330,7 +399,7 @@ try {
   await app.evaluate(({ app: electronApp }) => electronApp.exit(0)).catch(() => {});
   await app.close().catch(() => {});
   // Electron 이 막 끝나 파일을 잠시 붙들고 있을 수 있다.
-  for (const dir of [userData, backupDir, compareDir]) {
+  for (const dir of [userData, backupDir, compareDir, exportDir]) {
     try {
       fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });
     } catch {
@@ -355,6 +424,7 @@ try {
   const page3 = await app3.firstWindow();
   page3.on('dialog', (d) => void d.dismiss());
   try {
+    await skipTelemetryConsent(page3);
     await screen(page3).listIntro().waitFor();
     const moved = fs.readdirSync(userData3).filter((name) => name.startsWith('settings.json.corrupt-'));
     t.must(
@@ -420,6 +490,7 @@ try {
     void d.dismiss();
   });
   try {
+    await skipTelemetryConsent(page2);
     await screen(page2).listIntro().waitFor();
     await page2.getByRole('button', { name: '업데이트 확인' }).click();
     await page2.getByRole('button', { name: '다시 시작해 v99.0.0 설치' }).waitFor({ timeout: 60_000 });

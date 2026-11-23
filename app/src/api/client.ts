@@ -2,6 +2,7 @@ import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 import { MAX_FILE_SIZE } from '@listup/shared';
 import { CONNECTION_FAILED, NO_RESPONSE } from '../lib/connection-error';
+import { recordCaughtError } from '../lib/telemetry';
 import type {
   ApiErrorBody,
   ApiErrorCode,
@@ -214,7 +215,20 @@ const REQUEST_TIMEOUT_MS = 30_000;
 /** 제안 목록을 한 번에 받는 수. 변경 이력(서버 기본 30)과 같게. */
 const PROPOSAL_PAGE_SIZE = 30;
 
+/**
+ * 요청 실패(ApiError — 연결 끊김·시간 초과는 0, 그 밖은 HTTP 상태)를 실행 기록의 잡힌 예외로 센다.
+ * 종류 이름은 `ApiError.<상태>` 뿐이고 주소·메시지는 남기지 않는다(lib/telemetry.ts).
+ */
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  try {
+    return await sendRequest<T>(path, options);
+  } catch (err) {
+    if (err instanceof ApiError) recordCaughtError(err, `ApiError.${err.status}`);
+    throw err;
+  }
+}
+
+async function sendRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
   if (apiBaseUrl === null) {
     throw new ApiError(0, 'internal', '들어갈 서버를 먼저 골라 주세요.');
   }

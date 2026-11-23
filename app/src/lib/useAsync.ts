@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError } from '../api/client';
 import { notifyError } from './dialogs';
 import { keepDataOnRefreshFailure } from './pure/refresh-failure';
+import { recordCaughtError } from './telemetry';
 
 export interface AsyncState<T> {
   data: T | null;
@@ -47,6 +48,8 @@ export function useAsync<T>(loader: () => Promise<T>, deps: unknown[]): AsyncSta
       setData(result);
       setError(null);
     } catch (err) {
+      // API 실패는 api/client 가 이미 셌다 — 그 밖의 예외(화면 로딩 코드의 버그)만 실행 기록에 센다.
+      if (!(err instanceof ApiError)) recordCaughtError(err);
       if (id !== requestId.current) return;
       const message = err instanceof ApiError ? err.message : '불러오지 못했습니다.';
       // 연결이 잠깐 끊겨 새로고침만 실패했으면 보던 목록을 지우지 않고 알리기만 한다(lib/pure/refresh-failure.ts).

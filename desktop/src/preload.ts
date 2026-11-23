@@ -49,6 +49,24 @@ const bridge: DesktopBridge = {
     read: (root, relativePath, offset, length) => ipcRenderer.invoke(IPC.foldersRead, root, relativePath, offset, length),
     save: (root, relativePath, url) => ipcRenderer.invoke(IPC.foldersSave, root, relativePath, url),
   },
+  telemetry: {
+    systemInfo: () => ipcRenderer.invoke(IPC.telemetrySystem),
+    memoryMb: () => ipcRenderer.invoke(IPC.telemetryMemory),
+    read: (name) => ipcRenderer.invoke(IPC.telemetryRead, name),
+    write: (name, text) => ipcRenderer.invoke(IPC.telemetryWrite, name, text),
+    append: (name, text, header) => ipcRenderer.invoke(IPC.telemetryAppend, name, text, header),
+    remove: (name) => ipcRenderer.invoke(IPC.telemetryRemove, name),
+    // 창이 닫히기 직전이라 기다려야 한다 — main 이 붙이고 지울 때까지 동기로.
+    finishSync(appends) {
+      ipcRenderer.sendSync(IPC.telemetryFinish, appends);
+    },
+    folder: () => ipcRenderer.invoke(IPC.telemetryFolder),
+    exportFiles: () => ipcRenderer.invoke(IPC.telemetryExport),
+    openFolder: () => ipcRenderer.invoke(IPC.telemetryOpenFolder),
+    debugCrash() {
+      ipcRenderer.send(IPC.telemetryDebugCrash);
+    },
+  },
 };
 
 contextBridge.exposeInMainWorld('listupDesktop', bridge);

@@ -243,9 +243,23 @@ try {
     /**
      * 브라우저 컨텍스트. GitHub API 는 늘 가짜로 가로챈다 — 테스트가 실제 GitHub 에 묻지 않게.
      * latest: 최신 릴리즈 버전(기본은 앱 버전 — 업데이트 제안이 뜨지 않는다).
+     * telemetryConsent: 실행 기록 동의를 미리 정해 둔다(기본 'denied' — 첫 실행 동의 창이 다른 흐름을 막지 않게).
+     *   null 이면 정하지 않아 동의 창이 뜬다.
      */
-    const newContext = async ({ latest = APP_VERSION, githubStatus = 200 } = {}) => {
+    const newContext = async ({ latest = APP_VERSION, githubStatus = 200, telemetryConsent = 'denied' } = {}) => {
       const ctx = await browser.newContext();
+      if (telemetryConsent !== null) {
+        await ctx.addInitScript((value) => {
+          try {
+            // 스펙이 직접 바꾼 값(동의·거부)은 덮지 않는다 — 새로 고침 뒤에도 남아야 한다.
+            if (localStorage.getItem('listup.telemetry.consent') === null) {
+              localStorage.setItem('listup.telemetry.consent', value);
+            }
+          } catch {
+            // about:blank 처럼 저장소가 없는 페이지
+          }
+        }, telemetryConsent);
+      }
       const github = { calls: [], opened: [] };
       await ctx.route('https://api.github.com/**', (route) => {
         github.calls.push(route.request().url());

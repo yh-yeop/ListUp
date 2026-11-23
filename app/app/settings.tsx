@@ -23,6 +23,7 @@ import { credentialsSupported, loadLogin, removeLogin } from '../src/lib/credent
 import { hostSupported } from '../src/lib/desktop';
 import { confirmAction, notifySuccess } from '../src/lib/dialogs';
 import { chooseSaveFolder, getSaveFolder, saveFolderLabel, saveFolderSupported } from '../src/lib/save-folder';
+import { useTelemetryConsent } from '../src/lib/telemetry';
 import { useAuth } from '../src/state/auth';
 import { openServerList } from '../src/lib/server-list';
 import { serverTitle } from '../src/state/servers';
@@ -32,6 +33,7 @@ import { fontSize, spacing, useTheme } from '../src/theme';
 export default function SettingsScreen() {
   const { user, updateProfile, logout, logoutOthers, changePassword, activeServer } = useAuth();
   const { colors } = useTheme();
+  const telemetry = useTelemetryConsent();
   const [displayName, setDisplayName] = useState(user?.displayName ?? '');
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -298,6 +300,21 @@ export default function SettingsScreen() {
           <Row style={{ justifyContent: 'space-between' }}>
             <Caption>사용법·문제 해결</Caption>
             <Ionicons name="chevron-forward" size={14} color={colors.textFaint} />
+          </Row>
+        </Pressable>
+
+        <Pressable
+          onPress={() => router.push('/telemetry')}
+          accessibilityRole="button"
+          accessibilityLabel="실행 기록 설정 열기"
+          style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
+        >
+          <Row style={{ justifyContent: 'space-between' }}>
+            <Caption>실행 기록</Caption>
+            <Row gap={spacing.xs}>
+              <Caption>{telemetry.ready ? (telemetry.consent === 'granted' ? '켜짐' : '꺼짐') : ''}</Caption>
+              <Ionicons name="chevron-forward" size={14} color={colors.textFaint} />
+            </Row>
           </Row>
         </Pressable>
 

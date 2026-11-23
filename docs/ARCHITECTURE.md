@@ -221,6 +221,7 @@ app/
 │  ├─ login / signup / reset-password / join / settings / repos
 │  ├─ forgot-id               아이디를 잊었을 때 — 복구 코드·같은 저장소 멤버·운영자 세 길
 │  ├─ help / troubleshoot     사용법(낱말 풀이·처음 순서·문제별 길) · 연결 문제 해결(이유별 확인 목록) — 로그인과 무관하게 열림
+│  ├─ telemetry               실행 기록 — 켜기/끄기·내보내기·삭제·디버그(테스트 에러·강제 종료 흉내). 로그인 전후 모두
 │  ├─ my-proposals            내 제안 — 저장소를 가로질러, 반영·닫힘·남의 의견을 새 소식으로
 │  ├─ repo/[repoId]/          index(파일) · proposals · new-proposal · members · invites · history · activity(소유자)
 │  └─ proposal/[proposalId]   제안 상세 · 리뷰 · 병합
@@ -250,6 +251,7 @@ app/
    ├─ lib/account-notice.ts   로그인·가입·재설정 결과를 다음 화면에 넘기는 안내 한 건(찾은 아이디, 끊긴 이유, 복구 코드 권유)
    ├─ lib/connection-error.ts 서버에 닿지 못한 오류 문장 — ErrorNotice 가 알아보고 「연결 문제 해결」 버튼을 붙임
    ├─ lib/useAsync.ts         화면 데이터 불러오기 훅 — 늦게 온 이전 요청 결과는 버림, 당겨서 새로고침(연결 문제로 실패하면 목록을 지키고 토스트)
+   ├─ lib/telemetry.ts        실행 기록(동의한 기기만, 로컬 파일만) — 1초 fps·메모리 샘플, 30초 임시 기록, 종료 때 CSV 한 행, 에러 세기. 저장소는 PC 앱 IPC / 안드로이드 문서 폴더 / 브라우저 localStorage
    ├─ lib/useMorePages.ts     '더 보기' 로 이어 받는 목록(이력·버전·제안) — 첫 페이지가 바뀌면 이어 받은 것은 버림
    ├─ lib/pure/               플랫폼 import 가 없는 순수 로직. 원래 파일이 다시 내보내고, app/test 가 node 로 검사
    │  ├─ versions.ts          버전 비교(compareVersions) ← updates
@@ -260,6 +262,7 @@ app/
    │  ├─ compare-core.ts      폴더 대조(이름 NFC/NFD 맞추기) ← folder-compare
    │  ├─ server-store.ts      서버 목록 읽기·정리, 예전 저장 키 이전 규칙(storeFromLegacy) ← state/servers
    │  ├─ repo-search.ts       저장소 찾기(이름 일치 먼저, 5개부터 칸을 보임) ← search
+   │  ├─ telemetry.ts         실행 기록 — 기기 분류·OS 이름·실행 통계(로딩 5초·백그라운드 제외)·CSV 줄·남은 임시 기록 판정(crashed) ← telemetry
    │  ├─ events.ts            활동 기록 한 줄을 문장으로(모르는 종류는 "알 수 없는 활동") ← repo/[repoId]/activity
    │  ├─ bulk-move.ts         여러 파일 옮기기를 커밋 하나로(새 경로=같은 blobHash + 옛 경로 삭제), 옮길 폴더 이름 겹침이면 안 옮김, 방금 한 커밋 되돌리기(blobHash↔expect) ← repo/[repoId]/index
    │  ├─ file-sort.ts         이름(ko Collator)·크기·최근 정렬, 같은 값은 이름순, 폴더는 크기·이름만 ← file-sort
@@ -272,6 +275,7 @@ app/
    │  ├─ AccountNoticeCard.tsx 저장소 목록 맨 위 계정 안내(찾은 아이디·남은 코드, 가입 직후 복구 코드 권유)
    │  ├─ InviteSummary.tsx    초대 미리보기(어떤 저장소·권한) — 참여·로그인·가입 화면이 같이 씀, 로그인 전 미리보기 훅
    │  ├─ TransferHost.tsx     진행 중인 전송 카드(하나만, 나머지는 「외 N개」) — 루트에서 화면 아래에 띄우고 토스트를 그 위에 쌓음
+   │  ├─ TelemetryConsent.tsx 첫 실행 동의 창(무엇을 왜 기록하는지) — 동의할 때만 수집, 거부해도 그대로 쓴다
    │  └─ QrCode.tsx           초대 링크 QR(qrcode-generator 로 칸을 계산해 View 로 그림)
    └─ theme.ts                라이트/다크 팔레트
 ```
@@ -361,6 +365,7 @@ desktop/src/
 ├─ folders.ts       내 폴더와 비교 — 대화상자로 고른 폴더 안만 훑기·조각 읽기·받아 쓰기
 ├─ settings.ts      포트·공개 방식·자동 켜기·데이터 폴더 (앱 데이터 폴더의 settings.json)
 ├─ credentials.ts   로그인 정보 — safeStorage(DPAPI)로 암호화
+├─ telemetry.ts     실행 기록 파일(userData 의 telemetry*.csv·pending — 이름 셋만 허용, 비동기·파일마다 차례로), 종료 직전 동기 저장, 사양·메모리(모든 프로세스 합), 내보내기
 ├─ updater.ts       자동 업데이트(electron-updater) — 받아 두었다가 다시 시작·끝낼 때 설치, sha512 확인
 └─ atomic-write.ts  settings·credentials 저장(임시 파일 → fsync → 이름 바꾸기), 깨진 파일을 .corrupt-<시각> 으로 격리
 ```
