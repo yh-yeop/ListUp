@@ -321,7 +321,8 @@ try {
 
   // 6-1. 아이디를 모르는 사람 — 이름·아이디 일부로 찾아 고르면 위 칸에 채운다
   await resetInput.fill('');
-  await page.getByLabel('계정 찾기').fill('owner-');
+  // 입력칸과 버튼이 같은 이름이라 역할로 고른다 (getByLabel 은 둘 다 잡아 strict mode 위반)
+  await page.getByRole('textbox', { name: '계정 찾기' }).fill('owner-');
   await page.getByRole('button', { name: '계정 찾기' }).click();
   await page.getByRole('button', { name: `${EMAIL} 아이디를 위 칸에 넣기` }).click();
   t.must((await resetInput.inputValue()) === EMAIL, '계정 찾기 → 고르면 재설정 칸에 아이디');

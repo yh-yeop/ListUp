@@ -514,8 +514,8 @@ iCloud Keychain 으로 거의 자동 복구되는 반면 Android Keystore 는 �
 
 - [ ] 안드로이드: 복구 코드 카드 「모두 복사」(expo-clipboard), 코드 길게 눌러 선택, 재설정 화면 자판(대문자)
 - [ ] 안드로이드: 연결 문제 해결 — 와이파이 끄고 서버 목록의 진단 버튼, 공유기 안 주소 안내가 맞는지
-- [ ] PC 앱: 키보드 단축키(Backspace 가 Electron 에서 뒤로 가기를 하지 않는지), 폴더 주소 `?path=` 가 앱 안에서 문제없는지
-- [ ] PC 앱: `npm run test:desktop` — 새 사례 6-1(관리 화면 계정 찾기)을 처음 돌려 본다
+- [x] PC 앱: 키보드 단축키(Backspace 가 Electron 에서 뒤로 가기를 하지 않는지), 폴더 주소 `?path=` 가 앱 안에서 문제없는지 — 2026-11-23 Windows 확인: 폴더 안 Backspace = 위 폴더, 저장소 맨 위 · 다른 화면에서는 아무 데도 안 감, `?path=` 새로 고침 · 직접 이동 모두 그 폴더
+- [x] PC 앱: `npm run test:desktop` — 새 사례 6-1(관리 화면 계정 찾기)을 처음 돌려 본다 — 2026-11-23 Windows: 6-1 의 `getByLabel('계정 찾기')` 가 입력칸 · 버튼 둘 다 잡아 실패 → 역할로 고침, 57개 통과. **주의: `desktop/.build/web-client` 가 있으면 다시 만들지 않아 옛 화면을 시험한다 — 웹을 바꾼 뒤엔 `node scripts/desktop.mjs --no-launch --web` 먼저**
 - [ ] 스크린리더: 정렬 칩(눌림 상태·방향 읽기), 안내 상자(role=status)
 
 ### 실행 기록(텔레메트리) — 폰·Windows 에서 확인할 것 (2026-11-17)
@@ -530,6 +530,9 @@ iCloud Keychain 으로 거의 자동 복구되는 반면 Android Keystore 는 �
   같은 실측에서 브라우저 첫 1초 `min_fps_1s` 0 이 두 번 — 창이 뜨는 순간 rAF 가 멈춘 1초로 보인다.
 - [ ] **Windows PC 앱**: 저장 대화상자 내보내기, `%APPDATA%\ListUp\telemetry.csv`, `os` 가 `Windows 11`/`Windows 10` 으로 갈리는지,
   작업 관리자로 끈 실행이 `crashed=1` 로 들어오는지. 리눅스 Electron 으로만 실측했다.
+  → 2026-11-23 Windows 11 실측: `os` = `Windows 11`(10 쪽은 이 PC 로 못 봄, 빌드 22000 기준), 강제 종료(`taskkill /F`) → 다음 실행 `crashed=1` · 정상 종료 `crashed=0` 통과,
+  내보내기는 `showSaveDialog`(제목 · 기본 경로 Downloads · CSV 필터)까지와 저장 내용 일치 확인 — **진짜 대화상자 화면만 손으로 한 번 남음**. 파일 위치는 설치본 `%APPDATA%\ListUp`,
+  개발 실행(`npm run desktop`)은 앱 이름이 달라 `%APPDATA%\@listup\desktop`.
 
 ### 초대 흐름 — 폰에서 확인할 것 (2026-11-02)
 
